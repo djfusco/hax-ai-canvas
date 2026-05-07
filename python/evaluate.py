@@ -304,11 +304,19 @@ def evaluate_course_data(
         # Still load existing evals for the report
         all_items = db_client.get_completed_items(course_id) + \
                     db_client.get_pending_items(course_id)
-        return [
+        existing_evals = [
             json.loads(item["evaluation"])
             for item in all_items
             if item.get("evaluation")
         ]
+        # Still generate reports from existing data
+        if existing_evals:
+            try:
+                from dashboard_report import generate_dashboard_report
+                generate_dashboard_report(db_client, course_id, output_dir=output_dir)
+            except Exception as exc:
+                print(f"  \u26a0\ufe0f  Dashboard report failed: {exc}")
+        return existing_evals
 
     # Derive course name from the first item's course context
     try:
@@ -378,6 +386,13 @@ def evaluate_course_data(
 
     # Generate HTML report
     _generate_report(db_client, course_id, course_name, all_evals, output_dir)
+
+    # Generate visual dashboard report
+    try:
+        from dashboard_report import generate_dashboard_report
+        generate_dashboard_report(db_client, course_id, output_dir=output_dir)
+    except Exception as exc:
+        print(f"  ⚠️  Dashboard report failed: {exc}")
 
     return all_evals
 

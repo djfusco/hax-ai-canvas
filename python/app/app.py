@@ -47,8 +47,9 @@ app.secret_key = os.urandom(24)
 
 def _report_path(course_id: str, report_type: str) -> Path:
     names = {
-        "readiness": f"course_{course_id}_ai_readiness_report.html",
-        "changes":   f"course_{course_id}_ai_changes_report.html",
+        "readiness":  f"course_{course_id}_ai_readiness_report.html",
+        "changes":    f"course_{course_id}_ai_changes_report.html",
+        "dashboard":  f"course_{course_id}_ai_dashboard.html",
     }
     return PROJECT_ROOT / names.get(report_type, "")
 
@@ -257,8 +258,9 @@ def results(run_id: str):
         return redirect(url_for("run_page"))
 
     course_id = job.course_id
-    readiness_exists = _report_path(course_id, "readiness").exists()
-    changes_exists   = _report_path(course_id, "changes").exists()
+    readiness_exists  = _report_path(course_id, "readiness").exists()
+    changes_exists    = _report_path(course_id, "changes").exists()
+    dashboard_exists  = _report_path(course_id, "dashboard").exists()
 
     return render_template(
         "results.html",
@@ -266,6 +268,7 @@ def results(run_id: str):
         course_id=course_id,
         readiness_exists=readiness_exists,
         changes_exists=changes_exists,
+        dashboard_exists=dashboard_exists,
     )
 
 
@@ -311,6 +314,40 @@ def stop_site(run_id: str):
     """Stop the running npm start process."""
     stop_npm(run_id)
     return jsonify({"ok": True})
+
+
+# ── routes: history ──────────────────────────────────────────────────────────
+
+@app.route("/history")
+def history():
+    """Show past course runs with links to reports."""
+    import sys as _sys
+    if str(PROJECT_ROOT) not in _sys.path:
+        _sys.path.insert(0, str(PROJECT_ROOT))
+    from sqlite_client import SQLiteClient
+    db_path = PROJECT_ROOT / "course_pipeline.db"
+    courses = []
+    if db_path.exists():
+        try:
+            with SQLiteClient(db_path=str(db_path)) as db:
+                courses = db.get_course_list()
+        except Exception:
+            pass
+    # Check which reports exist for each course
+    for c in courses:
+        cid = c["course_id"]
+        c["has_readiness"]  = _report_path(cid, "readiness").exists()
+        c["has_changes"]    = _report_path(cid, "changes").exists()
+        c["has_dashboard"]  = _report_path(cid, "dashboard").exists()
+        # Try to get a better course name from the export directory
+        try:
+            import sys as _sys
+            _sys.path.insert(0, str(PROJECT_ROOT))
+            from extract import get_export_dir, get_course_title
+            c["course_name"] = get_course_title(get_export_dir(cid))
+        except Exception:
+            pass  # keep the name from get_course_list
+    return render_template("history.html", courses=courses)
 
 
 # ── routes: checks API ─────────────────────────────────────────────────────────

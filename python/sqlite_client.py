@@ -158,6 +158,31 @@ class SQLiteClient(CourseDatabaseInterface):
         ).fetchone()
         return dict(row) if row else None
 
+    def get_course_list(self) -> list:
+        """Return a list of distinct courses with item counts and timestamps."""
+        rows = self._conn.execute(
+            "SELECT course_id, "
+            "  COUNT(*) as item_count, "
+            "  MAX(updated_at) as last_updated, "
+            "  MIN(created_at) as first_created "
+            "FROM course_items "
+            "WHERE item_type != 'syllabus' "
+            "GROUP BY course_id "
+            "ORDER BY MAX(updated_at) DESC"
+        ).fetchall()
+        results = []
+        for r in rows:
+            d = dict(r)
+            # Try to get course name from the first item's title context
+            name_row = self._conn.execute(
+                "SELECT title FROM course_items "
+                "WHERE course_id = ? AND item_type = 'syllabus' LIMIT 1",
+                (d["course_id"],),
+            ).fetchone()
+            d["course_name"] = dict(name_row)["title"] if name_row else f"Course {d['course_id']}"
+            results.append(d)
+        return results
+
     def get_completed_items(self, course_id: str | None = None) -> list:
         """Return COMPLETED items for HAX site building."""
         if course_id:

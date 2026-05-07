@@ -34,12 +34,25 @@
   <!-- Reports -->
   <div class="card">
     <div class="card-header"><h2>📊 Reports</h2></div>
-    <div class="results-grid">
+    <div class="results-grid results-grid-3">
+
+      <div class="result-card {{ '' if dashboard_exists else 'result-card-dim' }}">
+        <div class="result-card-icon">📊</div>
+        <h3>AI Dashboard</h3>
+        <p>Visual overview — summary cards, risk vs leverage chart, due dates, and a filterable item table.</p>
+        {% if dashboard_exists %}
+        <button class="btn btn-primary" onclick="openReport('dashboard', '{{ course_id }}')">
+          Open Dashboard
+        </button>
+        {% else %}
+        <p class="dim-note">Not generated yet (run with AI enabled)</p>
+        {% endif %}
+      </div>
 
       <div class="result-card {{ '' if readiness_exists else 'result-card-dim' }}">
         <div class="result-card-icon">📈</div>
         <h3>AI Readiness Report</h3>
-        <p>Shows how AI-ready your original course was — vulnerability scores, Bloom's levels, and recommendations for each item.</p>
+        <p>Detailed analysis — vulnerability scores, Bloom's levels, strengths, concerns, and recommendations for each item.</p>
         {% if readiness_exists %}
         <button class="btn btn-primary" onclick="openReport('readiness', '{{ course_id }}')">
           Open Readiness Report
@@ -52,7 +65,7 @@
       <div class="result-card {{ '' if changes_exists else 'result-card-dim' }}">
         <div class="result-card-icon">🔍</div>
         <h3>AI Changes Report</h3>
-        <p>Shows exactly what the AI changed — a side-by-side comparison of every original item vs its AI-enhanced version.</p>
+        <p>Side-by-side comparison of every original item vs its AI-enhanced version with inline diffs.</p>
         {% if changes_exists %}
         <button class="btn btn-primary" onclick="openReport('changes', '{{ course_id }}')">
           Open Changes Report

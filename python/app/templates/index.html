@@ -69,6 +69,82 @@
     {% endif %}
   </div>
 
+  <!-- Beginner help -->
+  <div class="card">
+    <div class="card-header"><h2>📖 New to This? Start Here</h2></div>
+    <p class="card-intro">This tool requires a few programs to be installed on your computer. If you've never used a terminal or command line before, don't worry — here's what you need and how to get it.</p>
+
+    <div class="help-accordion">
+      <details class="help-item">
+        <summary>🐍 What is Python and how do I install it?</summary>
+        <div class="help-body">
+          <p>Python is a programming language that this tool uses behind the scenes. You don't need to write any code — you just need it installed.</p>
+          <ol>
+            <li>Go to <a href="https://www.python.org/downloads/" target="_blank">python.org/downloads</a></li>
+            <li>Click the big yellow <strong>"Download Python 3.x"</strong> button</li>
+            <li>Run the installer</li>
+            <li><strong>Important (Windows):</strong> Check the box that says <em>"Add Python to PATH"</em> before clicking Install</li>
+            <li><strong>Important (Mac):</strong> After installing, open the <code>Applications/Python 3.x</code> folder and double-click <strong>"Install Certificates.command"</strong></li>
+          </ol>
+          <p>To verify: open Terminal (Mac) or Command Prompt (Windows) and type <code>python3 --version</code>. You should see something like <code>Python 3.12.x</code>.</p>
+        </div>
+      </details>
+
+      <details class="help-item">
+        <summary>📦 What is pip?</summary>
+        <div class="help-body">
+          <p>pip is Python's package installer — it downloads add-on libraries that this tool needs. It comes bundled with Python, so if Python is installed correctly, pip should already work.</p>
+          <p>If the check above says pip is missing, try running: <code>python3 -m ensurepip --upgrade</code></p>
+        </div>
+      </details>
+
+      <details class="help-item">
+        <summary>🟢 What is Node.js and how do I install it?</summary>
+        <div class="help-body">
+          <p>Node.js is a tool that runs the final course website locally on your computer so you can preview it in a browser.</p>
+          <ol>
+            <li>Go to <a href="https://nodejs.org/en/download" target="_blank">nodejs.org/download</a></li>
+            <li>Download the <strong>LTS</strong> version (recommended for most users)</li>
+            <li>Run the installer with all default options</li>
+          </ol>
+          <p>This also installs <strong>npm</strong> (Node Package Manager) automatically.</p>
+          <p>To verify: open a new terminal and type <code>node --version</code>. You should see something like <code>v20.x.x</code>.</p>
+        </div>
+      </details>
+
+      <details class="help-item">
+        <summary>🔑 Where do I get a Canvas API Token?</summary>
+        <div class="help-body">
+          <p>A Canvas API Token lets this tool securely download your course content. Here's how to get one:</p>
+          <ol>
+            <li>Log into your institution's Canvas (e.g. <code>yourschool.instructure.com</code>)</li>
+            <li>Click your <strong>profile picture</strong> (top-left) → <strong>Account</strong></li>
+            <li>Click <strong>Settings</strong></li>
+            <li>Scroll down to <strong>"Approved Integrations"</strong></li>
+            <li>Click <strong>"+ New Access Token"</strong></li>
+            <li>Name it something like "Course Builder" and click <strong>Generate Token</strong></li>
+            <li>Copy the token immediately — you won't be able to see it again!</li>
+          </ol>
+          <p>Paste this token on the <a href="/setup">Configuration page</a>.</p>
+        </div>
+      </details>
+
+      <details class="help-item">
+        <summary>🤖 What AI provider should I use?</summary>
+        <div class="help-body">
+          <p>This tool uses AI to evaluate and enhance your course content. You need access to at least one AI provider:</p>
+          <ul>
+            <li><strong>NebulaONE</strong> — If your institution provides this, it's the easiest option. Ask your IT department or AI portal for the API key and base URL.</li>
+            <li><strong>Anthropic (Claude)</strong> — Sign up at <a href="https://console.anthropic.com" target="_blank">console.anthropic.com</a> and create an API key. Requires a paid account.</li>
+            <li><strong>OpenAI (GPT)</strong> — Sign up at <a href="https://platform.openai.com" target="_blank">platform.openai.com</a> and create an API key. Requires a paid account.</li>
+            <li><strong>Google Gemini</strong> — Get a key from <a href="https://aistudio.google.com" target="_blank">Google AI Studio</a>. Has a free tier.</li>
+          </ul>
+          <p>Enter your chosen provider's key on the <a href="/setup">Configuration page</a>, then select it when you run the pipeline.</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
   <!-- What this tool does -->
   <div class="card">
     <div class="card-header"><h2>What This Tool Does</h2></div>
