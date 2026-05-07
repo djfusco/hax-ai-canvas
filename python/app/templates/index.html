@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% block title %}Requirements — Canvas Course Builder{% endblock %}
+
+{% block content %}
+<div class="page-wrap">
+
+  <div class="page-hero">
+    <h1>Welcome to Canvas Course Builder</h1>
+    <p class="hero-sub">This tool takes a Canvas course, evaluates its AI readiness, creates an AI-enhanced version, and builds a local website you can review and share. Everything runs on your computer — no data is sent to external servers except your Canvas and AI accounts.</p>
+  </div>
+
+  <!-- Overall status banner -->
+  {% if all_ok %}
+  <div class="banner banner-success">
+    <span class="banner-icon">✅</span>
+    <div>
+      <strong>Everything looks good!</strong>
+      You're ready to <a href="{{ url_for('run_page') }}">run the pipeline</a>.
+      Make sure your <a href="{{ url_for('setup') }}">credentials are configured</a> first.
+    </div>
+  </div>
+  {% else %}
+  <div class="banner banner-warn">
+    <span class="banner-icon">⚠️</span>
+    <div>
+      <strong>A few things need attention before you can run.</strong>
+      Review the checklist below and fix any red items.
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Requirements checklist -->
+  <div class="card">
+    <div class="card-header">
+      <h2>System Requirements</h2>
+      <button class="btn btn-sm btn-ghost" onclick="refreshChecks()">↻ Refresh</button>
+    </div>
+
+    <div class="check-list" id="check-list">
+      {% for key, chk in checks.items() %}
+      <div class="check-item {{ 'check-ok' if chk.ok else 'check-fail' }}">
+        <div class="check-icon">{{ '✅' if chk.ok else '❌' }}</div>
+        <div class="check-body">
+          <div class="check-label">{{ chk.label }}</div>
+          <div class="check-detail">{{ chk.detail }}</div>
+          {% if not chk.ok and chk.fix %}
+          <div class="check-fix">
+            <strong>How to fix:</strong> {{ chk.fix }}
+            {% if 'python.org' in chk.fix %}
+            <a href="https://www.python.org/downloads/" target="_blank" class="btn btn-xs btn-outline">Download Python →</a>
+            {% elif 'nodejs.org' in chk.fix %}
+            <a href="https://nodejs.org/en/download" target="_blank" class="btn btn-xs btn-outline">Download Node.js →</a>
+            {% endif %}
+          </div>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+
+    <!-- Install packages button if packages are missing -->
+    {% if not checks.packages.ok %}
+    <div class="card-footer">
+      <button class="btn btn-primary" id="install-btn" onclick="installPackages()">
+        📦 Install Missing Packages Automatically
+      </button>
+      <div id="install-output" class="install-output" style="display:none"></div>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- What this tool does -->
+  <div class="card">
+    <div class="card-header"><h2>What This Tool Does</h2></div>
+    <div class="steps-explainer">
+      <div class="explainer-step">
+        <div class="step-num">1</div>
+        <div><strong>Export from Canvas</strong><br>Downloads your course content (pages, assignments, quizzes, discussions) using the Canvas API.</div>
+      </div>
+      <div class="explainer-step">
+        <div class="step-num">2</div>
+        <div><strong>Evaluate AI Readiness</strong><br>Each piece of content is scored across 8 dimensions: Bloom's level, cheating vulnerability, authenticity, pedagogical quality, and more.</div>
+      </div>
+      <div class="explainer-step">
+        <div class="step-num">3</div>
+        <div><strong>AI Enhancement</strong><br>Content is rewritten using the evaluation scores — adding learning objectives, rubrics, and AI-resilient design where needed.</div>
+      </div>
+      <div class="explainer-step">
+        <div class="step-num">4</div>
+        <div><strong>Build & Launch</strong><br>A local HAX website is built and launched so you can review the enhanced course in your browser.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="page-actions">
+    <a href="{{ url_for('setup') }}" class="btn btn-primary btn-lg">
+      ② Configure Credentials →
+    </a>
+    {% if all_ok %}
+    <a href="{{ url_for('run_page') }}" class="btn btn-success btn-lg">
+      ③ Go to Run →
+    </a>
+    {% endif %}
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function refreshChecks() {
+  fetch('/api/checks')
+    .then(r => r.json())
+    .then(data => {
+      // Simple page reload to show updated state
+      window.location.reload();
+    });
+}
+
+function installPackages() {
+  const btn = document.getElementById('install-btn');
+  const out = document.getElementById('install-output');
+  btn.disabled = true;
+  btn.textContent = '⏳ Installing... (this may take a minute)';
+  out.style.display = 'block';
+  out.textContent = 'Running pip install...\n';
+
+  fetch('/install-packages', {method: 'POST'})
+    .then(r => r.json())
+    .then(data => {
+      out.textContent = data.output;
+      if (data.success) {
+        btn.textContent = '✅ Done! Refreshing...';
+        setTimeout(() => window.location.reload(), 1500);
+      } else {
+        btn.disabled = false;
+        btn.textContent = '❌ Install failed — see output above';
+      }
+    })
+    .catch(e => {
+      btn.disabled = false;
+      btn.textContent = 'Try again';
+      out.textContent = 'Error: ' + e;
+    });
+}
+</script>
+{% endblock %}

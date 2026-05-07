@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment / credentials (never commit these)
+.env
+
+# macOS
+.DS_Store
+
+# Node
+node_modules/
+
+# SQLite databases
+*.db
+*.sqlite
+
+# Pipeline user data (shouldn't be here, but just in case)
+exports/
+hax_prep/
+
+# Runtime markers written by bin/index.js
+.version
+.pip_installed
+.venv/

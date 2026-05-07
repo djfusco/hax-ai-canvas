@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+{% block title %}Results — Canvas Course Builder{% endblock %}
+
+{% block content %}
+<div class="page-wrap">
+
+  <div class="page-hero">
+    <h1>
+      {% if job.status == 'complete' %}🎉 Course Ready!
+      {% elif job.status == 'failed' %}❌ Pipeline Failed
+      {% else %}⏳ In Progress…
+      {% endif %}
+    </h1>
+    <p class="hero-sub">
+      Course ID: <strong>{{ course_id }}</strong>
+      {% if job.site_dir %} · Site: <code>{{ job.site_dir }}</code>{% endif %}
+    </p>
+  </div>
+
+  {% if job.status == 'complete' %}
+
+  <!-- HAX Site -->
+  {% if job.site_url %}
+  <div class="card result-highlight">
+    <div class="result-icon">🌐</div>
+    <div>
+      <h2>Your Enhanced Course Site</h2>
+      <p>The AI-enhanced version of your course is running locally.</p>
+      <a href="{{ job.site_url }}" target="_blank" class="btn btn-success btn-lg">Open Course Site →</a>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Reports -->
+  <div class="card">
+    <div class="card-header"><h2>📊 Reports</h2></div>
+    <div class="results-grid">
+
+      <div class="result-card {{ '' if readiness_exists else 'result-card-dim' }}">
+        <div class="result-card-icon">📈</div>
+        <h3>AI Readiness Report</h3>
+        <p>Shows how AI-ready your original course was — vulnerability scores, Bloom's levels, and recommendations for each item.</p>
+        {% if readiness_exists %}
+        <button class="btn btn-primary" onclick="openReport('readiness', '{{ course_id }}')">
+          Open Readiness Report
+        </button>
+        {% else %}
+        <p class="dim-note">Not generated yet (run with AI enabled)</p>
+        {% endif %}
+      </div>
+
+      <div class="result-card {{ '' if changes_exists else 'result-card-dim' }}">
+        <div class="result-card-icon">🔍</div>
+        <h3>AI Changes Report</h3>
+        <p>Shows exactly what the AI changed — a side-by-side comparison of every original item vs its AI-enhanced version.</p>
+        {% if changes_exists %}
+        <button class="btn btn-primary" onclick="openReport('changes', '{{ course_id }}')">
+          Open Changes Report
+        </button>
+        {% else %}
+        <p class="dim-note">Not generated yet</p>
+        {% endif %}
+      </div>
+
+    </div>
+  </div>
+
+  <!-- File access -->
+  <div class="card">
+    <div class="card-header"><h2>📁 Output Files</h2></div>
+    <div class="file-list">
+      {% if job.site_dir %}
+      <div class="file-item">
+        <div class="file-icon">📂</div>
+        <div>
+          <div class="file-name">HAX Site Folder</div>
+          <div class="file-path">{{ job.site_dir }}</div>
+        </div>
+        <button class="btn btn-ghost btn-sm" onclick="openFolder('{{ job.site_dir }}')">Open in Finder</button>
+      </div>
+      {% endif %}
+      {% if readiness_exists %}
+      <div class="file-item">
+        <div class="file-icon">📊</div>
+        <div>
+          <div class="file-name">AI Readiness Report</div>
+          <div class="file-path">course_{{ course_id }}_ai_readiness_report.html</div>
+        </div>
+        <button class="btn btn-ghost btn-sm" onclick="openReport('readiness','{{ course_id }}')">Open</button>
+      </div>
+      {% endif %}
+      {% if changes_exists %}
+      <div class="file-item">
+        <div class="file-icon">🔍</div>
+        <div>
+          <div class="file-name">AI Changes Report</div>
+          <div class="file-path">course_{{ course_id }}_ai_changes_report.html</div>
+        </div>
+        <button class="btn btn-ghost btn-sm" onclick="openReport('changes','{{ course_id }}')">Open</button>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  {% elif job.status == 'failed' %}
+  <div class="banner banner-error">
+    <span class="banner-icon">❌</span>
+    <div>
+      <strong>The pipeline did not complete successfully.</strong>
+      Return to the Run page to try again. Check your credentials and Canvas connection if the error persists.
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="page-actions">
+    <a href="{{ url_for('run_page') }}" class="btn btn-primary">↩ Run Another Course</a>
+    <a href="{{ url_for('index') }}" class="btn btn-ghost">① Home</a>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function openReport(type, courseId) {
+  fetch('/open/report/' + type + '/' + courseId)
+    .then(r => r.json())
+    .then(data => {
+      if (!data.ok) alert('Report not found: ' + data.error);
+    });
+}
+
+function openFolder(folder) {
+  fetch('/open/folder/' + folder.replace(/^\//, ''))
+    .then(r => r.json())
+    .then(data => {
+      if (!data.ok) alert('Could not open folder: ' + data.error);
+    });
+}
+</script>
+{% endblock %}

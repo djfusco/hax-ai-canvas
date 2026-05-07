@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Canvas Course Builder{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+<header class="app-header">
+  <div class="header-inner">
+    <div class="brand">
+      <span class="brand-icon">🎓</span>
+      <div>
+        <div class="brand-name">Canvas Course Builder</div>
+        <div class="brand-sub">AI-Enhanced HAX Course Generator</div>
+      </div>
+    </div>
+    <nav class="main-nav">
+      <a href="{{ url_for('index') }}"  class="nav-link {% if request.endpoint == 'index' %}active{% endif %}">① Requirements</a>
+      <a href="{{ url_for('setup') }}"  class="nav-link {% if request.endpoint == 'setup' %}active{% endif %}">② Configuration</a>
+      <a href="{{ url_for('run_page') }}" class="nav-link {% if request.endpoint in ('run_page','run_start','stream') %}active{% endif %}">③ Run</a>
+    </nav>
+  </div>
+</header>
+
+<main class="app-main">
+  {% block content %}{% endblock %}
+</main>
+
+<footer class="app-footer">
+  <p>Canvas Course Builder &nbsp;·&nbsp; Running locally at <a href="http://127.0.0.1:5050">127.0.0.1:5050</a> &nbsp;·&nbsp; No data leaves your computer.</p>
+</footer>
+
+{% block scripts %}{% endblock %}
+</body>
+</html>

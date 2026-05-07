@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+{% block title %}Configuration — Canvas Course Builder{% endblock %}
+
+{% block content %}
+<div class="page-wrap">
+
+  <div class="page-hero">
+    <h1>Configuration</h1>
+    <p class="hero-sub">Enter your Canvas and AI credentials here. These are saved to a configuration file on your computer and are never sent anywhere except to Canvas and your AI provider.</p>
+  </div>
+
+  {% if errors %}
+  <div class="banner banner-error">
+    <span class="banner-icon">❌</span>
+    <div><strong>Please fix the errors below before saving.</strong></div>
+  </div>
+  {% endif %}
+
+  <form method="POST" action="{{ url_for('setup_save') }}" autocomplete="off">
+    <input type="text" name="__prevent_autofill" style="display:none">
+
+    <!-- Canvas Section -->
+    <div class="card">
+      <div class="card-header">
+        <h2>🎓 Canvas Access</h2>
+        <span class="card-badge required-badge">Required</span>
+      </div>
+      <p class="card-intro">The Canvas URL and Token allow this tool to download your course content.</p>
+
+      {% for field in fields if field.key in ('CANVAS_URL', 'CANVAS_TOKEN') %}
+      <div class="field-group {{ 'field-error' if field.get('error') }}">
+        <label class="field-label" for="{{ field.key }}">
+          {{ field.label }}
+          <span class="field-status {{ 'status-ok' if field.present else 'status-missing' }}">
+            {{ '✓ Set' if field.present else 'Not set' }}
+          </span>
+        </label>
+        <p class="field-help">{{ field.help }}</p>
+        <div class="field-input-wrap">
+          <input
+            type="{{ 'password' if field.sensitive else 'text' }}"
+            id="{{ field.key }}"
+            name="{{ field.key }}"
+            placeholder="{{ field.masked if field.present else 'Enter ' + field.label }}"
+            class="field-input"
+            autocomplete="new-password"
+          >
+          {% if field.sensitive %}
+          <button type="button" class="reveal-btn" onclick="toggleReveal('{{ field.key }}')">👁 Show</button>
+          {% endif %}
+        </div>
+        {% if field.get('error') %}
+        <div class="field-error-msg">{{ field.error }}</div>
+        {% endif %}
+        <p class="field-note">Leave blank to keep the existing value.</p>
+      </div>
+      {% endfor %}
+
+      <div class="canvas-token-help">
+        <details>
+          <summary>📋 How to get your Canvas Token</summary>
+          <ol>
+            <li>Log into Canvas</li>
+            <li>Click your profile picture (top right) → <strong>Account</strong></li>
+            <li>Click <strong>Settings</strong></li>
+            <li>Scroll to <strong>Approved Integrations</strong></li>
+            <li>Click <strong>+ New Access Token</strong></li>
+            <li>Give it a name (e.g. "Course Builder") and click <strong>Generate Token</strong></li>
+            <li>Copy the token and paste it above</li>
+          </ol>
+        </details>
+      </div>
+    </div>
+
+    <!-- AI Provider Section -->
+    <div class="card">
+      <div class="card-header">
+        <h2>🤖 AI Provider (NebulaONE / API Keys)</h2>
+        <span class="card-badge optional-badge">At least one required</span>
+      </div>
+      <p class="card-intro">
+        The AI provider is used to evaluate and enhance your course content.
+        If your institution provides <strong>NebulaONE</strong>, fill in those fields.
+        Otherwise, provide an API key from Anthropic, OpenAI, or Google.
+      </p>
+
+      <div class="provider-tabs">
+        <button type="button" class="tab-btn active" onclick="showTab('nebula', this)">NebulaONE (Institutional)</button>
+        <button type="button" class="tab-btn" onclick="showTab('direct', this)">Direct API Keys</button>
+      </div>
+
+      <div id="tab-nebula" class="tab-content">
+        {% for field in fields if field.key in ('NEBULA_API_KEY', 'NEBULA_BASE_URL', 'NEBULA_MODEL') %}
+        <div class="field-group {{ 'field-error' if field.get('error') }}">
+          <label class="field-label" for="{{ field.key }}">
+            {{ field.label }}
+            <span class="field-status {{ 'status-ok' if field.present else 'status-missing' }}">
+              {{ '✓ Set' if field.present else 'Not set' }}
+            </span>
+          </label>
+          <p class="field-help">{{ field.help }}</p>
+          <div class="field-input-wrap">
+            <input
+              type="{{ 'password' if field.sensitive else 'text' }}"
+              id="{{ field.key }}"
+              name="{{ field.key }}"
+              placeholder="{{ field.masked if field.present else 'Enter value' }}"
+              class="field-input"
+              autocomplete="new-password"
+            >
+            {% if field.sensitive %}
+            <button type="button" class="reveal-btn" onclick="toggleReveal('{{ field.key }}')">👁 Show</button>
+            {% endif %}
+          </div>
+          <p class="field-note">Leave blank to keep the existing value.</p>
+        </div>
+        {% endfor %}
+      </div>
+
+      <div id="tab-direct" class="tab-content" style="display:none">
+        {% for field in fields if field.key in ('ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY') %}
+        <div class="field-group {{ 'field-error' if field.get('error') }}">
+          <label class="field-label" for="{{ field.key }}">
+            {{ field.label }}
+            <span class="field-status {{ 'status-ok' if field.present else 'status-missing' }}">
+              {{ '✓ Set' if field.present else 'Not set' }}
+            </span>
+          </label>
+          <p class="field-help">{{ field.help }}</p>
+          <div class="field-input-wrap">
+            <input
+              type="password"
+              id="{{ field.key }}"
+              name="{{ field.key }}"
+              placeholder="{{ field.masked if field.present else 'Enter API key' }}"
+              class="field-input"
+              autocomplete="new-password"
+            >
+            <button type="button" class="reveal-btn" onclick="toggleReveal('{{ field.key }}')">👁 Show</button>
+          </div>
+          <p class="field-note">Leave blank to keep the existing value.</p>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="page-actions">
+      <a href="{{ url_for('index') }}" class="btn btn-ghost">← Back</a>
+      <button type="submit" class="btn btn-primary btn-lg">💾 Save Configuration</button>
+      <a href="{{ url_for('run_page') }}" class="btn btn-success btn-lg">③ Go to Run →</a>
+    </div>
+  </form>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function toggleReveal(fieldId) {
+  const input = document.getElementById(fieldId);
+  const btn   = input.nextElementSibling;
+  if (input.type === 'password') {
+    input.type = 'text';
+    btn.textContent = '🙈 Hide';
+  } else {
+    input.type = 'password';
+    btn.textContent = '👁 Show';
+  }
+}
+
+function showTab(tab, btn) {
+  document.querySelectorAll('.tab-content').forEach(el => el.style.display = 'none');
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + tab).style.display = '';
+  btn.classList.add('active');
+}
+</script>
+{% endblock %}

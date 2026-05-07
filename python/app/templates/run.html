@@ -1,0 +1,329 @@
+{% extends "base.html" %}
+{% block title %}Run — Canvas Course Builder{% endblock %}
+
+{% block content %}
+<div class="page-wrap">
+
+  <div class="page-hero">
+    <h1>Run the Pipeline</h1>
+    <p class="hero-sub">Enter your course ID and click Run. The tool will export the course, evaluate its AI readiness, enhance the content, and build a local website for you to review.</p>
+  </div>
+
+  {% if not all_ok %}
+  <div class="banner banner-warn">
+    <span class="banner-icon">⚠️</span>
+    <div>
+      Some requirements are not met.
+      <a href="{{ url_for('index') }}">Review the Requirements page</a> before running.
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Run form (shown before run starts) -->
+  <div id="run-form-section">
+    <div class="card">
+      <div class="card-header"><h2>Course Settings</h2></div>
+
+      <div class="field-group">
+        <label class="field-label" for="course_id">Canvas Course ID <span class="required-star">*</span></label>
+        <p class="field-help">
+          The numeric ID of your Canvas course. You can find it in the URL when viewing your course:
+          <code>canvas.instructure.com/courses/<strong>2446743</strong></code>
+        </p>
+        <input type="text" id="course_id" name="course_id" class="field-input field-input-lg"
+               placeholder="e.g. 2446743" pattern="[0-9]+" required>
+      </div>
+
+      <div class="field-group">
+        <label class="field-label" for="model_provider">AI Provider</label>
+        <p class="field-help">Choose which AI service to use for evaluation and enhancement.</p>
+        <select id="model_provider" name="model_provider" class="field-input">
+          <option value="nebula"    selected>NebulaONE (Institutional — Recommended)</option>
+          <option value="anthropic">Anthropic (Claude)</option>
+          <option value="openai">OpenAI (GPT)</option>
+          <option value="gemini">Google Gemini</option>
+        </select>
+      </div>
+
+      <div class="field-group">
+        <label class="field-label" for="workers">Processing Speed</label>
+        <p class="field-help">More workers = faster, but uses more API calls at once.</p>
+        <select id="workers" name="workers" class="field-input" style="width:auto">
+          <option value="1">1 — Slow (safe for small rate limits)</option>
+          <option value="3" selected>3 — Normal (recommended)</option>
+          <option value="5">5 — Fast</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><h2>Steps to Run</h2></div>
+      <p class="card-intro">All steps are selected by default. Uncheck steps you want to skip (e.g. if you already exported the course).</p>
+
+      <div class="step-checklist">
+        {% for step in steps %}
+        <label class="step-check-item">
+          <input type="checkbox" name="step_{{ step.id }}" id="step_{{ step.id }}" checked class="step-checkbox"
+                 data-step="{{ step.id }}">
+          <div class="step-check-content">
+            <div class="step-check-label">{{ step.label }}</div>
+          </div>
+        </label>
+        {% endfor %}
+      </div>
+
+      <div class="field-group" style="margin-top:1rem">
+        <label class="step-check-item">
+          <input type="checkbox" id="no_ai" name="no_ai">
+          <div class="step-check-content">
+            <div class="step-check-label">Skip AI (use plain content copy without enhancement)</div>
+            <div class="step-check-sub">Useful for testing the pipeline without AI API calls.</div>
+          </div>
+        </label>
+      </div>
+    </div>
+
+    <div class="page-actions">
+      <a href="{{ url_for('setup') }}" class="btn btn-ghost">← Configuration</a>
+      <button id="run-btn" class="btn btn-success btn-lg btn-run"
+              onclick="startRun()" {{ 'disabled' if not all_ok }}>
+        ▶ Run Pipeline
+      </button>
+    </div>
+  </div>
+
+  <!-- Live run section (shown after run starts) -->
+  <div id="run-live-section" style="display:none">
+
+    <!-- Step progress sidebar -->
+    <div class="run-layout">
+      <div class="run-sidebar">
+        <h3 class="sidebar-title">Progress</h3>
+        <div class="step-progress" id="step-progress">
+          {% for step in steps %}
+          <div class="progress-step progress-pending" id="prog-{{ step.id }}">
+            <div class="prog-icon">⏳</div>
+            <div class="prog-label">{{ step.label }}</div>
+          </div>
+          {% endfor %}
+        </div>
+        <div id="overall-status" class="overall-status"></div>
+      </div>
+
+      <!-- Log terminal -->
+      <div class="run-main">
+        <div class="terminal-header">
+          <span class="terminal-title">📋 Live Output</span>
+          <button class="btn btn-xs btn-ghost" onclick="clearLog()">Clear</button>
+        </div>
+        <div id="log-terminal" class="log-terminal"></div>
+      </div>
+    </div>
+
+    <!-- Action buttons (shown when done) -->
+    <div id="done-actions" style="display:none">
+      <div class="card done-card">
+        <h2 id="done-title">Pipeline Complete!</h2>
+        <p id="done-message" class="done-message"></p>
+        <div class="done-buttons" id="done-buttons"></div>
+      </div>
+    </div>
+
+    <div class="page-actions">
+      <button class="btn btn-ghost" onclick="resetToForm()">← Run Another Course</button>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentRunId = null;
+let eventSource  = null;
+
+const stepIcons = {
+  pending:  '⏳',
+  running:  '<span class="spin">⚙️</span>',
+  complete: '✅',
+  failed:   '❌',
+  skipped:  '⏭️',
+};
+
+function startRun() {
+  const courseId = document.getElementById('course_id').value.trim();
+  if (!courseId) {
+    alert('Please enter a Course ID.');
+    return;
+  }
+
+  // Gather checkbox states
+  const stepIds = ['export','pipeline','build','npm','serve'];
+  const options = {
+    course_id:       courseId,
+    model_provider:  document.getElementById('model_provider').value,
+    workers:         document.getElementById('workers').value,
+    no_ai:           document.getElementById('no_ai').checked ? 'true' : 'false',
+  };
+  stepIds.forEach(id => {
+    const el = document.getElementById('step_' + id);
+    options['do_' + (id === 'npm' ? 'npm_install' : id === 'serve' ? 'serve' : id)] =
+      el && el.checked ? 'true' : 'false';
+  });
+
+  // Show live section
+  document.getElementById('run-form-section').style.display = 'none';
+  document.getElementById('run-live-section').style.display = '';
+
+  fetch('/run/start', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(options),
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.error) { showError(data.error); return; }
+    currentRunId = data.run_id;
+    connectStream(currentRunId);
+  })
+  .catch(err => showError('Failed to start: ' + err));
+}
+
+function connectStream(runId) {
+  eventSource = new EventSource('/stream/' + runId);
+
+  eventSource.onmessage = function(e) {
+    const msg = JSON.parse(e.data);
+
+    if (msg.type === 'ping') return;
+
+    if (msg.type === 'log') {
+      appendLog(msg.text, msg.step);
+    }
+
+    if (msg.type === 'step') {
+      updateStep(msg.step, msg.status);
+    }
+
+    if (msg.type === 'site_ready') {
+      addSiteButton(msg.url, runId);
+    }
+
+    if (msg.type === 'done') {
+      eventSource.close();
+      showDone(msg, runId);
+    }
+  };
+
+  eventSource.onerror = function() {
+    appendLog('⚠ Connection lost. Checking status...', null);
+    eventSource.close();
+    // Fallback: poll status
+    setTimeout(() => pollStatus(runId), 2000);
+  };
+}
+
+function pollStatus(runId) {
+  fetch('/status/' + runId)
+    .then(r => r.json())
+    .then(data => {
+      Object.entries(data.steps || {}).forEach(([step, status]) => updateStep(step, status));
+      if (data.status === 'complete' || data.status === 'failed') {
+        showDone({success: data.status === 'complete',
+                  site_dir: data.site_dir, site_url: data.site_url}, runId);
+      } else {
+        setTimeout(() => pollStatus(runId), 3000);
+      }
+    });
+}
+
+function appendLog(text, step) {
+  const terminal = document.getElementById('log-terminal');
+  const line = document.createElement('div');
+  line.className = 'log-line' + (step ? ' log-step-' + step : '');
+
+  // Color-code certain patterns
+  if (text.startsWith('✅') || text.startsWith('✓')) line.classList.add('log-success');
+  else if (text.startsWith('⚠') || text.startsWith('Warning')) line.classList.add('log-warn');
+  else if (text.startsWith('✗') || text.startsWith('❌') || text.startsWith('Error')) line.classList.add('log-error');
+  else if (text.startsWith('═══') || text.startsWith('===')) line.classList.add('log-header');
+  else if (text.startsWith('▶')) line.classList.add('log-cmd');
+
+  line.textContent = text;
+  terminal.appendChild(line);
+  terminal.scrollTop = terminal.scrollHeight;
+}
+
+function updateStep(stepId, status) {
+  const el = document.getElementById('prog-' + stepId);
+  if (!el) return;
+  el.className = 'progress-step progress-' + status;
+  el.querySelector('.prog-icon').innerHTML = stepIcons[status] || '⏳';
+}
+
+function showDone(msg, runId) {
+  const titleEl   = document.getElementById('done-title');
+  const msgEl     = document.getElementById('done-message');
+  const btnEl     = document.getElementById('done-buttons');
+  const doneEl    = document.getElementById('done-actions');
+  const statusEl  = document.getElementById('overall-status');
+
+  if (msg.success) {
+    titleEl.textContent = '🎉 All Done!';
+    msgEl.textContent   = 'Your course has been exported, evaluated, enhanced, and the HAX site is ready.';
+    statusEl.innerHTML  = '<span class="status-badge status-complete">Complete</span>';
+
+    // Build action buttons
+    let html = '';
+    if (msg.site_url) {
+      html += `<a href="${msg.site_url}" target="_blank" class="btn btn-success btn-lg">🌐 Open Course Site</a>`;
+    }
+    html += `<a href="/results/${runId}" class="btn btn-primary">📊 View Results & Reports</a>`;
+    if (msg.site_dir) {
+      html += `<button class="btn btn-ghost" onclick="openFolder('${msg.site_dir}')">📁 Open Site Folder</button>`;
+    }
+    btnEl.innerHTML = html;
+  } else {
+    titleEl.textContent = '❌ Pipeline Failed';
+    msgEl.textContent   = msg.message || 'An error occurred. Review the log above for details.';
+    statusEl.innerHTML  = '<span class="status-badge status-failed">Failed</span>';
+    titleEl.style.color = '#c62828';
+  }
+
+  doneEl.style.display = '';
+}
+
+function addSiteButton(url, runId) {
+  const terminal = document.getElementById('log-terminal');
+  const div = document.createElement('div');
+  div.className = 'log-line log-success';
+  div.innerHTML = `✅ Site is running — <a href="${url}" target="_blank" style="color:inherit;font-weight:bold">${url}</a>`;
+  terminal.appendChild(div);
+  terminal.scrollTop = terminal.scrollHeight;
+}
+
+function openFolder(folder) {
+  fetch('/open/folder/' + folder.replace(/^\//, ''));
+}
+
+function clearLog() {
+  document.getElementById('log-terminal').innerHTML = '';
+}
+
+function showError(msg) {
+  document.getElementById('run-live-section').style.display = 'none';
+  document.getElementById('run-form-section').style.display = '';
+  alert('Error: ' + msg);
+}
+
+function resetToForm() {
+  if (eventSource) eventSource.close();
+  document.getElementById('run-live-section').style.display = 'none';
+  document.getElementById('run-form-section').style.display = '';
+  document.getElementById('log-terminal').innerHTML = '';
+  document.getElementById('done-actions').style.display = 'none';
+  // Reset step progress
+  ['export','pipeline','build','npm','serve'].forEach(id => updateStep(id, 'pending'));
+}
+</script>
+{% endblock %}

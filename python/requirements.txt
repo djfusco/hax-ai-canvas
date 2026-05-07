@@ -1,0 +1,29 @@
+# Web UI
+flask>=3.0.0
+
+# Core Canvas API and HTTP dependencies
+canvasapi>=3.0.0
+requests>=2.28.0
+python-dotenv>=0.21.0
+
+# HTML/XML parsing and conversion
+beautifulsoup4>=4.11.0
+lxml>=4.9.0
+markdown>=3.4.0
+
+# Data processing
+pandas>=2.0.0
+
+# Document processing (optional but recommended)
+PyPDF2>=3.0.0
+python-docx>=0.8.11
+python-pptx>=0.6.21
+pypdf>=3.17.0
+
+# AI API clients (install the ones you use)
+openai>=1.0.0
+anthropic>=0.18.0
+# google-generativeai  # uncomment if using Gemini
+
+# Utility libraries
+colorama>=0.4.6

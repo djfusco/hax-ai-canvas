@@ -1,0 +1,29 @@
+{
+  "name": "hax-ai-canvas",
+  "version": "1.0.0",
+  "description": "AI-powered Canvas course to HAX site builder — local web app for instructors",
+  "bin": {
+    "hax-ai-canvas": "bin/index.js"
+  },
+  "files": [
+    "bin/",
+    "python/"
+  ],
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "keywords": [
+    "canvas",
+    "hax",
+    "lms",
+    "ai",
+    "course-builder",
+    "education"
+  ],
+  "author": "Dave Fusco",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": ""
+  }
+}

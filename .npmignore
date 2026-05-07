@@ -1,0 +1,10 @@
+# Exclude everything not in the "files" list in package.json.
+# package.json already limits published files to bin/ and python/,
+# but this suppresses npm warnings about common patterns.
+.DS_Store
+*.pyc
+__pycache__/
+.env
+*.db
+exports/
+hax_prep/
