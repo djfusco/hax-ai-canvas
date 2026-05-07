@@ -56,12 +56,19 @@
       </div>
       {% endfor %}
 
+      <div class="test-connection-row">
+        <button type="button" class="btn btn-outline btn-sm" onclick="testConnection('canvas', this)">
+          🔌 Test Canvas Connection
+        </button>
+        <span class="test-result" id="test-result-canvas"></span>
+      </div>
+
       <div class="canvas-token-help">
         <details>
           <summary>📋 How to get your Canvas Token</summary>
           <ol>
             <li>Log into Canvas</li>
-            <li>Click your profile picture (top right) → <strong>Account</strong></li>
+            <li>Click your profile picture (top left) → <strong>Account</strong></li>
             <li>Click <strong>Settings</strong></li>
             <li>Scroll to <strong>Approved Integrations</strong></li>
             <li>Click <strong>+ New Access Token</strong></li>
@@ -115,6 +122,12 @@
           <p class="field-note">Leave blank to keep the existing value.</p>
         </div>
         {% endfor %}
+        <div class="test-connection-row">
+          <button type="button" class="btn btn-outline btn-sm" onclick="testConnection('nebula', this)">
+            🔌 Test NebulaONE Connection
+          </button>
+          <span class="test-result" id="test-result-nebula"></span>
+        </div>
       </div>
 
       <div id="tab-direct" class="tab-content" style="display:none">
@@ -141,6 +154,18 @@
           <p class="field-note">Leave blank to keep the existing value.</p>
         </div>
         {% endfor %}
+        <div class="test-connection-row test-row-multi">
+          <button type="button" class="btn btn-outline btn-sm" onclick="testConnection('anthropic', this)">
+            🔌 Test Anthropic
+          </button>
+          <button type="button" class="btn btn-outline btn-sm" onclick="testConnection('openai', this)">
+            🔌 Test OpenAI
+          </button>
+          <button type="button" class="btn btn-outline btn-sm" onclick="testConnection('gemini', this)">
+            🔌 Test Gemini
+          </button>
+        </div>
+        <span class="test-result" id="test-result-direct"></span>
       </div>
     </div>
 
@@ -173,6 +198,61 @@ function showTab(tab, btn) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('tab-' + tab).style.display = '';
   btn.classList.add('active');
+}
+
+function testConnection(provider, btn) {
+  // Determine which result span to use
+  var resultId;
+  if (provider === 'canvas')                           resultId = 'test-result-canvas';
+  else if (provider === 'nebula')                      resultId = 'test-result-nebula';
+  else                                                 resultId = 'test-result-direct';
+  var resultEl = document.getElementById(resultId);
+
+  // Show loading state
+  btn.disabled = true;
+  var origText = btn.textContent;
+  btn.textContent = '⏳ Saving & testing…';
+  resultEl.className = 'test-result test-result-pending';
+  resultEl.textContent = 'Saving configuration…';
+
+  // Save current form values first, then test
+  var formData = new FormData(document.querySelector('form'));
+
+  fetch('/setup/save-ajax', {
+    method: 'POST',
+    body: formData,
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(saveResult) {
+    if (!saveResult.ok) {
+      var msgs = Object.values(saveResult.errors || {}).join(', ');
+      resultEl.textContent = 'Save failed: ' + (msgs || 'validation error');
+      resultEl.className = 'test-result test-result-fail';
+      return Promise.reject('save-failed');
+    }
+    resultEl.textContent = 'Connecting…';
+    return fetch('/api/test-connection', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({provider: provider}),
+    });
+  })
+  .then(function(r) { if (r) return r.json(); })
+  .then(function(data) {
+    if (!data) return;
+    resultEl.textContent = data.message;
+    resultEl.className = 'test-result ' + (data.ok ? 'test-result-ok' : 'test-result-fail');
+  })
+  .catch(function(err) {
+    if (err !== 'save-failed') {
+      resultEl.textContent = 'Request failed — is the app running?';
+      resultEl.className = 'test-result test-result-fail';
+    }
+  })
+  .finally(function() {
+    btn.disabled = false;
+    btn.textContent = origText;
+  });
 }
 </script>
 {% endblock %}

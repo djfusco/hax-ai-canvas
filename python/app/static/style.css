@@ -392,6 +392,27 @@ code { font-family: 'SF Mono', Consolas, monospace; background: #f0f0f0; padding
 .file-path { color: #888; font-size: .78rem; font-family: monospace; }
 .file-item .btn { margin-left: auto; flex-shrink: 0; }
 
+/* ── Test connection ─────────────────────────────────────────────────────── */
+.test-connection-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+.test-row-multi { gap: 8px; }
+.test-result {
+  font-size: .85rem;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 8px;
+  transition: all .2s;
+}
+.test-result:empty { display: none; }
+.test-result-ok      { background: #e8f5e9; color: #2e7d32; }
+.test-result-fail    { background: #ffebee; color: #c62828; }
+.test-result-pending { background: #e3f2fd; color: #1565c0; }
+
 /* ── Spinner animation ───────────────────────────────────────────────────── */
 @keyframes spin { to { transform: rotate(360deg); } }
 .spin { display: inline-block; animation: spin 1s linear infinite; }

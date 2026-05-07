@@ -308,6 +308,129 @@ def run_all_checks() -> Dict:
     return {"checks": checks, "all_ok": all_ok}
 
 
+# ── connection tests ──────────────────────────────────────────────────────────
+
+def test_canvas_connection() -> dict:
+    """Test Canvas API credentials by hitting /api/v1/users/self."""
+    import ssl
+    import urllib.request
+    import urllib.error
+    import json as _json
+
+    values = load_env_values()
+    url   = values.get("CANVAS_URL", "").rstrip("/")
+    token = values.get("CANVAS_TOKEN", "")
+
+    if not url or not token:
+        return {"ok": False, "message": "Canvas URL or Token is not configured."}
+
+    # Build an SSL context that uses certifi's CA bundle (fixes macOS Python installs)
+    try:
+        import certifi
+        ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        ssl_ctx = ssl.create_default_context()
+
+    try:
+        req = urllib.request.Request(
+            f"{url}/api/v1/users/self",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        with urllib.request.urlopen(req, timeout=15, context=ssl_ctx) as resp:
+            data = _json.loads(resp.read())
+            name = data.get("name", "Unknown")
+            return {"ok": True, "message": f"Connected as {name}"}
+    except urllib.error.HTTPError as exc:
+        if exc.code == 401:
+            return {"ok": False, "message": "Invalid token — Canvas returned 401 Unauthorized."}
+        return {"ok": False, "message": f"Canvas returned HTTP {exc.code}."}
+    except Exception as exc:
+        return {"ok": False, "message": f"Connection failed: {exc}"}
+
+
+def test_ai_connection(provider: str) -> dict:
+    """Test an AI provider by sending a tiny prompt."""
+    values = load_env_values()
+
+    try:
+        if provider in ("nebula", "anthropic"):
+            try:
+                from anthropic import Anthropic
+            except ImportError:
+                return {"ok": False, "message": "anthropic package is not installed."}
+
+            if provider == "nebula":
+                key = values.get("NEBULA_API_KEY", "")
+                url = values.get("NEBULA_BASE_URL", "")
+                model = values.get("NEBULA_MODEL", "claude-haiku-4-5")
+                if not key or not url:
+                    return {"ok": False, "message": "NebulaONE API Key or Base URL is not configured."}
+                client = Anthropic(api_key=key, base_url=url)
+            else:
+                key = values.get("ANTHROPIC_API_KEY", "")
+                model = "claude-haiku-4-5"
+                if not key:
+                    return {"ok": False, "message": "Anthropic API Key is not configured."}
+                client = Anthropic(api_key=key)
+
+            r = client.messages.create(
+                model=model,
+                max_tokens=16,
+                messages=[{"role": "user", "content": "Say hello in 3 words."}],
+                timeout=20,
+            )
+            reply = r.content[0].text.strip()
+            return {"ok": True, "message": f"Connected — model replied: \"{reply}\""}
+
+        elif provider == "openai":
+            try:
+                from openai import OpenAI
+            except ImportError:
+                return {"ok": False, "message": "openai package is not installed."}
+
+            key = values.get("OPENAI_API_KEY", "")
+            if not key:
+                return {"ok": False, "message": "OpenAI API Key is not configured."}
+
+            client = OpenAI(api_key=key)
+            r = client.chat.completions.create(
+                model="gpt-4o-mini",
+                max_tokens=16,
+                messages=[{"role": "user", "content": "Say hello in 3 words."}],
+                timeout=20,
+            )
+            reply = r.choices[0].message.content.strip()
+            return {"ok": True, "message": f"Connected — model replied: \"{reply}\""}
+
+        elif provider == "gemini":
+            try:
+                from google import genai as _genai
+            except ImportError:
+                return {"ok": False, "message": "google-generativeai package is not installed."}
+
+            key = values.get("GEMINI_API_KEY", "")
+            if not key:
+                return {"ok": False, "message": "Gemini API Key is not configured."}
+
+            client = _genai.Client(api_key=key)
+            r = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents="Say hello in 3 words.",
+            )
+            reply = r.text.strip()
+            return {"ok": True, "message": f"Connected — model replied: \"{reply}\""}
+
+        else:
+            return {"ok": False, "message": f"Unknown provider: {provider}"}
+
+    except Exception as exc:
+        msg = str(exc)
+        # Trim very long error messages
+        if len(msg) > 300:
+            msg = msg[:300] + "…"
+        return {"ok": False, "message": f"Connection failed: {msg}"}
+
+
 def install_packages() -> tuple[bool, str]:
     """Attempt pip install of flask + requirements.txt. Returns (success, output)."""
     cmds = [

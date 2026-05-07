@@ -28,6 +28,7 @@ except ImportError:
 from setup_wizard import (
     REQUIRED_ENV_VARS, load_env_values, mask_value, run_all_checks,
     save_env_values, validate_env_value, install_packages, PROJECT_ROOT,
+    test_canvas_connection, test_ai_connection,
 )
 from pipeline_runner import STEPS, get_job, start_run, stop_npm
 
@@ -122,6 +123,31 @@ def setup_save():
 
     save_env_values(new_values)
     return redirect(url_for("index"))
+
+
+@app.route("/setup/save-ajax", methods=["POST"])
+def setup_save_ajax():
+    """Save .env values via AJAX and return JSON (used by test-connection flow)."""
+    new_values = {}
+    errors = {}
+    for var in REQUIRED_ENV_VARS:
+        key   = var["key"]
+        value = request.form.get(key, "").strip()
+        if not value:
+            continue  # keep existing
+        validate = var.get("validate", "none")
+        err = validate_env_value(key, value, validate)
+        if err:
+            errors[key] = err
+        else:
+            new_values[key] = value
+
+    if errors:
+        return jsonify({"ok": False, "errors": errors})
+
+    if new_values:
+        save_env_values(new_values)
+    return jsonify({"ok": True})
 
 
 @app.route("/install-packages", methods=["POST"])
@@ -293,6 +319,22 @@ def stop_site(run_id: str):
 def api_checks():
     """Return current system checks as JSON (used by AJAX refresh)."""
     result = run_all_checks()
+    return jsonify(result)
+
+
+@app.route("/api/test-connection", methods=["POST"])
+def api_test_connection():
+    """Test a Canvas or AI provider connection using saved .env credentials."""
+    data = request.get_json() or {}
+    provider = data.get("provider", "").strip().lower()
+
+    if provider == "canvas":
+        result = test_canvas_connection()
+    elif provider in ("nebula", "anthropic", "openai", "gemini"):
+        result = test_ai_connection(provider)
+    else:
+        result = {"ok": False, "message": f"Unknown provider: {provider}"}
+
     return jsonify(result)
 
 
