@@ -105,18 +105,70 @@ function ensureVenv(python, versionChanged) {
   const venvPython = isWindows
     ? path.join(VENV_DIR, 'Scripts', 'python.exe')
     : path.join(VENV_DIR, 'bin', 'python');
+  const venvPip = isWindows
+    ? path.join(VENV_DIR, 'Scripts', 'pip.exe')
+    : path.join(VENV_DIR, 'bin', 'pip');
 
   if (!versionChanged && fs.existsSync(venvPython)) {
     log('Virtual environment already exists.');
+    // Still check pip exists (might have been a broken venv from before)
+    if (!fs.existsSync(venvPip)) {
+      _ensurePipInVenv(venvPython, venvPip);
+    }
     return venvPython;
   }
 
+  // Try creating venv normally first
   log('Creating Python virtual environment…');
-  const r = run(`${python} -m venv "${VENV_DIR}"`, { stdio: 'inherit' });
-  if (r.status !== 0) die('Failed to create virtual environment.');
+  let r = run(`${python} -m venv "${VENV_DIR}"`, { stdio: 'inherit' });
+
+  // On Debian/Ubuntu, venv module may not be installed. Try --without-pip as fallback.
+  if (r.status !== 0) {
+    warn('venv failed — retrying with --without-pip…');
+    r = run(`${python} -m venv --without-pip "${VENV_DIR}"`, { stdio: 'inherit' });
+    if (r.status !== 0) die(
+      'Failed to create virtual environment.\n' +
+      '  On Ubuntu/Debian, you may need to install:\n' +
+      '    sudo apt install python3-venv\n' +
+      '  Then re-run: npx hax-ai-canvas'
+    );
+  }
+
+  // Make sure pip is available in the venv
+  _ensurePipInVenv(venvPython, venvPip);
 
   log('Virtual environment created.');
   return venvPython;
+}
+
+function _ensurePipInVenv(venvPython, venvPip) {
+  if (fs.existsSync(venvPip)) return;
+
+  // Attempt 1: ensurepip (works on most systems)
+  log('pip not found in venv — trying ensurepip…');
+  run(`"${venvPython}" -m ensurepip --upgrade`, { stdio: 'inherit' });
+  if (fs.existsSync(venvPip)) { log('pip installed via ensurepip.'); return; }
+
+  // Attempt 2: download get-pip.py (works everywhere, no sudo needed)
+  log('ensurepip unavailable — downloading get-pip.py…');
+  const getPipPath = path.join(DATA_DIR, 'get-pip.py');
+  const dl = run(
+    `"${venvPython}" -c "import urllib.request; urllib.request.urlretrieve('https://bootstrap.pypa.io/get-pip.py', '${getPipPath.replace(/'/g, "'\\''")}')"`
+  );
+  if (dl.status === 0 && fs.existsSync(getPipPath)) {
+    log('Installing pip via get-pip.py…');
+    const gp = run(`"${venvPython}" "${getPipPath}"`, { stdio: 'inherit' });
+    // Clean up
+    try { fs.unlinkSync(getPipPath); } catch (_) {}
+    if (gp.status === 0 && fs.existsSync(venvPip)) { log('pip installed via get-pip.py.'); return; }
+  }
+
+  die(
+    'Could not install pip in the virtual environment.\n' +
+    '  On Ubuntu/Debian, run:\n' +
+    '    sudo apt install python3-venv python3-pip\n' +
+    '  Then re-run: npx hax-ai-canvas'
+  );
 }
 
 // ── step 4: install requirements ─────────────────────────────────────────────
