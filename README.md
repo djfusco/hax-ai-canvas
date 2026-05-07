@@ -6,7 +6,8 @@ AI-powered Canvas LMS course to HAX site builder — a local web app for instruc
 
 Pulls a course from Canvas, runs it through an AI evaluation and enhancement pipeline, and produces a deployable [HAX](https://haxtheweb.org/) site with:
 
-- **AI Readiness Report** — how AI-ready is the original course?
+- **AI Dashboard** — visual overview with summary cards, risk vs leverage chart, due dates, and filterable item table
+- **AI Readiness Report** — detailed per-item scores, strengths, concerns, and prioritized recommendations
 - **AI Changes Report** — side-by-side diff of every item: original vs. AI-enhanced
 - **HAX Site** — the final AI-enhanced course, served locally
 
@@ -36,10 +37,11 @@ Subsequent runs start in seconds (setup is cached).
 
 ## First-time setup (in the browser)
 
-1. **Requirements** tab — confirms Python, Node, and packages are ready
-2. **Setup** tab — enter your Canvas URL, Canvas API token, and AI provider key
-3. **Run** tab — enter a Course ID and click **Run Pipeline**
-4. **Done** — buttons appear to open the HAX site, readiness report, and changes report
+1. **Requirements** tab — confirms Python, Node, and packages are ready (with beginner-friendly install guides)
+2. **Configuration** tab — enter your Canvas URL, Canvas API token, and AI provider key (with Test Connection buttons)
+3. **Run** tab — enter a Course ID, choose your AI provider, and click **Run Pipeline**
+4. **Done** — buttons appear to open the HAX site, dashboard, readiness report, and changes report
+5. **History** tab — revisit reports for any previously processed course
 
 ## Where your data is stored
 

@@ -7,7 +7,8 @@
   },
   "files": [
     "bin/",
-    "python/"
+    "python/",
+    "README.md"
   ],
   "engines": {
     "node": ">=16.0.0"
