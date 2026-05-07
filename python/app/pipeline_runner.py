@@ -5,6 +5,7 @@ Orchestrates the pipeline steps as subprocesses and streams output via queues.
 
 from __future__ import annotations
 
+import os
 import queue
 import re
 import subprocess
@@ -18,6 +19,7 @@ from typing import Dict, List, Optional
 
 APP_DIR      = Path(__file__).parent.resolve()
 PROJECT_ROOT = APP_DIR.parent.resolve()
+_IS_WINDOWS  = sys.platform == "win32"
 
 # ── sensitive key filter (never log these) ────────────────────────────────────
 _SECRET_RE = re.compile(
@@ -103,7 +105,7 @@ def _run_step(
     try:
         # PYTHONUNBUFFERED=1 ensures print() output streams line-by-line
         # instead of being held in a buffer (Python buffers when stdout is a pipe)
-        env = {**__import__('os').environ, "PYTHONUNBUFFERED": "1"}
+        env = {**os.environ, "PYTHONUNBUFFERED": "1"}
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -112,6 +114,7 @@ def _run_step(
             cwd=str(cwd),
             bufsize=1,
             env=env,
+            shell=_IS_WINDOWS,  # needed on Windows for npm.cmd and other batch files
         )
 
         for line in proc.stdout:
@@ -182,6 +185,7 @@ def _start_npm_serve(job: RunState, site_dir: Path) -> None:
             text=True,
             cwd=str(site_dir),
             bufsize=1,
+            shell=_IS_WINDOWS,  # needed on Windows for npm.cmd
         )
         job.npm_process = proc
 

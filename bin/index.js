@@ -152,9 +152,11 @@ function _ensurePipInVenv(venvPython, venvPip) {
   // Attempt 2: download get-pip.py (works everywhere, no sudo needed)
   log('ensurepip unavailable — downloading get-pip.py…');
   const getPipPath = path.join(DATA_DIR, 'get-pip.py');
-  const dl = run(
-    `"${venvPython}" -c "import urllib.request; urllib.request.urlretrieve('https://bootstrap.pypa.io/get-pip.py', '${getPipPath.replace(/'/g, "'\\''")}')"`
-  );
+  // Write a tiny download script to avoid shell quoting issues on Windows vs Unix
+  const dlScript = path.join(DATA_DIR, '_dl_pip.py');
+  fs.writeFileSync(dlScript, `import urllib.request\nurllib.request.urlretrieve("https://bootstrap.pypa.io/get-pip.py", r"${getPipPath}")\n`);
+  const dl = run(`"${venvPython}" "${dlScript}"`);
+  try { fs.unlinkSync(dlScript); } catch (_) {}
   if (dl.status === 0 && fs.existsSync(getPipPath)) {
     log('Installing pip via get-pip.py…');
     const gp = run(`"${venvPython}" "${getPipPath}"`, { stdio: 'inherit' });
