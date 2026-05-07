@@ -101,6 +101,9 @@ def _run_step(
     job.log(f"▶ {' '.join(str(c) for c in cmd)}", step_id)
 
     try:
+        # PYTHONUNBUFFERED=1 ensures print() output streams line-by-line
+        # instead of being held in a buffer (Python buffers when stdout is a pipe)
+        env = {**__import__('os').environ, "PYTHONUNBUFFERED": "1"}
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -108,6 +111,7 @@ def _run_step(
             text=True,
             cwd=str(cwd),
             bufsize=1,
+            env=env,
         )
 
         for line in proc.stdout:
@@ -208,11 +212,6 @@ def _start_npm_serve(job: RunState, site_dir: Path) -> None:
                         job.set_step("serve", "complete")
                         job.put("site_ready", url=job.site_url)
                         job.log(f"✓ Site ready at {job.site_url}", "serve")
-                        # Auto-open browser
-                        try:
-                            webbrowser.open(job.site_url)
-                        except Exception:
-                            pass
                         break
 
         # If process ends without URL detected
