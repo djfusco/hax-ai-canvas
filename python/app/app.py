@@ -8,9 +8,11 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
+import threading
 import webbrowser
 import zipfile
 from pathlib import Path
@@ -55,6 +57,44 @@ def _report_path(course_id: str, report_type: str) -> Path:
         "dashboard":  f"course_{course_id}_ai_dashboard.html",
     }
     return PROJECT_ROOT / names.get(report_type, "")
+
+
+def _create_site_name(course_title: str, course_id: str) -> str:
+    """Derive the HAX site directory name from a course title.
+
+    Must mirror the logic in build_site._create_site_name so we resolve to
+    the same directory that was created during the pipeline run.
+    """
+    patterns = [
+        r'([A-Z]{2,}\s+\d{3})',
+        r'([A-Z]+\d+)',
+        r'([A-Z]{2,}\s+[A-Z]{1,})',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, course_title)
+        if match:
+            return match.group(1).lower().replace(' ', '')
+    return f"course{course_id}"
+
+
+def _resolve_site_dir(course_id: str) -> Path | None:
+    """Return the HAX site directory for a course, or None if it doesn't exist."""
+    import sys as _sys
+    if str(PROJECT_ROOT) not in _sys.path:
+        _sys.path.insert(0, str(PROJECT_ROOT))
+    try:
+        from extract import get_export_dir, get_course_title
+        export_dir = get_export_dir(course_id, str(PROJECT_ROOT / "exports"))
+        title = get_course_title(export_dir)
+    except Exception:
+        title = f"Course {course_id}"
+    site_name = _create_site_name(title, course_id)
+    site_dir = Path.home() / ".hax-ai" / "sites" / site_name
+    return site_dir if site_dir.exists() and (site_dir / "site.json").exists() else None
+
+
+# Track running site processes: course_id → {"proc": Popen, "url": str}
+_site_procs: dict[str, dict] = {}
 
 
 # ── routes: navigation ─────────────────────────────────────────────────────────
@@ -336,12 +376,14 @@ def history():
                 courses = db.get_course_list()
         except Exception:
             pass
-    # Check which reports exist for each course
+    # Check which reports / site exist for each course
     for c in courses:
         cid = c["course_id"]
         c["has_readiness"]  = _report_path(cid, "readiness").exists()
         c["has_changes"]    = _report_path(cid, "changes").exists()
         c["has_dashboard"]  = _report_path(cid, "dashboard").exists()
+        c["has_site"]       = _resolve_site_dir(cid) is not None
+        c["site_running"]   = cid in _site_procs
         # Try to get a better course name from the export directory
         try:
             import sys as _sys
@@ -351,6 +393,93 @@ def history():
         except Exception:
             pass  # keep the name from get_course_list
     return render_template("history.html", courses=courses)
+
+
+# ── routes: launch HAX site ──────────────────────────────────────────────────
+
+@app.route("/launch/<course_id>", methods=["POST"])
+def launch_site(course_id: str):
+    """Launch the HAX site for a course (npm install if needed, then npm start)."""
+    # Already running?
+    if course_id in _site_procs:
+        url = _site_procs[course_id].get("url", "http://localhost:8080")
+        webbrowser.open(url)
+        return jsonify({"ok": True, "url": url, "already_running": True})
+
+    site_dir = _resolve_site_dir(course_id)
+    if not site_dir:
+        return jsonify({"ok": False, "error": "HAX site not found for this course."}), 404
+
+    def _launch():
+        _IS_WINDOWS = sys.platform == "win32"
+        # npm install if node_modules missing
+        if not (site_dir / "node_modules").exists():
+            subprocess.run(
+                ["npm", "install"], cwd=str(site_dir),
+                capture_output=True, shell=_IS_WINDOWS,
+            )
+
+        proc = subprocess.Popen(
+            ["npm", "start"], cwd=str(site_dir),
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1, shell=_IS_WINDOWS,
+        )
+        _site_procs[course_id] = {"proc": proc, "url": None, "dir": str(site_dir)}
+
+        ready_patterns = [
+            re.compile(r"(https?://localhost[:\d]*)", re.IGNORECASE),
+            re.compile(r"Local:\s+(https?://\S+)", re.IGNORECASE),
+            re.compile(r"running at\s+(https?://\S+)", re.IGNORECASE),
+            re.compile(r"listening on port (\d+)", re.IGNORECASE),
+        ]
+        for line in proc.stdout:
+            line = line.rstrip()
+            if not _site_procs[course_id].get("url"):
+                for pat in ready_patterns:
+                    m = pat.search(line)
+                    if m:
+                        raw = m.group(1)
+                        url = f"http://localhost:{raw}" if raw.isdigit() else raw
+                        _site_procs[course_id]["url"] = url
+                        webbrowser.open(url)
+                        break
+
+        # Process ended — clean up
+        _site_procs.pop(course_id, None)
+
+    t = threading.Thread(target=_launch, daemon=True)
+    t.start()
+
+    # Wait briefly for the URL to appear
+    import time
+    for _ in range(40):
+        entry = _site_procs.get(course_id, {})
+        if entry.get("url"):
+            return jsonify({"ok": True, "url": entry["url"]})
+        time.sleep(0.5)
+
+    return jsonify({"ok": True, "url": "http://localhost:8080", "note": "Site starting, URL not yet detected."})
+
+
+@app.route("/launch/<course_id>/stop", methods=["POST"])
+def stop_launched_site(course_id: str):
+    """Stop a running HAX site launched from the history page."""
+    entry = _site_procs.pop(course_id, None)
+    if entry and entry.get("proc"):
+        try:
+            entry["proc"].terminate()
+        except Exception:
+            pass
+    return jsonify({"ok": True})
+
+
+@app.route("/launch/<course_id>/status")
+def launch_status(course_id: str):
+    """Check if a site is currently running."""
+    entry = _site_procs.get(course_id)
+    if entry:
+        return jsonify({"running": True, "url": entry.get("url")})
+    return jsonify({"running": False})
 
 
 # ── routes: share / import ──────────────────────────────────────────────────
@@ -394,13 +523,19 @@ def export_course_zip(course_id: str):
         if rp.exists():
             report_files[rp.name] = rp
 
+    # Find HAX site directory (if it was built)
+    site_dir = _resolve_site_dir(course_id)
+    site_name = site_dir.name if site_dir else None
+
     # Build zip in memory
     buf = io.BytesIO()
+    _SKIP_DIRS = {".git", "node_modules", ".cache"}
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         # 1. manifest.json
         manifest = {
             "course_id": course_id,
             "export_folder_name": export_dir.name,
+            "site_name": site_name,
             "db_items": db_items,
         }
         zf.writestr("manifest.json", json.dumps(manifest, indent=2, default=str))
@@ -414,6 +549,17 @@ def export_course_zip(course_id: str):
         # 3. report HTML files
         for rname, rpath in report_files.items():
             zf.write(rpath, f"reports/{rname}")
+
+        # 4. HAX site (excluding node_modules, .git, .cache)
+        if site_dir:
+            for file_path in site_dir.rglob("*"):
+                if file_path.is_file():
+                    # Skip if any parent is in _SKIP_DIRS
+                    parts = file_path.relative_to(site_dir).parts
+                    if any(p in _SKIP_DIRS for p in parts):
+                        continue
+                    arcname = f"site/{site_dir.name}/{file_path.relative_to(site_dir)}"
+                    zf.write(file_path, arcname)
 
     buf.seek(0)
     safe_name = export_dir.name[:80]
@@ -496,11 +642,29 @@ def import_upload():
             target = PROJECT_ROOT / report_name
             target.write_bytes(zf.read(name))
 
+    # 4. Extract HAX site (if included)
+    site_name = manifest.get("site_name")
+    if site_name:
+        site_prefix = f"site/{site_name}/"
+        sites_base = Path.home() / ".hax-ai" / "sites"
+        sites_base.mkdir(parents=True, exist_ok=True)
+        site_files = 0
+        for name in zf.namelist():
+            if name.startswith(site_prefix) and not name.endswith("/"):
+                relative = name[len(f"site/"):]
+                target = sites_base / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(zf.read(name))
+                site_files += 1
+    else:
+        site_files = 0
+
     return jsonify({
         "ok": True,
         "course_id": course_id,
         "items_imported": len(db_items),
         "export_folder": export_folder_name,
+        "site_imported": site_name if site_files > 0 else None,
     })
 
 

@@ -32,6 +32,24 @@
       {% endif %}
     </div>
     <div class="history-reports">
+      {% if course.has_site %}
+        {% if course.site_running %}
+        <button class="btn btn-success btn-sm site-btn" id="site-btn-{{ course.course_id }}"
+                data-course="{{ course.course_id }}" data-state="running"
+                onclick="toggleSite('{{ course.course_id }}')">
+          ⏹ Stop Site
+        </button>
+        {% else %}
+        <button class="btn btn-success btn-sm site-btn" id="site-btn-{{ course.course_id }}"
+                data-course="{{ course.course_id }}" data-state="stopped"
+                onclick="toggleSite('{{ course.course_id }}')">
+          🚀 Launch Site
+        </button>
+        {% endif %}
+      {% else %}
+      <button class="btn btn-ghost btn-sm" disabled>🚀 No Site Built</button>
+      {% endif %}
+
       {% if course.has_dashboard %}
       <button class="btn btn-primary btn-sm" onclick="openReport('dashboard', '{{ course.course_id }}')">
         📊 Dashboard
@@ -80,6 +98,43 @@ function openReport(type, courseId) {
     .then(data => {
       if (!data.ok) alert('Report not found: ' + data.error);
     });
+}
+
+function toggleSite(courseId) {
+  const btn = document.getElementById('site-btn-' + courseId);
+  const state = btn.dataset.state;
+
+  if (state === 'stopped') {
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spin">⏳</span> Starting…';
+
+    fetch('/launch/' + courseId, { method: 'POST' })
+      .then(r => r.json())
+      .then(data => {
+        if (data.ok) {
+          btn.disabled = false;
+          btn.innerHTML = '⏹ Stop Site';
+          btn.dataset.state = 'running';
+          btn.className = 'btn btn-success btn-sm site-btn';
+        } else {
+          btn.disabled = false;
+          btn.innerHTML = '🚀 Launch Site';
+          alert(data.error || 'Failed to launch site.');
+        }
+      })
+      .catch(() => {
+        btn.disabled = false;
+        btn.innerHTML = '🚀 Launch Site';
+      });
+
+  } else {
+    fetch('/launch/' + courseId + '/stop', { method: 'POST' })
+      .then(r => r.json())
+      .then(() => {
+        btn.innerHTML = '🚀 Launch Site';
+        btn.dataset.state = 'stopped';
+      });
+  }
 }
 </script>
 {% endblock %}
