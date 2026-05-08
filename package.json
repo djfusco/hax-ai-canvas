@@ -1,6 +1,6 @@
 {
   "name": "hax-ai-canvas",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "AI-powered Canvas course to HAX site builder — local web app for instructors",
   "bin": {
     "hax-ai-canvas": "bin/index.js"
