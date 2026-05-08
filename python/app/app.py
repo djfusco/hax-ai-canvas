@@ -5,11 +5,14 @@ A friendly local web interface for non-technical instructors.
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import subprocess
 import sys
+import tempfile
 import webbrowser
+import zipfile
 from pathlib import Path
 from threading import Timer
 
@@ -348,6 +351,157 @@ def history():
         except Exception:
             pass  # keep the name from get_course_list
     return render_template("history.html", courses=courses)
+
+
+# ── routes: share / import ──────────────────────────────────────────────────
+
+@app.route("/export/<course_id>")
+def export_course_zip(course_id: str):
+    """Download a shareable .zip of a course (export folder + DB rows + reports)."""
+    import sys as _sys
+    if str(PROJECT_ROOT) not in _sys.path:
+        _sys.path.insert(0, str(PROJECT_ROOT))
+    from sqlite_client import SQLiteClient
+
+    db_path = PROJECT_ROOT / "course_pipeline.db"
+    if not db_path.exists():
+        return jsonify({"error": "No database found."}), 404
+
+    # Find the export directory
+    exports_base = PROJECT_ROOT / "exports"
+    matches = list(exports_base.glob(f"course_{course_id}_*"))
+    if not matches:
+        return jsonify({"error": f"No export folder for course {course_id}."}), 404
+    export_dir = matches[0]
+
+    # Collect DB rows for this course
+    with SQLiteClient(db_path=str(db_path)) as db:
+        conn = db._conn
+        rows = conn.execute(
+            "SELECT id, course_id, item_type, title, raw_content, "
+            "recommendations, evaluation, ai_enhanced_markdown, status, "
+            "created_at, updated_at "
+            "FROM course_items WHERE course_id = ?",
+            (course_id,),
+        ).fetchall()
+        db_items = [dict(r) for r in rows]
+
+    # Collect report files
+    report_types = ["readiness", "changes", "dashboard"]
+    report_files = {}
+    for rt in report_types:
+        rp = _report_path(course_id, rt)
+        if rp.exists():
+            report_files[rp.name] = rp
+
+    # Build zip in memory
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        # 1. manifest.json
+        manifest = {
+            "course_id": course_id,
+            "export_folder_name": export_dir.name,
+            "db_items": db_items,
+        }
+        zf.writestr("manifest.json", json.dumps(manifest, indent=2, default=str))
+
+        # 2. export folder
+        for file_path in export_dir.rglob("*"):
+            if file_path.is_file():
+                arcname = f"exports/{export_dir.name}/{file_path.relative_to(export_dir)}"
+                zf.write(file_path, arcname)
+
+        # 3. report HTML files
+        for rname, rpath in report_files.items():
+            zf.write(rpath, f"reports/{rname}")
+
+    buf.seek(0)
+    safe_name = export_dir.name[:80]
+    return Response(
+        buf.getvalue(),
+        mimetype="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}.zip"'},
+    )
+
+
+@app.route("/import")
+def import_page():
+    """Show the import-course form."""
+    return render_template("import_course.html")
+
+
+@app.route("/import/upload", methods=["POST"])
+def import_upload():
+    """Handle a .zip upload: extract exports, insert DB rows, copy reports."""
+    import sys as _sys
+    if str(PROJECT_ROOT) not in _sys.path:
+        _sys.path.insert(0, str(PROJECT_ROOT))
+    from sqlite_client import SQLiteClient
+
+    f = request.files.get("course_zip")
+    if not f or not f.filename.endswith(".zip"):
+        return jsonify({"ok": False, "error": "Please upload a .zip file."}), 400
+
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(f.read()))
+    except zipfile.BadZipFile:
+        return jsonify({"ok": False, "error": "Invalid zip file."}), 400
+
+    # Read manifest
+    if "manifest.json" not in zf.namelist():
+        return jsonify({"ok": False, "error": "Missing manifest.json in zip."}), 400
+
+    manifest = json.loads(zf.read("manifest.json"))
+    course_id = str(manifest["course_id"])
+    export_folder_name = manifest["export_folder_name"]
+    db_items = manifest.get("db_items", [])
+
+    exports_base = PROJECT_ROOT / "exports"
+    exports_base.mkdir(parents=True, exist_ok=True)
+
+    # 1. Extract export folder
+    export_prefix = f"exports/{export_folder_name}/"
+    for name in zf.namelist():
+        if name.startswith(export_prefix) and not name.endswith("/"):
+            relative = name[len("exports/"):]
+            target = exports_base / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(zf.read(name))
+
+    # 2. Insert DB rows
+    db_path = PROJECT_ROOT / "course_pipeline.db"
+    with SQLiteClient(db_path=str(db_path)) as db:
+        for item in db_items:
+            db._conn.execute(
+                "INSERT OR REPLACE INTO course_items "
+                "(id, course_id, item_type, title, raw_content, "
+                "recommendations, evaluation, ai_enhanced_markdown, "
+                "status, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    item["id"], item["course_id"], item["item_type"],
+                    item["title"], item.get("raw_content"),
+                    item.get("recommendations"), item.get("evaluation"),
+                    item.get("ai_enhanced_markdown"), item.get("status", "COMPLETED"),
+                    item.get("created_at"), item.get("updated_at"),
+                ),
+            )
+        db._conn.commit()
+
+    # 3. Copy report HTML files
+    reports_prefix = "reports/"
+    for name in zf.namelist():
+        if name.startswith(reports_prefix) and not name.endswith("/"):
+            report_name = name[len(reports_prefix):]
+            target = PROJECT_ROOT / report_name
+            target.write_bytes(zf.read(name))
+
+    return jsonify({
+        "ok": True,
+        "course_id": course_id,
+        "items_imported": len(db_items),
+        "export_folder": export_folder_name,
+    })
 
 
 # ── routes: checks API ─────────────────────────────────────────────────────────

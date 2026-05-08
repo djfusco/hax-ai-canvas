@@ -462,6 +462,35 @@ code { font-family: 'SF Mono', Consolas, monospace; background: #f0f0f0; padding
 .test-result-fail    { background: #ffebee; color: #c62828; }
 .test-result-pending { background: #e3f2fd; color: #1565c0; }
 
+/* ── Drop zone (import page) ─────────────────────────────────────────────── */
+.drop-zone {
+  border: 2.5px dashed #c5cae9;
+  border-radius: 12px;
+  padding: 40px 24px;
+  text-align: center;
+  cursor: pointer;
+  transition: all .2s;
+  background: #f8f9ff;
+}
+.drop-zone:hover, .drop-zone-active {
+  border-color: #1565c0;
+  background: #e8eaf6;
+}
+.drop-zone-icon { font-size: 2.4rem; margin-bottom: 8px; }
+.drop-zone-text { font-size: .95rem; color: #555; }
+.drop-zone-browse {
+  color: #1565c0;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.drop-zone-file {
+  margin-top: 10px;
+  font-size: .88rem;
+  font-weight: 600;
+  color: #1a237e;
+}
+
 /* ── Spinner animation ───────────────────────────────────────────────────── */
 @keyframes spin { to { transform: rotate(360deg); } }
 .spin { display: inline-block; animation: spin 1s linear infinite; }

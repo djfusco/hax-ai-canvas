@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+{% block title %}Import Course — Canvas Course Builder{% endblock %}
+
+{% block content %}
+<div class="page-wrap">
+
+  <div class="page-hero">
+    <h1>Import a Shared Course</h1>
+    <p class="hero-sub">Upload a <code>.zip</code> file shared by a colleague to add their processed course to your history.</p>
+  </div>
+
+  <!-- upload card -->
+  <div class="card" id="upload-card">
+    <div class="card-header">
+      <h2>📦 Upload Course Zip</h2>
+    </div>
+
+    <form id="import-form" enctype="multipart/form-data">
+      <div class="drop-zone" id="drop-zone">
+        <div class="drop-zone-icon">📁</div>
+        <div class="drop-zone-text">
+          Drag &amp; drop a <strong>.zip</strong> file here, or
+          <label class="drop-zone-browse" for="file-input">browse</label>
+        </div>
+        <input type="file" id="file-input" name="course_zip" accept=".zip" hidden>
+        <div class="drop-zone-file" id="file-name"></div>
+      </div>
+
+      <div style="margin-top: 18px; display: flex; gap: 12px; align-items: center;">
+        <button type="submit" class="btn btn-primary btn-lg" id="upload-btn" disabled>
+          📥 Import Course
+        </button>
+        <span id="upload-status" class="test-result"></span>
+      </div>
+    </form>
+  </div>
+
+  <!-- result card (hidden until success) -->
+  <div class="card" id="result-card" style="display:none;">
+    <div class="banner banner-success">
+      <span class="banner-icon">✅</span>
+      <div>
+        <strong>Course imported successfully!</strong>
+        <div id="result-details" style="margin-top: 4px; font-size: .88rem;"></div>
+      </div>
+    </div>
+    <div class="page-actions">
+      <a href="{{ url_for('history') }}" class="btn btn-primary btn-lg">View in History →</a>
+      <button class="btn btn-ghost" onclick="resetForm()">Import Another</button>
+    </div>
+  </div>
+
+  <div class="page-actions">
+    <a href="{{ url_for('history') }}" class="btn btn-ghost">④ History</a>
+    <a href="{{ url_for('index') }}" class="btn btn-ghost">① Home</a>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const dropZone  = document.getElementById('drop-zone');
+const fileInput = document.getElementById('file-input');
+const fileName  = document.getElementById('file-name');
+const uploadBtn = document.getElementById('upload-btn');
+const status    = document.getElementById('upload-status');
+const form      = document.getElementById('import-form');
+
+// ── drag & drop ──
+['dragenter','dragover'].forEach(e =>
+  dropZone.addEventListener(e, ev => { ev.preventDefault(); dropZone.classList.add('drop-zone-active'); }));
+['dragleave','drop'].forEach(e =>
+  dropZone.addEventListener(e, ev => { ev.preventDefault(); dropZone.classList.remove('drop-zone-active'); }));
+
+dropZone.addEventListener('drop', ev => {
+  const file = ev.dataTransfer.files[0];
+  if (file && file.name.endsWith('.zip')) {
+    fileInput.files = ev.dataTransfer.files;
+    showFile(file);
+  }
+});
+
+dropZone.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', () => {
+  if (fileInput.files.length) showFile(fileInput.files[0]);
+});
+
+function showFile(file) {
+  fileName.textContent = file.name + '  (' + (file.size / 1024 / 1024).toFixed(1) + ' MB)';
+  uploadBtn.disabled = false;
+}
+
+// ── submit ──
+form.addEventListener('submit', async ev => {
+  ev.preventDefault();
+  uploadBtn.disabled = true;
+  status.className = 'test-result test-result-pending';
+  status.textContent = 'Importing…';
+
+  const fd = new FormData();
+  fd.append('course_zip', fileInput.files[0]);
+
+  try {
+    const res = await fetch('/import/upload', { method: 'POST', body: fd });
+    const data = await res.json();
+
+    if (data.ok) {
+      status.className = 'test-result test-result-ok';
+      status.textContent = '';
+      document.getElementById('result-details').innerHTML =
+        '<strong>' + data.export_folder + '</strong><br>' +
+        data.items_imported + ' content items imported.';
+      document.getElementById('upload-card').style.display = 'none';
+      document.getElementById('result-card').style.display = 'block';
+    } else {
+      status.className = 'test-result test-result-fail';
+      status.textContent = data.error || 'Import failed.';
+      uploadBtn.disabled = false;
+    }
+  } catch (err) {
+    status.className = 'test-result test-result-fail';
+    status.textContent = 'Network error: ' + err.message;
+    uploadBtn.disabled = false;
+  }
+});
+
+function resetForm() {
+  document.getElementById('upload-card').style.display = 'block';
+  document.getElementById('result-card').style.display = 'none';
+  fileInput.value = '';
+  fileName.textContent = '';
+  uploadBtn.disabled = true;
+  status.textContent = '';
+  status.className = 'test-result';
+}
+</script>
+{% endblock %}
