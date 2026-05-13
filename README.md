@@ -15,7 +15,7 @@ Pulls a course from Canvas, runs it through an AI evaluation and enhancement pip
 
 | Requirement | How to get it |
 |---|---|
-| **Node.js 16+** | [nodejs.org](https://nodejs.org/en/download) |
+| **Node.js 22+** | [nodejs.org](https://nodejs.org/en/download) |
 | **Python 3.10+** | [python.org/downloads](https://www.python.org/downloads/) |
 | **HAX CLI** | `npm install -g @haxtheweb/create` |
 | **Canvas API token** | Canvas → Account → Settings → New Access Token |
