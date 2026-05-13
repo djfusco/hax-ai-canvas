@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>How the AI Readiness Analysis Works</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f4f6f9;color:#1a1a2e;line-height:1.7;font-size:16px}
+header{background:linear-gradient(135deg,#1565c0 0%,#1976d2 60%,#42a5f5 100%);color:#fff;padding:48px 40px 40px;text-align:center}
+header h1{font-size:2.2rem;font-weight:800;margin-bottom:8px}
+header p{font-size:1.1rem;opacity:.88;max-width:640px;margin:0 auto}
+.page{max-width:860px;margin:0 auto;padding:32px 24px 60px}
+section{background:#fff;border-radius:14px;padding:28px 32px;margin-bottom:24px;box-shadow:0 2px 10px rgba(0,0,0,.06)}
+h2{font-size:1.35rem;font-weight:700;color:#1a237e;margin-bottom:14px;padding-bottom:10px;border-bottom:3px solid #e8eaf6}
+h3{font-size:1.05rem;font-weight:700;color:#333;margin:18px 0 8px}
+p,li{font-size:.95rem;color:#333}
+ul,ol{padding-left:22px;margin-bottom:14px}
+li{margin-bottom:6px}
+strong{color:#1a1a2e}
+.callout{background:#e8eaf6;border-left:4px solid #3949ab;border-radius:0 10px 10px 0;padding:14px 18px;margin:16px 0;font-size:.92rem}
+.callout strong{color:#1a237e}
+.warn-callout{background:#fff3e0;border-left-color:#e65100}
+.warn-callout strong{color:#e65100}
+.success-callout{background:#e8f5e9;border-left-color:#2e7d32}
+.success-callout strong{color:#1b5e20}
+table{width:100%;border-collapse:collapse;margin:14px 0 18px;font-size:.9rem}
+thead th{text-align:left;padding:10px 12px;background:#f5f7fa;font-weight:700;font-size:.82rem;text-transform:uppercase;letter-spacing:.4px;color:#555;border-bottom:2px solid #e0e0e0}
+tbody td{padding:10px 12px;border-bottom:1px solid #f0f0f0;vertical-align:top}
+tbody tr:hover{background:#f8f9ff}
+.formula-box{background:#f0f4ff;border:2px solid #bbdefb;border-radius:10px;padding:20px 24px;margin:18px 0;font-family:'SF Mono',Consolas,monospace;font-size:.95rem;line-height:1.8;text-align:center}
+.formula-box .line{display:block}
+.weight-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin:16px 0}
+.weight-card{border-radius:10px;padding:16px;text-align:center}
+.weight-card .pct{font-size:1.8rem;font-weight:800;line-height:1}
+.weight-card .label{font-size:.82rem;color:#555;margin-top:4px;text-transform:uppercase;letter-spacing:.4px}
+.weight-card .reason{font-size:.82rem;color:#666;margin-top:8px}
+.w-vuln{background:#ffebee;border:2px solid #ef9a9a}.w-vuln .pct{color:#c62828}
+.w-lev{background:#e3f2fd;border:2px solid #90caf9}.w-lev .pct{color:#1565c0}
+.w-auth{background:#e8f5e9;border:2px solid #a5d6a7}.w-auth .pct{color:#2e7d32}
+.w-qual{background:#f3e5f5;border:2px solid #ce93d8}.w-qual .pct{color:#7b1fa2}
+.label-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin:14px 0}
+.label-chip{border-radius:10px;padding:12px;text-align:center;font-weight:700;color:#fff;font-size:.9rem}
+.label-chip .range{font-size:.75rem;font-weight:400;opacity:.85;display:block;margin-top:2px}
+.step-num{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:50%;background:#1565c0;color:#fff;font-weight:700;font-size:.85rem;margin-right:10px;flex-shrink:0}
+.step{display:flex;align-items:flex-start;margin-bottom:14px}
+.step p{flex:1}
+.report-card{display:flex;align-items:flex-start;gap:14px;padding:16px;background:#f8f9ff;border-radius:10px;margin-bottom:12px}
+.report-icon{font-size:1.6rem;flex-shrink:0;width:40px;text-align:center}
+.report-body h3{margin:0 0 4px;font-size:.95rem}
+.report-body ul{margin:0;padding-left:18px}
+.report-body li{font-size:.85rem;margin-bottom:2px}
+.type-enhancement{display:flex;gap:10px;align-items:flex-start;margin-bottom:10px}
+.type-tag{display:inline-block;padding:3px 12px;border-radius:10px;font-size:.78rem;font-weight:700;color:#fff;flex-shrink:0;min-width:90px;text-align:center}
+.tag-page{background:#1565c0}.tag-assign{background:#7b1fa2}.tag-quiz{background:#2e7d32}.tag-disc{background:#e65100}
+.trigger-list{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:14px 0}
+@media(max-width:600px){.trigger-list{grid-template-columns:1fr}}
+.trigger-item{background:#fff5f5;border-left:3px solid #c62828;border-radius:0 8px 8px 0;padding:10px 14px;font-size:.88rem}
+.trigger-item.good{background:#e8f5e9;border-left-color:#2e7d32}
+.trigger-item strong{display:block;font-size:.78rem;text-transform:uppercase;letter-spacing:.3px;color:#888;margin-bottom:2px}
+footer{text-align:center;padding:32px 24px;color:#999;font-size:.82rem}
+footer a{color:#1565c0}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>How the AI Readiness Analysis Works</h1>
+  <p>A plain-language guide to the scores, frameworks, and narratives on the course dashboards</p>
+</header>
+
+<div class="page">
+
+<!-- ─── BIG PICTURE ─────────────────────────────────────────────────── -->
+<section>
+  <h2>The Big Picture</h2>
+  <p>When you process a course, the system pulls every piece of content &mdash; pages, assignments, quizzes, and discussions &mdash; from Canvas and runs each one through a <strong>three-stage AI pipeline</strong>:</p>
+  <ol>
+    <li><strong>Extract</strong> &mdash; Gather all course content from a Canvas export.</li>
+    <li><strong>Evaluate</strong> &mdash; An AI scores every item across 8 pedagogical dimensions <em>(this is what powers the dashboards)</em>.</li>
+    <li><strong>Transform</strong> &mdash; The AI rewrites each item to be more engaging, AI-resilient, and pedagogically stronger, guided by the scores from step&nbsp;2.</li>
+  </ol>
+  <div class="callout">
+    <strong>Key point:</strong> The AI reads the <em>actual content</em> of every course item &mdash; not just keywords. It uses established educational frameworks (Bloom&rsquo;s Taxonomy, AI integration scales) and a detailed rubric to produce structured scores and specific, actionable recommendations.
+  </div>
+</section>
+
+<!-- ─── 8 DIMENSIONS ───────────────────────────────────────────────── -->
+<section>
+  <h2>The 8 Dimensions the AI Scores</h2>
+  <p>Every course item is sent to a large language model (LLM) with a detailed rubric. The AI returns a structured score on each of these dimensions:</p>
+
+  <h3>1. Bloom&rsquo;s Taxonomy Level (1&ndash;6)</h3>
+  <p>A widely-used framework that classifies thinking skills from simple to complex:</p>
+  <table>
+    <thead><tr><th>Level</th><th>Label</th><th>What It Means</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td><strong>Remember</strong></td><td>Recall facts, definitions, or formulas</td></tr>
+      <tr><td>2</td><td><strong>Understand</strong></td><td>Explain ideas, summarize concepts</td></tr>
+      <tr><td>3</td><td><strong>Apply</strong></td><td>Use knowledge in a new situation</td></tr>
+      <tr><td>4</td><td><strong>Analyze</strong></td><td>Break information into parts, find patterns</td></tr>
+      <tr><td>5</td><td><strong>Evaluate</strong></td><td>Justify a decision, critique an argument</td></tr>
+      <tr><td>6</td><td><strong>Create</strong></td><td>Design something new, synthesize original work</td></tr>
+    </tbody>
+  </table>
+  <div class="callout warn-callout">
+    <strong>Why it matters:</strong> Content stuck at levels 1&ndash;2 (Remember/Understand) is easy for AI to complete on a student&rsquo;s behalf. Higher levels require genuine thinking.
+  </div>
+
+  <h3>2. AIAS Level &mdash; AI Integration Assessment Scale (1&ndash;5)</h3>
+  <p>Rates how the course content envisions (or could envision) AI&rsquo;s role:</p>
+  <table>
+    <thead><tr><th>Level</th><th>Label</th><th>What It Means</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td><strong>No AI</strong></td><td>AI plays no role</td></tr>
+      <tr><td>2</td><td><strong>AI as Info Source</strong></td><td>Students might use AI to look things up</td></tr>
+      <tr><td>3</td><td><strong>AI as Tutor</strong></td><td>AI could coach or explain to students</td></tr>
+      <tr><td>4</td><td><strong>AI as Collaborator</strong></td><td>Students work <em>with</em> AI as a thinking partner</td></tr>
+      <tr><td>5</td><td><strong>AI as Co-creator</strong></td><td>AI is a genuine creative partner in the work</td></tr>
+    </tbody>
+  </table>
+
+  <h3>3. AI Leverage Potential (1&ndash;10)</h3>
+  <p>How transformatively AI could <strong>help</strong> students learn this material. A high score means AI could be an outstanding learning partner (tutoring, practice, feedback).</p>
+
+  <h3>4. Cheating Vulnerability (1&ndash;10)</h3>
+  <p>How easily a student could fully delegate this work to AI and receive full credit &mdash; <strong>the key risk metric</strong>. A score of 10 means a student could paste the assignment into ChatGPT and turn in the result with no personal effort.</p>
+
+  <h3>5. Authenticity Score (1&ndash;10)</h3>
+  <p>How much the work requires unique personal knowledge, experience, or context that an AI cannot fabricate. High-authenticity assignments ask students to draw on their own lives, local data, interviews, or professional experience.</p>
+
+  <h3>6. Pedagogical Quality (1&ndash;10)</h3>
+  <p>Overall instructional design quality of the <em>original</em> content: Is it well-structured? Are expectations clear? Are examples provided?</p>
+
+  <h3>7. Transparency Score (1&ndash;10)</h3>
+  <p>How clearly expectations, success criteria, and grading rubrics are communicated to students. A score of 10 means everything is crystal clear.</p>
+
+  <h3>8. Alignment Score (1&ndash;10)</h3>
+  <p>How well the assessment actually measures its stated learning objectives. A high score means every task directly connects to what students are supposed to learn.</p>
+</section>
+
+<!-- ─── READINESS FORMULA ──────────────────────────────────────────── -->
+<section>
+  <h2>How the Overall &ldquo;AI Readiness Score&rdquo; Is Calculated</h2>
+  <p>The headline number you see on the dashboard is a <strong>weighted composite</strong> of four of the eight dimensions:</p>
+
+  <div class="formula-box">
+    <span class="line"><strong>AI Readiness</strong> =</span>
+    <span class="line">(AI Leverage &times; 0.25)</span>
+    <span class="line">+ ((10 &minus; Cheating Vulnerability) &times; 0.35)</span>
+    <span class="line">+ (Authenticity &times; 0.25)</span>
+    <span class="line">+ (Pedagogical Quality &times; 0.15)</span>
+  </div>
+
+  <h3>Why These Weights?</h3>
+  <div class="weight-grid">
+    <div class="weight-card w-vuln">
+      <div class="pct">35%</div>
+      <div class="label">Cheating Vulnerability</div>
+      <div class="reason">Most urgent risk &mdash; inverted so <em>lower</em> vulnerability = <em>higher</em> readiness</div>
+    </div>
+    <div class="weight-card w-lev">
+      <div class="pct">25%</div>
+      <div class="label">AI Leverage</div>
+      <div class="reason">Rewards content that can productively use AI as a learning tool</div>
+    </div>
+    <div class="weight-card w-auth">
+      <div class="pct">25%</div>
+      <div class="label">Authenticity</div>
+      <div class="reason">Rewards work requiring genuine personal engagement</div>
+    </div>
+    <div class="weight-card w-qual">
+      <div class="pct">15%</div>
+      <div class="label">Pedagogical Quality</div>
+      <div class="reason">Ensures baseline instructional soundness</div>
+    </div>
+  </div>
+
+  <h3>Readiness Labels</h3>
+  <p>The final score maps to a human-readable label:</p>
+  <div class="label-grid">
+    <div class="label-chip" style="background:#1b5e20">Excellent<span class="range">8.0 &ndash; 10.0</span></div>
+    <div class="label-chip" style="background:#2e7d32">Good<span class="range">6.5 &ndash; 7.9</span></div>
+    <div class="label-chip" style="background:#e65100">Moderate<span class="range">5.0 &ndash; 6.4</span></div>
+    <div class="label-chip" style="background:#bf360c">Fair<span class="range">3.5 &ndash; 4.9</span></div>
+    <div class="label-chip" style="background:#b71c1c">Needs Work<span class="range">0.0 &ndash; 3.4</span></div>
+  </div>
+</section>
+
+<!-- ─── EVALUATION PROCESS ─────────────────────────────────────────── -->
+<section>
+  <h2>How the AI Actually Evaluates Each Item</h2>
+  <p>The system doesn&rsquo;t use keyword matching or simple rules. Here&rsquo;s what happens behind the scenes:</p>
+
+  <div class="step"><span class="step-num">1</span><p><strong>Content extraction</strong> &mdash; The system pulls the title and body text from each Canvas item (stripping HTML formatting). Pages get up to 4,000 characters; assignments up to 5,000; quizzes include the first 20 questions; discussions include the prompt message.</p></div>
+
+  <div class="step"><span class="step-num">2</span><p><strong>Filtering</strong> &mdash; Items that are clearly administrative (e.g., &ldquo;KEEP HIDDEN,&rdquo; &ldquo;INSTRUCTORS ONLY,&rdquo; &ldquo;[INTERNAL]&rdquo;) or have very little content (under 40 characters) are automatically flagged as non-instructional and skipped.</p></div>
+
+  <div class="step"><span class="step-num">3</span><p><strong>LLM prompt</strong> &mdash; Each remaining item is sent to the AI with the course name, item type, content preview, a detailed scoring rubric, and instructions to return a structured JSON response.</p></div>
+
+  <div class="step"><span class="step-num">4</span><p><strong>Structured output</strong> &mdash; The AI returns scores for all 8 dimensions plus: <em>key strengths</em> (what the content does well), <em>key concerns</em> (where it falls short), and <em>priority recommendations</em> (specific, actionable suggestions).</p></div>
+
+  <div class="step"><span class="step-num">5</span><p><strong>Parallel processing</strong> &mdash; Multiple items are evaluated simultaneously (default: 3 at a time) for speed.</p></div>
+
+  <div class="step"><span class="step-num">6</span><p><strong>Fallback</strong> &mdash; If the AI fails on a particular item (timeout, parsing error), the system assigns neutral default scores (5.0) so the pipeline isn&rsquo;t blocked.</p></div>
+</section>
+
+<!-- ─── DASHBOARD REPORTS ──────────────────────────────────────────── -->
+<section>
+  <h2>What Powers the Dashboard Visualizations</h2>
+  <p>The History page gives you access to three reports for each processed course:</p>
+
+  <div class="report-card">
+    <div class="report-icon">📊</div>
+    <div class="report-body">
+      <h3>AI Dashboard</h3>
+      <ul>
+        <li>Summary cards &mdash; total items, average AI leverage, average cheating risk, overall readiness</li>
+        <li>Content type breakdown &mdash; average scores by assignments, quizzes, pages, discussions</li>
+        <li>Risk vs. Leverage scatter plot &mdash; items in the upper-right are high leverage <em>and</em> high risk</li>
+        <li>Due date timeline and full filterable item table</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="report-card">
+    <div class="report-icon">📈</div>
+    <div class="report-body">
+      <h3>AI Readiness Report</h3>
+      <ul>
+        <li>Course-level metric cards with visual bar charts</li>
+        <li>High-risk flags &mdash; every item scoring &ge; 7.0 on cheating vulnerability</li>
+        <li>Top 12 prioritized recommendations from highest-risk items</li>
+        <li>Expandable per-item analysis with strengths, concerns, and recommendations</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="report-card">
+    <div class="report-icon">🔍</div>
+    <div class="report-body">
+      <h3>Changes Report</h3>
+      <ul>
+        <li>Side-by-side comparison of original Canvas content vs. AI-enhanced version</li>
+        <li>Word-level inline diff &mdash; green = added, red = removed</li>
+        <li>Evaluation badges on each item (readiness, vulnerability, Bloom&rsquo;s level)</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ─── HOW SCORES GUIDE ENHANCEMENT ───────────────────────────────── -->
+<section>
+  <h2>How Scores Guide the AI Enhancement</h2>
+  <p>The evaluation scores aren&rsquo;t just for reporting &mdash; they directly guide how the AI rewrites content. When a score crosses a threshold, the AI receives explicit instructions:</p>
+
+  <div class="trigger-list">
+    <div class="trigger-item">
+      <strong>Cheating Vulnerability &ge; 7</strong>
+      Redesign for authentic, non-delegatable, personal work
+    </div>
+    <div class="trigger-item">
+      <strong>Bloom&rsquo;s Level &le; 2</strong>
+      Push content to Analyze, Evaluate, and Create levels
+    </div>
+    <div class="trigger-item">
+      <strong>Authenticity &le; 4</strong>
+      Add personal context, unique data, or documented process
+    </div>
+    <div class="trigger-item">
+      <strong>Transparency &le; 4</strong>
+      Add explicit rubric, success criteria, and worked examples
+    </div>
+  </div>
+
+  <p>Each content type gets a <strong>specialized enhancement prompt</strong>:</p>
+  <div class="type-enhancement"><span class="type-tag tag-page">Pages</span><span>Learning objectives, key takeaways, and reflection questions</span></div>
+  <div class="type-enhancement"><span class="type-tag tag-assign">Assignments</span><span>Grading rubrics, AI integrity policies (when vulnerability is high), and metacognitive reflection</span></div>
+  <div class="type-enhancement"><span class="type-tag tag-quiz">Quizzes</span><span>Study guides, prep strategies, and question analysis upgrading recall to higher-order thinking</span></div>
+  <div class="type-enhancement"><span class="type-tag tag-disc">Discussions</span><span>Scaffolding questions, response requirements, and exemplar descriptions</span></div>
+</section>
+
+<!-- ─── AI MODELS ──────────────────────────────────────────────────── -->
+<section>
+  <h2>The AI Models Used</h2>
+  <p>The system supports multiple AI providers:</p>
+  <ul>
+    <li><strong>Anthropic</strong> (Claude Haiku 4.5) &mdash; default, via NebulaOne</li>
+    <li><strong>OpenAI</strong> (GPT-4o Mini)</li>
+    <li><strong>Google Gemini</strong> (Gemini 2.5 Flash)</li>
+  </ul>
+  <p>All calls include automatic retry with exponential back-off to handle temporary API issues gracefully.</p>
+</section>
+
+<!-- ─── SUMMARY ────────────────────────────────────────────────────── -->
+<section>
+  <h2>In Summary</h2>
+  <div class="success-callout callout">
+    The system reads your <strong>actual course content</strong>, uses established educational frameworks (Bloom&rsquo;s Taxonomy, AI integration scales), and applies <strong>AI analysis &mdash; not simple keyword matching</strong> &mdash; to produce actionable scores and recommendations.
+  </div>
+  <p>Every score you see on the dashboard traces back to an AI evaluation of the real content, weighted by pedagogical research priorities, and displayed through interactive visualizations designed to make the data immediately useful.</p>
+  <p>The goal: help instructors understand where their course stands in terms of AI readiness and get specific, practical guidance on what to improve.</p>
+</section>
+
+</div>
+
+<footer>
+  <p>Canvas-to-HAX AI Readiness Analysis &nbsp;&middot;&nbsp; Generated from <a href="https://github.com">hax-ai-canvas</a></p>
+</footer>
+
+</body>
+</html>
