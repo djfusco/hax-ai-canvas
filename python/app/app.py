@@ -419,12 +419,14 @@ def launch_site(course_id: str):
                 capture_output=True, shell=_IS_WINDOWS,
             )
 
+        env = {**os.environ, "npm_config_yes": "true"}
         proc = subprocess.Popen(
             ["npm", "start"], cwd=str(site_dir),
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, bufsize=1, shell=_IS_WINDOWS,
+            text=True, bufsize=1, shell=_IS_WINDOWS, env=env,
         )
-        _site_procs[course_id] = {"proc": proc, "url": None, "dir": str(site_dir)}
+        entry = {"proc": proc, "url": None, "dir": str(site_dir)}
+        _site_procs[course_id] = entry
 
         ready_patterns = [
             re.compile(r"(https?://localhost[:\d]*)", re.IGNORECASE),
@@ -434,13 +436,16 @@ def launch_site(course_id: str):
         ]
         for line in proc.stdout:
             line = line.rstrip()
-            if not _site_procs[course_id].get("url"):
+            # Stop reading if the site was stopped externally
+            if course_id not in _site_procs:
+                break
+            if not entry.get("url"):
                 for pat in ready_patterns:
                     m = pat.search(line)
                     if m:
                         raw = m.group(1)
                         url = f"http://localhost:{raw}" if raw.isdigit() else raw
-                        _site_procs[course_id]["url"] = url
+                        entry["url"] = url
                         webbrowser.open(url)
                         break
 
