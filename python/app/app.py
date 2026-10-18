@@ -21,6 +21,10 @@ from threading import Timer
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.utils import secure_filename
 
+PIPELINE_ROOT = Path(__file__).resolve().parent.parent
+if str(PIPELINE_ROOT) not in sys.path:
+    sys.path.insert(0, str(PIPELINE_ROOT))
+
 # ── bootstrap: ensure Flask is available ─────────────────────────────────────
 try:
     from flask import (Flask, Response, jsonify, redirect, render_template,
@@ -52,6 +56,20 @@ app.secret_key = os.urandom(24)
 MAX_IMSCC_UPLOAD = 256 * 1024 * 1024
 # Allow multipart overhead while bounding the archive bytes separately.
 app.config["MAX_CONTENT_LENGTH"] = MAX_IMSCC_UPLOAD + 1024 * 1024
+from mentor_routes import create_mentor_blueprint
+app.register_blueprint(create_mentor_blueprint(
+    lambda: Path(app.config.get("MENTOR_DATA_ROOT", PROJECT_ROOT / "mentor_data"))
+))
+
+
+@app.before_request
+def protect_unprovisioned_hosted_app():
+    if os.environ.get("VERCEL") and not request.path.startswith("/static/"):
+        return jsonify({
+            "error": "This local application is not yet provisioned for multi-user hosting. "
+                     "Configure production authentication, durable storage and a worker before deployment.",
+            "code": "HOSTED_SETUP_REQUIRED",
+        }), 503
 
 
 @app.errorhandler(RequestEntityTooLarge)

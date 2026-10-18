@@ -12,6 +12,7 @@ import logging
 import os
 import time
 from typing import Optional
+from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
 
@@ -67,12 +68,14 @@ class AIClient:
         model:    Optional[str] = None,
         api_key:  Optional[str] = None,
         base_url: Optional[str] = None,
+        isolated_credentials: bool = False,
     ) -> None:
         self.provider = provider.lower()
-        self.model    = model or os.getenv(
+        self.isolated_credentials = isolated_credentials
+        self.model    = model or (_DEFAULT_MODELS.get(self.provider) if isolated_credentials else os.getenv(
             f"{provider.upper()}_MODEL",
             _DEFAULT_MODELS.get(self.provider, "claude-haiku-4-5"),
-        )
+        ))
         self._client: object = None
         self._init(api_key, base_url)
 
@@ -80,6 +83,45 @@ class AIClient:
 
     def _init(self, api_key: Optional[str], base_url: Optional[str]) -> None:
         p = self.provider
+        isolated_options = {}
+        if self.isolated_credentials:
+            if not api_key:
+                raise ValueError("Explicit provider credentials are required.")
+            import httpx
+            origins = {
+                "anthropic": "https://api.anthropic.com",
+                "openai": "https://api.openai.com/v1",
+                "gemini": "https://generativelanguage.googleapis.com",
+            }
+            base_url = base_url if p == "nebula" else origins.get(p)
+            if not base_url:
+                raise ValueError("An explicit institutional gateway is required.")
+            target = urlsplit(base_url)
+
+            def isolate(request):
+                if (request.url.scheme != "https" or request.url.host != target.hostname
+                        or request.url.port not in (None, 443)):
+                    raise ValueError("Unexpected provider endpoint.")
+                allowed = {
+                    "host", "content-type", "content-length", "accept", "accept-encoding",
+                    "connection", "user-agent", "anthropic-version", "anthropic-beta",
+                    "x-goog-api-client",
+                }
+                for header in list(request.headers):
+                    if header.lower() not in allowed:
+                        del request.headers[header]
+                if p in ("anthropic", "nebula"):
+                    request.headers["x-api-key"] = api_key
+                elif p == "openai":
+                    request.headers["authorization"] = "Bearer " + api_key
+                else:
+                    request.headers["x-goog-api-key"] = api_key
+
+            isolated_options = {
+                "base_url": base_url,
+                "http_client": httpx.Client(trust_env=False, follow_redirects=False,
+                                            event_hooks={"request": [isolate]}),
+            }
 
         if p in ("anthropic", "nebula"):
             if not HAS_ANTHROPIC:
@@ -91,6 +133,8 @@ class AIClient:
             kwargs: dict = {"api_key": key}
             if url:
                 kwargs["base_url"] = url
+            if self.isolated_credentials:
+                kwargs.update(isolated_options, auth_token="")
             self._client = Anthropic(**kwargs)
             via = f"NebulaOne/{self.model}" if p == "nebula" else f"Anthropic/{self.model}"
             print(f"  AI : {via}")
@@ -99,16 +143,23 @@ class AIClient:
             if not HAS_OPENAI:
                 raise ImportError("openai package missing — pip install openai")
             key = api_key or os.getenv("OPENAI_API_KEY", "")
-            self._client = OpenAI(api_key=key)
+            self._client = OpenAI(api_key=key, **isolated_options)
             print(f"  AI : OpenAI/{self.model}")
 
         elif p == "gemini":
             if not HAS_GEMINI:
                 raise ImportError(
-                    "google-generativeai package missing — pip install google-generativeai"
+                    "google-genai package missing — pip install google-genai"
                 )
             key = api_key or os.getenv("GEMINI_API_KEY", "")
-            self._client = _genai.Client(api_key=key)
+            if self.isolated_credentials:
+                transport = isolated_options.pop("http_client")
+                self._client = _genai.Client(
+                    api_key=key, vertexai=False,
+                    http_options={"base_url": base_url, "httpx_client": transport},
+                )
+            else:
+                self._client = _genai.Client(api_key=key)
             print(f"  AI : Gemini/{self.model}")
 
         else:
@@ -138,8 +189,8 @@ class AIClient:
                 if attempt < 2:
                     wait = 2 ** attempt          # 1 s, then 2 s
                     logger.warning(
-                        "LLM attempt %d/3 failed: %s — retrying in %ds",
-                        attempt + 1, exc, wait,
+                        "LLM attempt %d/3 failed (%s) — retrying in %ds",
+                        attempt + 1, type(exc).__name__, wait,
                     )
                     time.sleep(wait)
         raise last_exc  # type: ignore[misc]
@@ -190,6 +241,11 @@ class AIClient:
             return r.text.strip()
 
         raise ValueError(f"Unknown provider: {p!r}")
+
+    def close(self):
+        """Release per-action SDK transports when used by the mentor."""
+        if self._client is not None and hasattr(self._client, "close"):
+            self._client.close()
 
 
 # ── factory helper ────────────────────────────────────────────────────────────

@@ -6,8 +6,13 @@
     "hax-ai-canvas": "bin/index.js"
   },
   "files": [
-    "bin/",
-    "python/",
+    "bin/index.js",
+    "python/*.py",
+    "python/requirements.txt",
+    "python/app/*.py",
+    "python/app/static/*.css",
+    "python/app/static/*.js",
+    "python/app/templates/*.html",
     "README.md"
   ],
   "engines": {

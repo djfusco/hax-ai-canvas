@@ -10,6 +10,8 @@ python-dotenv>=0.21.0
 beautifulsoup4>=4.11.0
 lxml>=4.9.0
 defusedxml>=0.7.1
+cryptography>=42.0.0
+httpx>=0.27.0
 markdown>=3.4.0
 
 # Data processing
@@ -24,7 +26,7 @@ pypdf>=3.17.0
 # AI API clients (install the ones you use)
 openai>=1.0.0
 anthropic>=0.18.0
-# google-generativeai  # uncomment if using Gemini
+google-genai>=1.68.0
 
 # Utility libraries
 colorama>=0.4.6

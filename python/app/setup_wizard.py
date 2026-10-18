@@ -186,6 +186,7 @@ def check_packages() -> Dict:
             "pypdf2":         "PyPDF2",   # Package name lowercases to pypdf2, import is PyPDF2
             "python_docx":    "docx",
             "python_pptx":    "pptx",
+            "google_genai":   "google.genai",
             "colorama":       "colorama",
             "uvicorn":        "uvicorn",
             "fastapi":        "fastapi",

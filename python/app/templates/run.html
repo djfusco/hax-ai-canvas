@@ -8,6 +8,13 @@
     <h1>Run the Pipeline</h1>
     <p class="hero-sub">Connect to Canvas or choose a saved Canvas course export (.imscc), then analyze and enhance your course.</p>
   </div>
+  <div class="card">
+    <h2>Prefer an instructor-guided design process?</h2>
+    <p>Add course materials, discuss your goals, review proposed changes and approve the final build.
+      You can also start without a Canvas course.</p>
+    <a class="btn btn-primary" href="{{ url_for('mentor.page') }}">Open Faculty Mentor</a>
+    <p class="field-help">The direct pipeline below remains a separate legacy workflow; it does not include mentoring approval gates.</p>
+  </div>
 
   {% if not all_ok %}
   <div class="banner banner-warn">

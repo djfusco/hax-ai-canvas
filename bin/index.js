@@ -5,6 +5,7 @@ const { execSync, spawnSync, spawn } = require('child_process');
 const fs   = require('fs');
 const path = require('path');
 const os   = require('os');
+const crypto = require('crypto');
 
 // ── constants ─────────────────────────────────────────────────────────────────
 
@@ -16,7 +17,29 @@ const VERSION_FILE = path.join(DATA_DIR, '.version');
 const PORT        = 5050;
 
 // Paths that belong to user data — never overwritten during an update
-const USER_DATA_PATTERNS = ['.env', 'exports', 'hax_prep', '.venv', '.version', '.pip_installed'];
+const USER_DATA_PATTERNS = ['.env', 'exports', 'hax_prep', 'mentor_data',
+  '__pycache__', '.venv', '.version', '.pip_installed'];
+
+function bundledEntry(name) {
+  return !USER_DATA_PATTERNS.includes(name) &&
+    !/\.(?:pyc|db|sqlite|haxcourse)(?:-|$)/i.test(name) &&
+    !/^course_.*_ai_.*\.html$/i.test(name) &&
+    !name.startsWith('.');
+}
+
+function sourceFingerprint(directory) {
+  const hash = crypto.createHash('sha256');
+  function visit(base, prefix = '') {
+    for (const entry of fs.readdirSync(base, {withFileTypes: true}).sort((a, b) => a.name.localeCompare(b.name))) {
+      if (!bundledEntry(entry.name) || entry.isSymbolicLink()) continue;
+      const file = path.join(base, entry.name);
+      if (entry.isDirectory()) visit(file, prefix + entry.name + '/');
+      else { hash.update(prefix + entry.name); hash.update(fs.readFileSync(file)); }
+    }
+  }
+  visit(directory);
+  return hash.digest('hex');
+}
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -56,6 +79,7 @@ function findPython() {
 function copyDir(src, dest) {
   fs.mkdirSync(dest, { recursive: true });
   for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    if (!bundledEntry(entry.name) || entry.isSymbolicLink()) continue;
     const srcPath  = path.join(src,  entry.name);
     const destPath = path.join(dest, entry.name);
     if (entry.isDirectory()) {
@@ -71,19 +95,20 @@ function syncPythonFiles() {
     ? fs.readFileSync(VERSION_FILE, 'utf8').trim()
     : null;
 
-  if (installedVersion === PKG.version) {
+  const signature = `${PKG.version}:${sourceFingerprint(PKG_PYTHON)}`;
+  if (installedVersion === signature) {
     log(`Python files up to date (v${PKG.version})`);
     return false; // no change
   }
 
-  const verb = installedVersion ? `Updating v${installedVersion} → v${PKG.version}` : `Installing v${PKG.version}`;
+  const verb = installedVersion ? `Updating bundled code to v${PKG.version}` : `Installing v${PKG.version}`;
   log(`${verb} — copying files to ${DATA_DIR}`);
 
   fs.mkdirSync(DATA_DIR, { recursive: true });
 
   // Walk bundled python/ and copy, skipping user data paths at the top level
   for (const entry of fs.readdirSync(PKG_PYTHON, { withFileTypes: true })) {
-    if (USER_DATA_PATTERNS.includes(entry.name)) continue; // preserve user data
+    if (!bundledEntry(entry.name) || entry.isSymbolicLink()) continue; // preserve user data
     const src  = path.join(PKG_PYTHON, entry.name);
     const dest = path.join(DATA_DIR,   entry.name);
     if (entry.isDirectory()) {
@@ -93,7 +118,7 @@ function syncPythonFiles() {
     }
   }
 
-  fs.writeFileSync(VERSION_FILE, PKG.version, 'utf8');
+  fs.writeFileSync(VERSION_FILE, signature, 'utf8');
   log('Files copied.');
   return true; // version changed
 }
@@ -120,6 +145,8 @@ function ensureVenv(python, versionChanged) {
 
   // Try creating venv normally first
   log('Creating Python virtual environment…');
+  const packageMarker = path.join(DATA_DIR, '.pip_installed');
+  if (fs.existsSync(packageMarker)) fs.unlinkSync(packageMarker);
   let r = run(`${python} -m venv "${VENV_DIR}"`, { stdio: 'inherit' });
 
   // On Debian/Ubuntu, venv module may not be installed. Try --without-pip as fallback.
@@ -183,7 +210,9 @@ function ensurePackages(venvPython, versionChanged) {
   const markerFile = path.join(DATA_DIR, '.pip_installed');
   const reqFile    = path.join(DATA_DIR, 'requirements.txt');
 
-  if (!versionChanged && fs.existsSync(markerFile)) {
+  const requirementsHash = crypto.createHash('sha256').update(fs.readFileSync(reqFile)).digest('hex');
+  if (!versionChanged && fs.existsSync(markerFile) &&
+      fs.readFileSync(markerFile, 'utf8').trim() === requirementsHash) {
     log('Python packages already installed.');
     return;
   }
@@ -192,7 +221,7 @@ function ensurePackages(venvPython, versionChanged) {
   const r = run(`"${pip}" install -r "${reqFile}"`, { stdio: 'inherit' });
   if (r.status !== 0) die('pip install failed. Check the output above.');
 
-  fs.writeFileSync(markerFile, new Date().toISOString(), 'utf8');
+  fs.writeFileSync(markerFile, requirementsHash, 'utf8');
   log('Packages installed.');
 }
 
@@ -234,12 +263,23 @@ function launchApp(venvPython) {
 
 // ── main ──────────────────────────────────────────────────────────────────────
 
-(function main() {
+function main() {
   console.log(`\nhax-ai-canvas v${PKG.version}\n`);
 
   const python        = findPython();
   const versionChanged = syncPythonFiles();
   const venvPython    = ensureVenv(python, versionChanged);
   ensurePackages(venvPython, versionChanged);
-  launchApp(venvPython);
-})();
+  const args = process.argv.slice(2);
+  if (args[0] === '--prepare') {
+    const child = spawn(venvPython, [path.join(DATA_DIR, 'prepare_course.py'), ...args.slice(1)], {
+      stdio: 'inherit', env: {...process.env},
+    });
+    child.on('error', err => die(err.message));
+    child.on('exit', code => process.exit(code ?? 1));
+  } else {
+    launchApp(venvPython);
+  }
+}
+if (require.main === module) main();
+module.exports = {sourceFingerprint, bundledEntry};

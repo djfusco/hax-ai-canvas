@@ -18,6 +18,7 @@
       </div>
     </div>
     <nav class="main-nav">
+      <a href="{{ url_for('mentor.page') }}" class="nav-link {% if request.blueprint == 'mentor' %}active{% endif %}">Faculty Mentor</a>
       <a href="{{ url_for('index') }}"  class="nav-link {% if request.endpoint == 'index' %}active{% endif %}">① Requirements</a>
       <a href="{{ url_for('setup') }}"  class="nav-link {% if request.endpoint == 'setup' %}active{% endif %}">② Configuration</a>
       <a href="{{ url_for('run_page') }}" class="nav-link {% if request.endpoint in ('run_page','run_start','stream') %}active{% endif %}">③ Run</a>

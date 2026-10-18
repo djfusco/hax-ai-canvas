@@ -8,3 +8,12 @@ __pycache__/
 *.db
 exports/
 hax_prep/
+mentor_data/
+*.sqlite
+*.sqlite-*
+*.db-*
+*.haxcourse
+.browser-key
+.vault-key
+.venv/
+course_*_ai_*.html

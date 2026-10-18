@@ -20,6 +20,8 @@ node_modules/
 # Pipeline user data (shouldn't be here, but just in case)
 exports/
 hax_prep/
+mentor_data/
+*.haxcourse
 
 # Runtime markers written by bin/index.js
 .version

@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block title %}Faculty Mentor — Canvas Course Builder{% endblock %}
+{% block content %}
+<div class="page-wrap">
+  <div class="page-hero">
+    <h1>Faculty Course Mentor</h1>
+    <p class="hero-sub">Understand → Discuss → Approve direction → Draft → Review together → Approve build.</p>
+  </div>
+  <div id="mentor-error" role="alert" class="banner banner-warn" hidden></div>
+  <p id="mentor-status" role="status" aria-live="polite"></p>
+  <div class="card">
+    <h2>Your workspaces</h2>
+    <p class="field-help">Saved on this computer and scoped to this browser's signed identity. This is not an institutional login. Clearing browser cookies loses access to this identity. Never paste API keys into the conversation.</p>
+    <label class="field-label" for="workspace-list">Resume a course</label>
+    <select id="workspace-list" class="field-input" onchange="openWorkspace(this.value)"><option value="">Choose a workspace</option></select>
+    <form id="new-workspace" style="margin-top:1rem">
+      <label class="field-label" for="new-title">New course/workspace title</label>
+      <input class="field-input" id="new-title" maxlength="240" required placeholder="e.g. Introduction to Cybersecurity">
+      <button class="btn btn-primary" type="submit">Start from scratch / create workspace</button>
+    </form>
+  </div>
+  <details class="card" id="provider-settings">
+    <summary><strong>AI provider &amp; credential retention</strong></summary>
+    <p class="field-help">Guided mode makes no AI calls and does not invent analysis scores. With AI enabled, course excerpts and your design brief are sent to that provider. Keys are encrypted on the local server, never stored in browser storage or chat.</p>
+    <label class="field-label" for="mentor-provider">Provider for this action</label>
+    <select id="mentor-provider" class="field-input">
+      <option value="guided">Guided mode — no AI calls</option>
+      <option value="nebula">NebulaONE</option><option value="anthropic">Anthropic</option>
+      <option value="openai">OpenAI</option><option value="gemini">Gemini</option>
+    </select>
+    <form id="credential-form">
+      <label class="field-label" for="mentor-key">API key</label>
+      <input class="field-input" id="mentor-key" type="password" autocomplete="off">
+      <label class="field-label" for="mentor-model">Model override (optional)</label>
+      <input class="field-input" id="mentor-model" maxlength="120">
+      <label class="field-label" for="mentor-gateway">Nebula HTTPS gateway (Nebula only)</label>
+      <input class="field-input" id="mentor-gateway" type="url" placeholder="https://your-gateway.azure-api.net/anthropic">
+      <label class="step-check-item"><input type="checkbox" id="remember-key"> Remember for 30 days on this browser; otherwise expire after 12 hours</label>
+      <button class="btn btn-primary" type="submit">Save encrypted credentials</button>
+      <button class="btn btn-ghost" type="button" onclick="forgetKey()">Forget selected provider key</button>
+    </form>
+    <p id="credential-status" role="status"></p>
+  </details>
+  <div id="workspace-content" hidden>
+    <div class="card">
+      <h2 id="workspace-title"></h2>
+      <p id="workspace-stage"></p>
+      <p class="field-help">Changing course inputs or the design brief invalidates earlier approvals. Reference and policy materials inform the mentor; they are not automatically published.</p>
+      <h3>1. Course source (optional for a new course)</h3>
+      <form id="source-form">
+        <label class="field-label" for="source-file">Canvas .imscc or prepared .haxcourse</label>
+        <input class="field-input" id="source-file" type="file" accept=".imscc,.haxcourse">
+        <button class="btn btn-primary" type="submit">Import into this workspace</button>
+      </form>
+      <details>
+        <summary>Is your export 2 GB or media-heavy?</summary>
+        <p>Use the local preparation tool. It reads text/metadata without inflating bulk media and records what was excluded. Your original remains untouched. Upload the resulting compact .haxcourse package here.</p>
+        <pre>python3 python/prepare_course.py "/path/course.imscc" --output "/path/course.haxcourse"</pre>
+        <p>This is a review package, not a complete backup. Videos/images omitted locally are not analyzed or rebuilt unless provided separately in supported form.</p>
+      </details>
+      <details>
+        <summary>Or connect to Canvas using this local app's API configuration</summary>
+        <p class="field-help">Acquires content only; it does not start analysis or bypass the mentoring checkpoints. Configure the local Canvas URL/token first. This legacy local configuration is not a hosted multi-user credential store.</p>
+        <form id="mentor-canvas-form">
+          <label class="field-label" for="mentor-canvas-id">Canvas course ID</label>
+          <input class="field-input" id="mentor-canvas-id" inputmode="numeric" pattern="[0-9]+" required>
+          <button class="btn btn-primary" type="submit">Acquire course for mentoring</button>
+        </form>
+      </details>
+      <h3>2. Additional files, URLs &amp; teaching knowledge</h3>
+      <label class="field-label" for="material-role">Purpose of the source</label>
+      <select id="material-role" class="field-input"><option value="reference">Reference / background</option><option value="policy">Instructor or institutional policy — not auto-published</option><option value="student">Student-facing source — eligible for proposed adaptation</option></select>
+      <form id="material-file-form">
+        <label class="field-label" for="material-file">Supplemental document (10 MiB maximum)</label>
+        <input class="field-input" id="material-file" type="file" accept=".txt,.md,.csv,.html,.pdf,.docx,.pptx">
+        <button class="btn btn-primary" type="submit">Add document</button>
+      </form>
+      <form id="material-url-form">
+        <label class="field-label" for="material-url">Public resource URL</label>
+        <input class="field-input" id="material-url" type="url" placeholder="https://example.edu/resource">
+        <button class="btn btn-primary" type="submit">Read public URL</button>
+      </form>
+      <form id="material-text-form">
+        <label class="field-label" for="material-text">Additional notes / undocumented teaching activities</label>
+        <textarea class="field-input" id="material-text" rows="3" maxlength="60000"></textarea>
+        <button class="btn btn-primary" type="submit">Add notes</button>
+      </form>
+      <ul id="material-list"></ul>
+      <h3>What the mentor has so far</h3>
+      <div id="course-inventory"></div>
+    </div>
+    <div class="card">
+      <h2>3. Discuss the course</h2>
+      <p>The preliminary inventory is not a full AI analysis. Explain the audience, learning goals, constraints, what works and what should change.</p>
+      <div id="mentor-messages" aria-live="polite"></div>
+      <form id="mentor-chat-form">
+        <label class="field-label" for="chat-kind">Conversation checkpoint</label>
+        <select id="chat-kind" class="field-input"><option value="interview">Initial interview / design direction</option><option value="review">Final draft review / requested revisions</option></select>
+        <label class="field-label" for="mentor-message">Your message</label>
+        <textarea class="field-input" id="mentor-message" rows="3" maxlength="6000" required></textarea>
+        <button class="btn btn-primary" type="submit">Discuss with mentor</button>
+      </form>
+      <h3>Editable design brief</h3>
+      <p class="field-help">Interview feedback is added here. Refine it into goals and constraints before approval.</p>
+      <textarea class="field-input" id="design-brief" rows="7" maxlength="30000"></textarea>
+      <button class="btn btn-ghost" onclick="saveBrief()">Save revised brief (invalidates draft)</button>
+      <button class="btn btn-primary" id="approve-direction" onclick="approveDirection()">Approve this direction</button>
+      <button class="btn btn-success" id="analyze-course" onclick="analyzeCourse()">Analyze &amp; generate draft</button>
+    </div>
+    <div class="card" id="draft-panel" hidden>
+      <h2>4. Preview and review the proposed course</h2>
+      <p id="draft-summary"></p><p id="draft-coverage" class="field-help"></p>
+      <ul id="draft-warnings"></ul>
+      <div id="draft-items"></div>
+      <button class="btn btn-ghost" onclick="saveDraft()">Save edited snapshot (requires new approval)</button>
+      <p>Use the final-review chat above to discuss or request revisions. The mentor cannot grant approval.</p>
+      <button class="btn btn-primary" id="approve-build" onclick="approveBuild()">Approve this exact draft</button>
+      <button class="btn btn-success" id="build-course" onclick="buildCourse()">Build approved content</button>
+      <div id="artifact-links"></div>
+    </div>
+    <div class="card"><h3>Processing history</h3><pre id="mentor-jobs" style="white-space:pre-wrap"></pre>
+      <button class="btn btn-ghost" id="cancel-mentor-job" onclick="cancelMentorJob()" hidden>Cancel / recover interrupted job</button>
+      <p class="field-help">Cancellation rejects late results but cannot undo an AI request already sent to a provider.</p>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='mentor.js') }}"></script>
+{% endblock %}
