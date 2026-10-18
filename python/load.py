@@ -44,6 +44,22 @@ def copy_media_files(export_dir, output_media_dir):
 
     output_media_dir.mkdir(parents=True, exist_ok=True)  # Ensure media dir exists
     media_count = 0
+    # Imported assets already have collision-free names and an explicit map.
+    summary_file = Path(export_dir) / "export_summary.json"
+    if summary_file.exists():
+        summary = json.loads(summary_file.read_text(encoding="utf-8"))
+        if summary.get("source_type") == "imscc":
+            for metadata_path in (Path(export_dir) / "files").glob("*.json"):
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                name = metadata["filename"]
+                if Path(name).name != name or name in (".", ".."):
+                    raise ValueError("Invalid imported asset filename")
+                source = Path(export_dir) / "files" / name
+                if source.is_file():
+                    shutil.copy2(source, output_media_dir / name)
+                    media_count += 1
+            print(f"  ✅ {media_count} imported assets copied")
+            return media_count
 
     try:
         for file_path in export_dir.rglob("*"):
@@ -213,7 +229,7 @@ def load_course_site(db_client, course_id: str, export_base="./exports", prep_ba
         parent_key = item_type if item_type in section_ids else "pages"
 
         # De-duplicate by title — warn instead of silently dropping
-        if title in seen_titles:
+        if title in seen_titles and not course_id.startswith("imscc-"):
             print(f"    ⚠️  Duplicate title skipped: {title[:60]}")
             continue
         seen_titles.add(title)

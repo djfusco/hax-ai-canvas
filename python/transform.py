@@ -388,6 +388,12 @@ def _get_prompt_for_item(item: Dict, course_name: str) -> Optional[str]:
 
     # Syllabus: raw_content is plain text
     if item_type == "syllabus":
+        try:
+            imported = json.loads(raw_content)
+            if isinstance(imported, dict):
+                raw_content = imported.get("body", "")
+        except (json.JSONDecodeError, TypeError):
+            pass
         return _enhance_syllabus(raw_content, course_name, ev)
 
     # All other types: raw_content is JSON
@@ -419,6 +425,13 @@ def _enhance_item(ai: AIClient, item: Dict, course_name: str) -> Tuple[str, str]
     if prompt is None:
         raise ValueError(f"Unknown item_type: {item.get('item_type')!r}")
     html = _strip_fences(ai.call(_SYS, prompt, max_tokens=4096))
+    try:
+        raw = json.loads(item.get("raw_content") or "{}")
+        if isinstance(raw, dict) and raw.get("source_type") == "imscc":
+            from imscc_content import preserve_import_resources
+            html = preserve_import_resources(raw, html)
+    except (json.JSONDecodeError, TypeError):
+        pass
     return item["id"], html
 
 
@@ -456,6 +469,12 @@ def transform_course_data(
             title = item.get("title") or "Untitled"
             try:
                 raw = json.loads(item.get("raw_content", "{}"))
+                if isinstance(raw, dict) and raw.get("source_type") == "imscc":
+                    from imscc_content import original_import_html
+                    db_client.update_enhanced_item(
+                        item["id"], course_id, original_import_html(raw)
+                    )
+                    continue
                 body = raw.get("body") or raw.get("description") or raw.get("message", "")
             except (json.JSONDecodeError, TypeError):
                 body = item.get("raw_content", "")

@@ -28,11 +28,11 @@ _SENSITIVE = re.compile(
 # All .env variables the pipeline needs
 REQUIRED_ENV_VARS = [
     {"key": "CANVAS_URL",             "label": "Canvas URL",
-     "help": "Your institution's Canvas URL, e.g. https://school.instructure.com",
-     "validate": "url"},
+     "help": "For Canvas API mode only, e.g. https://school.instructure.com. Not needed for an IMSCC file.",
+     "validate": "url", "optional": True},
     {"key": "CANVAS_TOKEN",           "label": "Canvas API Token",
-     "help": "Generate in Canvas → Account → Settings → New Access Token",
-     "validate": "nonempty"},
+     "help": "For Canvas API mode only: Account → Settings → New Access Token. Not needed for an IMSCC file.",
+     "validate": "nonempty", "optional": True},
     {"key": "NEBULA_API_KEY",         "label": "NebulaONE API Key",
      "help": "Your NebulaONE subscription key (from your institution's AI portal)",
      "validate": "nonempty", "optional": True},
@@ -227,15 +227,16 @@ def check_env_file() -> Dict:
     }
 
 
-def check_env_values() -> Dict:
-    values = load_env_values()
-    required = [v for v in REQUIRED_ENV_VARS if not v.get("optional")]
-    missing = [v["key"] for v in required if not values.get(v["key"])]
+def check_env_values(source_type: str = "api") -> Dict:
+    values = {**os.environ, **load_env_values()}
+    required = ["CANVAS_URL", "CANVAS_TOKEN"] if source_type == "api" else []
+    missing = [key for key in required if not values.get(key)]
     ok = len(missing) == 0
     return {
         "ok":     ok,
         "label":  "Canvas & API credentials",
-        "detail": "All required credentials present." if ok
+        "detail": ("Canvas credentials are not needed for a local IMSCC file."
+                   if source_type == "imscc" else "All required credentials present.") if ok
                   else f"Missing: {', '.join(missing)}",
         "fix":    None if ok else
                   "Complete the Configuration Wizard on the Setup page.",
@@ -289,21 +290,23 @@ def check_scripts() -> Dict:
     }
 
 
-def run_all_checks() -> Dict:
+def run_all_checks(source_type: str = "api") -> Dict:
     """Run all checks and return a structured result dict."""
     checks = {
         "python":   check_python(),
         "pip":      check_pip(),
         "packages": check_packages(),
         "env_file": check_env_file(),
-        "env_vals": check_env_values(),
+        "env_vals": check_env_values(source_type),
         "node":     check_node(),
         "npm":      check_npm(),
         "scripts":  check_scripts(),
     }
     # Required checks that must pass before running
-    required_keys = ["python", "pip", "packages", "env_file", "env_vals",
+    required_keys = ["python", "pip", "packages", "env_vals",
                      "node", "npm", "scripts"]
+    if source_type == "imscc":
+        required_keys = ["python", "packages", "scripts"]
     all_ok = all(checks[k]["ok"] for k in required_keys)
     return {"checks": checks, "all_ok": all_ok}
 

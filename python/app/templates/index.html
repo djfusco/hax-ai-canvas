@@ -6,7 +6,7 @@
 
   <div class="page-hero">
     <h1>Welcome to Canvas Course Builder</h1>
-    <p class="hero-sub">This tool takes a Canvas course, evaluates its AI readiness, creates an AI-enhanced version, and builds a local website you can review and share. Everything runs on your computer — no data is sent to external servers except your Canvas and AI accounts.</p>
+    <p class="hero-sub">Connect to Canvas or select a local .imscc course export, then evaluate and enhance the course. File import runs on your computer. AI processing sends course text to your selected AI provider; Canvas credentials are needed only for the API source.</p>
   </div>
 
   <!-- Overall status banner -->
@@ -16,7 +16,7 @@
     <div>
       <strong>Everything looks good!</strong>
       You're ready to <a href="{{ url_for('run_page') }}">run the pipeline</a>.
-      Make sure your <a href="{{ url_for('setup') }}">credentials are configured</a> first.
+      Configure your <a href="{{ url_for('setup') }}">AI provider</a> when using AI. Canvas credentials are optional for file imports.
     </div>
   </div>
   {% else %}
@@ -151,7 +151,7 @@
     <div class="steps-explainer">
       <div class="explainer-step">
         <div class="step-num">1</div>
-        <div><strong>Export from Canvas</strong><br>Downloads your course content (pages, assignments, quizzes, discussions) using the Canvas API.</div>
+        <div><strong>Choose Course Source</strong><br>Connect using the Canvas API, or choose a downloaded .imscc course export without a Canvas token.</div>
       </div>
       <div class="explainer-step">
         <div class="step-num">2</div>

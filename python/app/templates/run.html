@@ -6,7 +6,7 @@
 
   <div class="page-hero">
     <h1>Run the Pipeline</h1>
-    <p class="hero-sub">Enter your course ID and click Run. The tool will export the course, evaluate its AI readiness, enhance the content, and build a local website for you to review.</p>
+    <p class="hero-sub">Connect to Canvas or choose a saved Canvas course export (.imscc), then analyze and enhance your course.</p>
   </div>
 
   {% if not all_ok %}
@@ -23,8 +23,19 @@
   <div id="run-form-section">
     <div class="card">
       <div class="card-header"><h2>Course Settings</h2></div>
+      <fieldset class="field-group" style="border:0;padding:0">
+        <legend class="field-label">Course Source</legend>
+        <label class="step-check-item">
+          <input type="radio" name="source_type" value="api" checked onchange="changeSource()">
+          <span>Connect to Canvas API</span>
+        </label>
+        <label class="step-check-item">
+          <input type="radio" name="source_type" value="imscc" onchange="changeSource()">
+          <span>Use a local Canvas export file (.imscc) — no Canvas token needed</span>
+        </label>
+      </fieldset>
 
-      <div class="field-group">
+      <div class="field-group" id="api-source-fields">
         <label class="field-label" for="course_id">Canvas Course ID <span class="required-star">*</span></label>
         <p class="field-help">
           The numeric ID of your Canvas course. You can find it in the URL when viewing your course:
@@ -32,6 +43,22 @@
         </p>
         <input type="text" id="course_id" name="course_id" class="field-input field-input-lg"
                placeholder="e.g. 2446743" pattern="[0-9]+" required>
+      </div>
+      <div class="field-group" id="file-source-fields" hidden>
+        <label class="field-label" for="course_file">Canvas course export</label>
+        <p class="field-help">In Canvas: Settings → Export Course Content → Course. Select the downloaded .imscc file; do not unzip it. Maximum 256 MiB. The file is processed by this local app, not cloud storage.</p>
+        <input type="file" id="course_file" accept=".imscc" class="field-input"
+               onchange="clearImport()">
+        <button type="button" id="inspect-btn" class="btn btn-primary" onclick="inspectFile()">
+          Import &amp; Inspect File
+        </button>
+        <p id="import-status" role="status" aria-live="polite"></p>
+        <div id="import-preview" class="card" hidden>
+          <h3 id="import-title"></h3>
+          <p id="import-counts"></p>
+          <p class="field-help">Review the coverage below before running. Module metadata is retained, but the current site groups content by type. External tools/media may not be included. Importing alone makes no AI calls.</p>
+          <ul id="import-warnings"></ul>
+        </div>
       </div>
 
       <div class="field-group">
@@ -58,7 +85,7 @@
 
     <div class="card">
       <div class="card-header"><h2>Steps to Run</h2></div>
-      <p class="card-intro">All steps are selected by default. Uncheck steps you want to skip (e.g. if you already exported the course).</p>
+      <p class="card-intro">Uncheck steps you want to skip. File imports replace the Canvas export step; the remaining pipeline is unchanged.</p>
 
       <div class="step-checklist">
         {% for step in steps %}
@@ -141,6 +168,104 @@
 <script>
 let currentRunId = null;
 let eventSource  = null;
+let importedCourse = null;
+let importVersion = 0;
+let inspectionBusy = false;
+const requirementsReady = {{ all_ok | tojson }};
+
+function sourceType() {
+  return document.querySelector('input[name="source_type"]:checked').value;
+}
+
+function changeSource() {
+  const isFile = sourceType() === 'imscc';
+  document.getElementById('api-source-fields').hidden = isFile;
+  document.getElementById('file-source-fields').hidden = !isFile;
+  document.getElementById('course_id').required = !isFile;
+  const exportBox = document.getElementById('step_export');
+  exportBox.disabled = isFile;
+  exportBox.checked = !isFile;
+  exportBox.closest('label').querySelector('.step-check-label').textContent =
+    isFile ? 'Use inspected Canvas export (no API request)' : 'Export from Canvas';
+  document.querySelector('#prog-export .prog-label').textContent =
+    isFile ? 'Import Canvas Export' : 'Export from Canvas';
+  updateRunButton();
+}
+
+function updateRunButton() {
+  document.getElementById('run-btn').disabled =
+    !requirementsReady || inspectionBusy || (sourceType() === 'imscc' && !importedCourse);
+}
+
+function clearImport() {
+  importVersion += 1;
+  importedCourse = null;
+  document.getElementById('import-preview').hidden = true;
+  document.getElementById('import-status').textContent = '';
+  updateRunButton();
+}
+
+function inspectFile() {
+  const file = document.getElementById('course_file').files[0];
+  if (!file || !file.name.toLowerCase().endsWith('.imscc')) {
+    document.getElementById('import-status').textContent = 'Choose a Canvas .imscc export first.';
+    return;
+  }
+  clearImport();
+  if (file.size > 256 * 1024 * 1024) {
+    document.getElementById('import-status').textContent = 'File too large. Maximum size is 256 MiB.';
+    return;
+  }
+  const version = importVersion;
+  const form = new FormData();
+  form.append('course_file', file);
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/run/import-imscc');
+  xhr.responseType = 'json';
+  inspectionBusy = true;
+  document.getElementById('inspect-btn').disabled = true;
+  updateRunButton();
+  xhr.upload.onprogress = e => {
+    if (version !== importVersion) return;
+    document.getElementById('import-status').textContent = e.lengthComputable
+      ? `Uploading ${Math.round(e.loaded / e.total * 100)}% — inspecting after upload…`
+      : 'Uploading and inspecting…';
+  };
+  const finish = () => {
+    inspectionBusy = false;
+    document.getElementById('inspect-btn').disabled = false;
+    updateRunButton();
+  };
+  xhr.onload = () => {
+    if (version !== importVersion) { finish(); return; }
+    const data = xhr.response || {};
+    if (xhr.status !== 200 || data.error) {
+      document.getElementById('import-status').textContent = data.error || 'Import failed. Check that this is a Canvas course export.';
+      finish();
+      return;
+    }
+    importedCourse = data;
+    document.getElementById('import-title').textContent = data.course_name;
+    document.getElementById('import-counts').textContent = Object.entries(data.counts || {})
+      .map(([kind, count]) => `${count} ${kind}`).join(' · ');
+    const list = document.getElementById('import-warnings');
+    list.replaceChildren();
+    (data.warnings || []).forEach(warning => {
+      const item = document.createElement('li');
+      item.textContent = warning;
+      list.appendChild(item);
+    });
+    document.getElementById('import-preview').hidden = false;
+    document.getElementById('import-status').textContent = 'Import ready. Review the summary, then click Run Pipeline.';
+    finish();
+  };
+  xhr.onerror = () => {
+    if (version === importVersion)
+      document.getElementById('import-status').textContent = 'Could not upload the file. Please try again.';
+    finish();
+  };
+  xhr.send(form);
+}
 
 const stepIcons = {
   pending:  '⏳',
@@ -151,15 +276,18 @@ const stepIcons = {
 };
 
 function startRun() {
-  const courseId = document.getElementById('course_id').value.trim();
-  if (!courseId) {
-    alert('Please enter a Course ID.');
+  const source = sourceType();
+  const courseId = source === 'imscc' ? importedCourse?.course_id
+    : document.getElementById('course_id').value.trim();
+  if (!courseId || (source === 'api' && !/^\d+$/.test(courseId))) {
+    alert(source === 'imscc' ? 'Import and inspect your Canvas export first.' : 'Please enter a numeric Course ID.');
     return;
   }
 
   // Gather checkbox states
   const stepIds = ['export','pipeline','build','npm','serve'];
   const options = {
+    source_type:     source,
     course_id:       courseId,
     model_provider:  document.getElementById('model_provider').value,
     workers:         document.getElementById('workers').value,
@@ -188,6 +316,7 @@ function startRun() {
   })
   .catch(err => showError('Failed to start: ' + err));
 }
+changeSource();
 
 function connectStream(runId) {
   eventSource = new EventSource('/stream/' + runId);
@@ -270,7 +399,7 @@ function showDone(msg, runId) {
 
   if (msg.success) {
     titleEl.textContent = '🎉 All Done!';
-    msgEl.textContent   = 'Your course has been exported, evaluated, enhanced, and the HAX site is ready.';
+    msgEl.textContent   = 'The selected processing steps have completed. Open Results & Reports to review the available outputs.';
     statusEl.innerHTML  = '<span class="status-badge status-complete">Complete</span>';
 
     // Build action buttons
@@ -324,6 +453,7 @@ function resetToForm() {
   document.getElementById('done-actions').style.display = 'none';
   // Reset step progress
   ['export','pipeline','build','npm','serve'].forEach(id => updateStep(id, 'pending'));
+  updateRunButton();
 }
 </script>
 {% endblock %}

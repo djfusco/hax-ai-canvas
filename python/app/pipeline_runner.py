@@ -239,7 +239,10 @@ def _run_pipeline(job: RunState) -> None:
     job.log(f"Project root: {PROJECT_ROOT}")
 
     # ── Step 1: Export ────────────────────────────────────────────────────────
-    if opts.get("do_export", True):
+    if opts.get("source_type") == "imscc":
+        job.set_step("export", "complete")
+        job.log("Local Canvas export imported and inspected — no Canvas API request needed.", "export")
+    elif opts.get("do_export", True):
         ok = _run_step(
             job, "export",
             [py, str(PROJECT_ROOT / "export_course.py"),
@@ -293,7 +296,7 @@ def _run_pipeline(job: RunState) -> None:
         job.set_step("build", "skipped")
 
     # Resolve site directory
-    if not job.site_dir:
+    if not job.site_dir and not course_id.startswith("imscc-"):
         found = _find_site_dir(course_id)
         job.site_dir = str(found) if found else None
 

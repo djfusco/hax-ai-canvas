@@ -1,4 +1,5 @@
 import json
+from html import escape
 from pathlib import Path
 
 import pypdf
@@ -38,6 +39,19 @@ def find_latest_syllabus(export_dir: Path):
         f for f in export_dir.rglob("*")
         if "syllabus" in f.name.lower() and f.is_file()
     ]
+    # Imported assets use generated filenames; consult their original labels.
+    for metadata_path in export_dir.glob("*.json"):
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            label = metadata.get("display_name", "") + " " + metadata.get("source_path", "")
+            filename = metadata.get("filename", "")
+            if (metadata.get("source_type") == "imscc" and "syllabus" in label.lower()
+                    and Path(filename).name == filename and filename.lower().endswith(".pdf")):
+                candidate = export_dir / filename
+                if candidate.is_file() and candidate not in syllabus_files:
+                    syllabus_files.append(candidate)
+        except (ValueError, OSError, TypeError):
+            continue
     if not syllabus_files:
         return None
 
@@ -114,7 +128,7 @@ def extract_course_data(db_client, course_id: str, export_dir: Path) -> None:
     Covers: assignments, pages, quizzes, discussions, and syllabus PDF.
     Items that are unpublished or lack meaningful content are skipped.
     """
-    folders_to_scan = ["assignments", "pages", "quizzes", "discussions"]
+    folders_to_scan = ["assignments", "pages", "quizzes", "discussions", "syllabus"]
     items_processed = 0
     items_skipped   = 0
 
@@ -161,20 +175,27 @@ def extract_course_data(db_client, course_id: str, export_dir: Path) -> None:
     # ── 2. Syllabus PDF ───────────────────────────────────────────────────────
     print("🔍 Searching for Syllabus document...")
     # Check both 'Files/' and 'files/' (export_course.py uses lowercase)
-    syllabus_file = find_latest_syllabus(export_dir / "Files") or \
-                    find_latest_syllabus(export_dir / "files")
+    syllabus_file = None if (export_dir / "syllabus").exists() else (
+        find_latest_syllabus(export_dir / "Files") or
+        find_latest_syllabus(export_dir / "files")
+    )
 
     if syllabus_file:
         print(f"📄 Found Syllabus: {syllabus_file.name}")
         syllabus_text = extract_syllabus_text(syllabus_file)
         if syllabus_text:
+            imported = course_id.startswith("imscc-")
+            content = json.dumps({
+                "title": "Course syllabus", "source_type": "imscc",
+                "body": "<p>" + escape(syllabus_text).replace("\n", "<br>") + "</p>",
+            }) if imported else syllabus_text
             db_client.insert_raw_item(
                 item_id     = f"syllabus-{course_id}",
                 course_id   = course_id,
                 item_type   = "syllabus",
-                title       = f"Course Syllabus ({syllabus_file.name})",
-                raw_content = syllabus_text,
-                status      = "COMPLETED",  # Syllabus is used for context, not enhanced
+                title       = "Course syllabus" if imported else f"Course Syllabus ({syllabus_file.name})",
+                raw_content = content,
+                status      = "PENDING" if imported else "COMPLETED",
             )
             items_processed += 1
         else:

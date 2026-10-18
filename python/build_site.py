@@ -18,6 +18,7 @@ import uuid
 import re
 import subprocess
 import sys
+from html import escape
 from pathlib import Path
 from datetime import datetime
 
@@ -44,6 +45,8 @@ def _create_site_name(course_title, course_id):
     Looks for common course-code patterns (e.g. 'MATH 140', 'CS101') and
     returns a lowercase slug like 'math140'. Falls back to 'course<id>'.
     """
+    if re.fullmatch(r"imscc-[a-f0-9]{32}", course_id):
+        return f"course-{course_id}"
     # Ordered by specificity — most structured patterns first
     patterns = [
         r'([A-Z]{2,}\s+\d{3})',      # "MATH 140", "IST 210"
@@ -123,6 +126,7 @@ def build_hax_site(db_client, course_id: str, export_base="./exports",
     site_dir.mkdir(parents=True, exist_ok=True)
 
     pages_dir = site_dir / "pages"
+    pages_dir.mkdir(parents=True, exist_ok=True)
     files_dir = site_dir / "files"
 
     # faculty-resources/ is expected by hax-ai-interface but not created by the CLI
@@ -153,6 +157,11 @@ def build_hax_site(db_client, course_id: str, export_base="./exports",
     ]
 
     for folder_key, display_title, order in section_defs:
+        section_dir = pages_dir / folder_key
+        section_dir.mkdir(parents=True, exist_ok=True)
+        (section_dir / "index.html").write_text(
+            f"<h1>{escape(display_title)}</h1>", encoding="utf-8"
+        )
         section_id = str(uuid.uuid4())
         section_ids[folder_key] = section_id  # Map item_type → section UUID for parent lookups
         section_items.append({
@@ -168,7 +177,7 @@ def build_hax_site(db_client, course_id: str, export_base="./exports",
 
     # 6. Welcome page — always first at indent 0, order 0
     welcome_id = str(uuid.uuid4())
-    welcome_html = f"<h1>Welcome to {course_title}</h1>\n<p>AI Enhanced Course Mirror</p>"
+    welcome_html = f"<h1>Welcome to {escape(course_title)}</h1>\n<p>AI Enhanced Course Mirror</p>"
 
     welcome_page_dir = pages_dir / welcome_id
     welcome_page_dir.mkdir(exist_ok=True)
@@ -206,7 +215,7 @@ def build_hax_site(db_client, course_id: str, export_base="./exports",
 
     for item in completed_items:
         title = item["title"] or "Untitled"
-        if title in seen_titles:
+        if title in seen_titles and not course_id.startswith("imscc-"):
             continue
         seen_titles.add(title)
 
@@ -223,6 +232,10 @@ def build_hax_site(db_client, course_id: str, export_base="./exports",
                 pass
 
     print(f"  🔗 Built page-link map with {len(slug_to_location)} Canvas page slugs")
+    item_locations = {
+        str(item["id"]): f"pages/{page_id}/index.html"
+        for item, page_id, _ in prepared_items
+    }
 
     # 8b. Second pass: render HTML, rewrite both file and page links, write pages
     content_items = []
@@ -241,6 +254,11 @@ def build_hax_site(db_client, course_id: str, export_base="./exports",
         html_content = rewrite_canvas_links(
             html_content, file_id_map, files_dir, slug_to_location=slug_to_location
         )
+        if course_id.startswith("imscc-"):
+            from imscc_content import rewrite_import_item_links, sanitize_import_html
+            html_content = rewrite_import_item_links(
+                sanitize_import_html(html_content), item_locations
+            )
 
         page_dir = pages_dir / page_id
         page_dir.mkdir(exist_ok=True)

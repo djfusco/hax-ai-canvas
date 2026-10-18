@@ -9,6 +9,7 @@ python-dotenv>=0.21.0
 # HTML/XML parsing and conversion
 beautifulsoup4>=4.11.0
 lxml>=4.9.0
+defusedxml>=0.7.1
 markdown>=3.4.0
 
 # Data processing

@@ -9,6 +9,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -17,6 +18,8 @@ import webbrowser
 import zipfile
 from pathlib import Path
 from threading import Timer
+from werkzeug.exceptions import RequestEntityTooLarge
+from werkzeug.utils import secure_filename
 
 # ── bootstrap: ensure Flask is available ─────────────────────────────────────
 try:
@@ -46,6 +49,20 @@ app = Flask(
     static_folder=str(APP_DIR / "static"),
 )
 app.secret_key = os.urandom(24)
+MAX_IMSCC_UPLOAD = 256 * 1024 * 1024
+# Allow multipart overhead while bounding the archive bytes separately.
+app.config["MAX_CONTENT_LENGTH"] = MAX_IMSCC_UPLOAD + 1024 * 1024
+
+
+@app.errorhandler(RequestEntityTooLarge)
+def upload_too_large(exc):
+    return jsonify({"error": "The upload is too large. Maximum IMSCC file size is 256 MiB."}), 413
+
+
+def _same_origin_request() -> bool:
+    """Reject browser-triggered file imports and runs from another origin."""
+    origin = request.headers.get("Origin")
+    return not origin or origin == request.host_url.rstrip("/")
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -65,6 +82,8 @@ def _create_site_name(course_title: str, course_id: str) -> str:
     Must mirror the logic in build_site._create_site_name so we resolve to
     the same directory that was created during the pipeline run.
     """
+    if re.fullmatch(r"imscc-[a-f0-9]{32}", course_id):
+        return f"course-{course_id}"
     patterns = [
         r'([A-Z]{2,}\s+\d{3})',
         r'([A-Z]+\d+)',
@@ -102,7 +121,7 @@ _site_procs: dict[str, dict] = {}
 @app.route("/")
 def index():
     """Welcome + requirements screen."""
-    result = run_all_checks()
+    result = run_all_checks(source_type="imscc")
     return render_template("index.html",
                            checks=result["checks"],
                            all_ok=result["all_ok"])
@@ -204,37 +223,118 @@ def install_packages_route():
 @app.route("/run")
 def run_page():
     """Main run form."""
-    result = run_all_checks()
+    # Canvas credentials must not disable the local-file source.
+    result = run_all_checks(source_type="imscc")
     return render_template("run.html",
                            all_ok=result["all_ok"],
                            steps=STEPS)
 
 
 # ── routes: pipeline execution ────────────────────────────────────────────────
+@app.route("/run/import-imscc", methods=["POST"])
+def import_imscc_file():
+    """Inspect a user-selected local export; never fetch remote URLs."""
+    if not _same_origin_request():
+        return jsonify({"error": "Cross-origin imports are not allowed."}), 403
+    upload = request.files.get("course_file")
+    if not upload or not upload.filename or not upload.filename.lower().endswith(".imscc"):
+        return jsonify({"error": "Choose a Canvas course export with the .imscc extension."}), 400
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
+    from imscc_import import IMSCCImportError, import_imscc
+    from imscc_content import prepare_import_content
+
+    result = None
+    try:
+        with tempfile.TemporaryDirectory(prefix="canvas-imscc-upload-") as temp:
+            archive = Path(temp) / (secure_filename(upload.filename) or "course.imscc")
+            size = 0
+            with archive.open("wb") as target:
+                while chunk := upload.stream.read(1024 * 1024):
+                    size += len(chunk)
+                    if size > MAX_IMSCC_UPLOAD:
+                        raise RequestEntityTooLarge()
+                    target.write(chunk)
+            result = import_imscc(archive, PROJECT_ROOT / "exports")
+            extra_warnings = prepare_import_content(Path(result["export_dir"]))
+            result["warnings"] = list(dict.fromkeys(result["warnings"] + extra_warnings))
+        return jsonify({k: result[k] for k in
+                        ("course_id", "course_name", "counts", "warnings", "source_type")})
+    except RequestEntityTooLarge:
+        raise
+    except (IMSCCImportError, ValueError) as exc:
+        if result:
+            shutil.rmtree(result["export_dir"])
+        return jsonify({"error": str(exc)}), 400
+    except Exception:
+        if result:
+            shutil.rmtree(result["export_dir"])
+        app.logger.exception("IMSCC import failed")
+        return jsonify({"error": "Could not import this course export. No pipeline was started."}), 500
+
 
 @app.route("/run/start", methods=["POST"])
 def run_start():
     """Start a new pipeline run. Returns run_id as JSON."""
-    data = request.get_json() or request.form.to_dict()
+    if not _same_origin_request():
+        return jsonify({"error": "Cross-origin runs are not allowed."}), 403
+    data = request.get_json(silent=True) or request.form.to_dict()
+    if not isinstance(data, dict):
+        return jsonify({"error": "Invalid run options."}), 400
+    source_type = data.get("source_type", "api")
+    if source_type not in ("api", "imscc"):
+        return jsonify({"error": "Choose Canvas API or a Canvas export file."}), 400
 
     course_id = str(data.get("course_id", "")).strip()
-    if not course_id:
-        return jsonify({"error": "Course ID is required."}), 400
+    expected_id = r"[0-9]+" if source_type == "api" else r"imscc-[a-f0-9]{32}"
+    if not re.fullmatch(expected_id, course_id):
+        return jsonify({"error": "Enter a numeric Canvas Course ID." if source_type == "api"
+                        else "Import a Canvas export file before running."}), 400
+    try:
+        workers = int(data.get("workers", 3))
+    except (ValueError, TypeError):
+        return jsonify({"error": "Workers must be a number from 1 to 5."}), 400
+    if not 1 <= workers <= 5:
+        return jsonify({"error": "Workers must be a number from 1 to 5."}), 400
+    provider = data.get("model_provider", "nebula")
+    if provider not in ("nebula", "anthropic", "openai", "gemini"):
+        return jsonify({"error": "Unknown AI provider."}), 400
 
     options = {
+        "source_type":   source_type,
         "do_export":     data.get("do_export",     "true") in (True, "true", "1", "on"),
         "do_pipeline":   data.get("do_pipeline",   "true") in (True, "true", "1", "on"),
         "do_build":      data.get("do_build",       "true") in (True, "true", "1", "on"),
         "do_npm_install":data.get("do_npm_install","true") in (True, "true", "1", "on"),
         "do_serve":      data.get("do_serve",       "true") in (True, "true", "1", "on"),
-        "model_provider":data.get("model_provider", "nebula"),
-        "workers":       int(data.get("workers", 3)),
+        "model_provider":provider,
+        "workers":       workers,
         "no_ai":         data.get("no_ai", "false") in (True, "true", "1", "on"),
         "skip_extract":  False,  # export step controls this
     }
 
+    values = {**os.environ, **load_env_values()}
+    if source_type == "imscc":
+        matches = list((PROJECT_ROOT / "exports").glob(f"course_{course_id}_*"))
+        if len(matches) != 1:
+            return jsonify({"error": "Imported course not found. Select and import the file again."}), 400
+        try:
+            summary = json.loads((matches[0] / "export_summary.json").read_text())
+        except (OSError, ValueError):
+            return jsonify({"error": "Imported course metadata is invalid. Import the file again."}), 400
+        if summary.get("source_type") != "imscc" or summary.get("course_id") != course_id:
+            return jsonify({"error": "Invalid imported course."}), 400
+        options["do_export"] = False
+    elif options["do_export"] and not all(values.get(k) for k in ("CANVAS_URL", "CANVAS_TOKEN")):
+        return jsonify({"error": "Configure Canvas URL and token, or choose a local Canvas export file."}), 400
+    if options["do_pipeline"] and not options["no_ai"]:
+        keys = [f"{provider.upper()}_API_KEY"]
+        if provider == "nebula":
+            keys.append("NEBULA_BASE_URL")
+        if not all(values.get(k) for k in keys):
+            return jsonify({"error": f"Configure the selected {provider} AI provider, or select Skip AI."}), 400
     run_id = start_run(course_id, options)
-    return jsonify({"run_id": run_id})
+    return jsonify({"run_id": run_id, "course_id": course_id})
 
 
 @app.route("/stream/<run_id>")
@@ -678,7 +778,7 @@ def import_upload():
 @app.route("/api/checks")
 def api_checks():
     """Return current system checks as JSON (used by AJAX refresh)."""
-    result = run_all_checks()
+    result = run_all_checks(source_type="imscc")
     return jsonify(result)
 
 
