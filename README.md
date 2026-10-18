@@ -1,5 +1,127 @@
 # hax-ai-canvas
 
+## Vercel-hosted Faculty Mentor beta
+
+The source checkout includes private browser-to-Blob multipart uploads,
+PostgreSQL persistence, durable Vercel Workflows and isolated Sandbox preparation.
+Instructors can upload an IMSCC archive of up to **8 GiB** without installing
+Python or copying it to Google Drive. Keep the upload tab open until transfer
+completes; preparation then continues independently. Large files never pass
+through ordinary Flask/Function request bodies.
+
+**Raw retention:** a successful job saves the compact prepared result, downloads
+it again to verify its hash/importability, attaches it to the exact workspace
+revision, and only then deletes the raw upload. Failed deletion and Sandbox
+destruction are tracked for retry. Abandoned uploads expire after 24 hours;
+the 15-minute cleanup cron reconciles them and late uploads while their one-hour
+authorization remains valid. This is logical object deletion, not a promise of
+immediate physical erasure of provider caches/backups. Prepared content,
+conversations and approved artifacts remain stored.
+
+This is an **invitation-gated beta**, not institutional SSO. Each browser gets a
+private signed, Secure/HttpOnly/SameSite identity. Entering the same invite code
+in another browser does not grant access to the first browser's workspaces.
+Clearing the cookie loses that browser's access. Provider keys are encrypted
+server-side and scoped to that identity. Obtain institutional review before
+using regulated/student records. Separate staging/production projects, stores,
+databases and secrets.
+
+### Administrator setup
+
+1. Use a **Vercel Pro project** (the 15-minute cron is not a Hobby schedule),
+   Node.js 22+ and Python 3.12. Import this Git repository at its root. Keep the
+   Flask framework and checked-in `vercel.json` / `pyproject.toml` entrypoints:
+   both Python mentor/Workflow and Node Blob callback endpoints are required.
+2. Connect a **private Vercel Blob store** and managed **PostgreSQL**, for example
+   through the Vercel Marketplace. Use the provider's TLS-capable connection URL,
+   preferably pooled. Tables initialize idempotently on first access. Local
+   SQLite workspaces/provider keys are not automatically migrated.
+3. Enable Workflow/Sandbox access for the project/team; review availability,
+   quotas and billing, and set spend alerts. Runtime OIDC provides SDK project
+   authentication. No personal Vercel token belongs in the browser or guest.
+   An actual deployed job must verify this account-specific setup.
+4. Set every variable below in Vercel's environment settings. `HAX_APP_ORIGIN`
+   must be the exact stable HTTPS origin **without a trailing slash**. Update
+   it when assigning a different domain; previews need matching configuration.
+
+| Variable | Purpose |
+|---|---|
+| `DATABASE_URL` | Private PostgreSQL connection URL |
+| `BLOB_READ_WRITE_TOKEN` | Server-only token for the private store |
+| `HAX_APP_ORIGIN` | Canonical HTTPS origin |
+| `HAX_SESSION_SECRET` | Signed browser identities |
+| `HAX_UPLOAD_SIGNING_SECRET` | Scoped upload authorization |
+| `HAX_INTERNAL_SECRET` | Node-to-Python completion authentication |
+| `HAX_BETA_ACCESS_CODE` | Private beta invitation code |
+| `HAX_MENTOR_ENCRYPTION_KEY` | Fernet key; preserve to decrypt saved keys |
+| `CRON_SECRET` | Vercel cron bearer authentication |
+
+Session/upload/internal/invitation/cron secrets must be **different**, random
+values of at least 32 printable characters. Optionally set `HAX_ALLOWED_AI_HOSTS`
+for administrator-reviewed institutional gateways.
+
+An optional administrator helper generates secrets/a Fernet key, prompts for
+storage credentials with hidden input, and creates `.env.local` with owner-only
+permissions. It never prints values or overwrites an existing file. Install root
+`requirements.txt` first, then run:
+
+```bash
+python3 scripts/configure_hosted.py
+python3 scripts/check_hosted.py
+```
+
+Transfer variables securely into Vercel settings. Do not commit the file, source
+it as a shell script, or paste it into chat. Retrieve/share the generated
+`HAX_BETA_ACCESS_CODE` privately. `.env.example` contains names only.
+The preflight is offline by default. After configuring your own services,
+explicitly running `python3 scripts/check_hosted.py --live` initializes tables
+and PUT/GET/DELETEs a tiny private probe. It neither provisions paid services nor
+verifies queue delivery or Sandbox execution.
+
+Build/verification commands from the repository root:
+
+```bash
+npm ci
+npm run test:upload
+npm run build:hosted
+python3 -m pip install -r requirements-test.txt
+python3 -m unittest discover -s tests -v
+```
+
+Vercel runs the bundle build automatically. Missing hosted configuration returns
+`HOSTED_SETUP_REQUIRED`, never shared local state. Legacy configuration,
+filesystem-launch and direct-converter routes are not exposed.
+
+### Deployed smoke test (required before inviting users)
+
+- Visit `/healthz`, then `/mentor`; enter the invite code and create a workspace.
+  A different/incognito browser must not see that workspace.
+- Upload a small synthetic IMSCC. Check multipart progress/cancellation, durable
+  preparation after navigation/reload, and retained inventory/exclusion warnings.
+- Verify the raw `raw/...` object is removed only after prepared content is
+  persisted/attached; confirm Sandbox destruction and scheduled cleanup.
+  Repeat with a canceled upload and a failed preparation.
+- Complete both conversations/approvals in **Guided mode**, build and download
+  the approved static content ZIP. A second browser must not access its artifact
+  or preview. Only then test a bounded real provider request, understanding its
+  cost and course-text transmission.
+- Finally test a representative multi-gigabyte archive and review resource
+  limits, logs and billing. The 8 GiB cap is an application ceiling, not a
+  guarantee every archive fits processing limits.
+
+Deployment Protection must permit the Blob webhook and server-to-server callback
+to reach their routes. Protected previews may block them before application
+authentication runs. Test a suitably configured deployment, or the stable
+production URL behind the application's invite gate. Unit tests do not establish
+live deployment success.
+
+The beta produces **reviewable static HAX-compatible content**, not an installed
+HAX CMS runtime or automatic public publication. Hosted Canvas API acquisition
+is disabled: upload an export or start from scratch. Institutional SSO/account
+recovery, comprehensive retention administration, accessibility/security review
+and provider restore/deletion testing remain production follow-ups. No cloud
+resources or deployments are created by installing this source.
+
 ## Faculty Mentor workspace — local implementation milestone
 
 Launch `python3 python/app/app.py` from this checkout and open
@@ -117,40 +239,12 @@ pins validated public IP addresses, verifies HTTPS hostnames, rechecks redirects
 and applies time/size limits; it does not bypass login, fetch subresources or
 execute webpage JavaScript. At most 30 supplementary sources are supported.
 
-### Recommended production architecture for Vercel
+### Hosted versus local execution
 
-This milestone is **not publicly deployable unchanged**. When `VERCEL` is set,
-dynamic routes fail closed with `HOSTED_SETUP_REQUIRED`; this prevents exposing
-the legacy global credentials, local-file launch controls and incomplete
-multi-user persistence as a hosted product.
-
-Recommended production components:
-
-- **Vercel web UI / thin API:** authentication, workspace APIs, chat progress
-  and signed upload/download authorization. Do not proxy large files through
-  ordinary Functions (documented request limit 4.5 MB).
-- **Private object storage**, such as a private Vercel Blob store: direct
-  authenticated multipart/client uploads, original/prepared inputs and output
-  artifacts, deletion/retention policies and owner-scoped access.
-- **Managed PostgreSQL:** accounts/ownership, conversations, design briefs,
-  materials, revision-bound approvals and durable job leases. Replace local
-  SQLite repository operations without weakening transactional checks.
-- **Durable processing worker:** bounded extraction, document processing,
-  optional future transcription, batch analysis and actual HAX runtime builds.
-  Use a Python worker service with a durable queue, or evaluate Vercel
-  Workflow/Sandbox for the required binaries/time/disk. A background Flask
-  thread is not a durable cloud job.
-- **Production BYOK vault:** authenticated account ownership, managed encryption
-  keys separate from ciphertext, explicit retention/expiry/deletion, no raw keys
-  in browser storage, logs, prompts or analytics.
-
-Before enabling a public deployment: provision those services, implement OIDC/SSO
-or account authentication and tenancy tests, migrate the storage/job interfaces,
-connect private uploads/artifact delivery, enforce quotas and cost limits,
-test retries/restarts and restore/deletion procedures, and perform security and
-accessibility review. Never remove the hosting guard just to make deployment
-appear to work. No cloud resources, credentials, billing or deployments are
-created by this source change.
+The instructions above supersede the earlier fail-closed-only hosted milestone.
+Valid hosted configuration selects PostgreSQL/private Blob and Workflows/Sandbox
+instead of local files/background threads. Missing configuration still fails
+closed. Local execution retains SQLite, a private local vault and thread jobs.
 
 Useful references:
 [Vercel Function limits](https://vercel.com/docs/functions/limitations),

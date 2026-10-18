@@ -19,11 +19,13 @@
     </div>
     <nav class="main-nav">
       <a href="{{ url_for('mentor.page') }}" class="nav-link {% if request.blueprint == 'mentor' %}active{% endif %}">Faculty Mentor</a>
+      {% if not is_hosted %}
       <a href="{{ url_for('index') }}"  class="nav-link {% if request.endpoint == 'index' %}active{% endif %}">① Requirements</a>
       <a href="{{ url_for('setup') }}"  class="nav-link {% if request.endpoint == 'setup' %}active{% endif %}">② Configuration</a>
       <a href="{{ url_for('run_page') }}" class="nav-link {% if request.endpoint in ('run_page','run_start','stream') %}active{% endif %}">③ Run</a>
       <a href="{{ url_for('history') }}" class="nav-link {% if request.endpoint == 'history' %}active{% endif %}">④ History</a>
       <a href="{{ url_for('import_page') }}" class="nav-link {% if request.endpoint == 'import_page' %}active{% endif %}">⑤ Import</a>
+      {% endif %}
     </nav>
   </div>
 </header>
@@ -33,7 +35,11 @@
 </main>
 
 <footer class="app-footer">
+  {% if is_hosted %}
+  <p>Faculty Mentor beta · Private hosted processing · AI requests use your selected provider · Raw uploads are deleted after verified preparation.</p>
+  {% else %}
   <p>Canvas Course Builder &nbsp;·&nbsp; Running locally at <a href="http://127.0.0.1:5050">127.0.0.1:5050</a> &nbsp;·&nbsp; File imports stay local; AI processing uses your selected provider.</p>
+  {% endif %}
 </footer>
 
 {% block scripts %}{% endblock %}

@@ -1,0 +1,3 @@
+# Full offline suite also exercises the legacy local HAX converter.
+-r requirements.txt
+markdown>=3.4.0

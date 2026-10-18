@@ -64,12 +64,27 @@ app.register_blueprint(create_mentor_blueprint(
 
 @app.before_request
 def protect_unprovisioned_hosted_app():
-    if os.environ.get("VERCEL") and not request.path.startswith("/static/"):
-        return jsonify({
-            "error": "This local application is not yet provisioned for multi-user hosting. "
-                     "Configure production authentication, durable storage and a worker before deployment.",
-            "code": "HOSTED_SETUP_REQUIRED",
-        }), 503
+    from hosted_config import hosted_mode, settings, HostedSetupError
+    if not hosted_mode():
+        return
+    if request.path.startswith("/static/"):
+        return
+    try:
+        settings()
+    except HostedSetupError as exc:
+        return jsonify({"error": str(exc), "code": "HOSTED_SETUP_REQUIRED"}), 503
+    if request.path == "/":
+        return redirect("/mentor")
+    if (request.path.startswith("/mentor") or request.path.startswith("/.well-known/workflow/")
+            or request.path == "/healthz"):
+        return
+    return jsonify({"error": "This legacy local endpoint is disabled in hosted mode."}), 404
+
+
+@app.context_processor
+def deployment_context():
+    from hosted_config import hosted_mode
+    return {"is_hosted": hosted_mode()}
 
 
 @app.errorhandler(RequestEntityTooLarge)

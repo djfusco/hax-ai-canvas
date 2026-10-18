@@ -14,14 +14,16 @@ import tempfile
 import threading
 from urllib.parse import urlsplit
 import uuid
+from contextlib import nullcontext
 
 from flask import (
     Blueprint, abort, current_app, g, jsonify, render_template, request,
-    send_file, send_from_directory,
+    send_file, send_from_directory, Response, jsonify as flask_jsonify,
 )
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from werkzeug.utils import secure_filename
 from mentor_store import WorkspaceConflict, WorkspaceNotFound
+from hosted_config import hosted_mode, settings, HostedSetupError, sign_upload, verify_upload
 
 
 def acquire_canvas_course(course_id: str, destination: Path) -> Path:
@@ -52,11 +54,34 @@ def acquire_canvas_course(course_id: str, destination: Path) -> Path:
 
 def create_mentor_blueprint(root_provider):
     bp = Blueprint("mentor", __name__, url_prefix="/mentor")
+    def backend():
+        if not hasattr(g, "hosted_backend"):
+            from hosted_backend import HostedBackend
+            factory = current_app.config.get("HOSTED_BACKEND_FACTORY", HostedBackend)
+            g.hosted_backend = factory(settings())
+        return g.hosted_backend
+
+    def jsonify(value):
+        if not hosted_mode():
+            return flask_jsonify(value)
+        encoder = json.JSONEncoder(ensure_ascii=False, allow_nan=False)
+        def chunks():
+            buffer = ""
+            for part in encoder.iterencode(value):
+                buffer += part
+                while len(buffer) >= 32768:
+                    yield buffer[:32768]
+                    buffer = buffer[32768:]
+            if buffer:
+                yield buffer
+        return Response(chunks(), content_type="application/json; charset=utf-8")
 
     def root():
         return Path(root_provider()).resolve()
 
     def store():
+        if hosted_mode():
+            return backend().store
         from mentor_store import MentorStore
         return MentorStore(root() / "workspaces.sqlite")
 
@@ -86,20 +111,40 @@ def create_mentor_blueprint(root_provider):
         result = {k: v for k, v in workspace.items() if k not in ("owner", "export_dir", "source")}
         if result.get("artifact"):
             result["artifact"] = {k: v for k, v in result["artifact"].items()
-                                  if k not in ("path", "preview_dir")}
+                                  if k not in ("path", "preview_dir", "blob_path")}
+        if (result.get("draft") is not None and
+                request.args.get("draft_revision") == str(result["draft_revision"])):
+            result.pop("draft")
+            result["keep_draft"] = True
+        if hosted_mode():
+            latest = next((j for j in reversed(workspace["jobs"]) if j["kind"] == "prepare"), None)
+            if latest:
+                upload = backend().uploads.get(g.owner, latest["id"])
+                result["upload"] = {k: upload.get(k) for k in
+                                    ("id", "filename", "size", "status", "cleanup_status", "attempts")}
+                result["upload"]["phase"] = (upload.get("sandbox") or {}).get("phase")
         return result
 
-    def client(data):
+    def with_source(workspace):
+        return backend().materialize(workspace) if hosted_mode() else nullcontext(workspace)
+
+    def provider_values(data):
         provider = data.get("provider", "guided")
         if provider == "guided":
-            return None
+            return provider, None
         if provider not in ("nebula", "anthropic", "openai", "gemini"):
             raise ValueError("Unsupported AI provider.")
-        from ai_client import AIClient
         values = g.vault.get(g.owner, provider)
         if values is None:
             raise ValueError("Save credentials for the selected provider, or choose guided mode.")
         validate_gateway(provider, values.get("base_url", ""))
+        return provider, values
+
+    def client(data):
+        from ai_client import AIClient
+        provider, values = provider_values(data)
+        if values is None:
+            return None
         return AIClient(provider, model=values.get("model") or None,
                         api_key=values["api_key"], base_url=values.get("base_url") or None,
                         isolated_credentials=True)
@@ -119,40 +164,60 @@ def create_mentor_blueprint(root_provider):
 
     @bp.before_request
     def browser_identity():
-        # A local SQLite/file identity is intentionally not presented as a
-        # production Vercel account/storage implementation.
-        if os.environ.get("VERCEL"):
-            return jsonify({"error": "Hosted mentor storage, authentication and worker services must be provisioned before deployment.",
-                            "code": "HOSTED_SETUP_REQUIRED"}), 503
         from mentor_credentials import CredentialVault, private_key
-        key = private_key(root() / ".browser-key")
+        if hosted_mode():
+            try:
+                config = settings()
+            except HostedSetupError as exc:
+                return jsonify({"error": str(exc), "code": "HOSTED_SETUP_REQUIRED"}), 503
+            g.hosted_config = config
+            if request.endpoint in ("mentor.upload_callback", "mentor.cleanup_cron"):
+                expected = config.internal_secret if request.endpoint == "mentor.upload_callback" else config.cron_secret
+                if not hmac.compare_digest(request.headers.get("Authorization", ""), "Bearer " + expected):
+                    return jsonify({"error": "Unauthorized."}), 401
+                return
+            key = config.session_secret.encode()
+        else:
+            key = private_key(root() / ".browser-key")
         signer = URLSafeTimedSerializer(key.decode(), salt="faculty-mentor-browser")
-        token = None
+        identity = None
         try:
-            token = signer.loads(request.cookies.get("mentor_browser", ""), max_age=30 * 86400)
+            identity = signer.loads(request.cookies.get("mentor_browser", ""), max_age=30 * 86400)
         except (BadSignature, SignatureExpired):
             pass
+        token = identity.get("token") if isinstance(identity, dict) else identity
         if not isinstance(token, str) or not re.fullmatch(r"[a-f0-9]{64}", token):
             token = secrets.token_hex(32)
-        g.mentor_cookie = signer.dumps(token)
+        g.admitted = not hosted_mode() or (
+            isinstance(identity, dict) and identity.get("admitted") is True
+        )
+        g.mentor_token, g.mentor_signer = token, signer
+        g.mentor_cookie = signer.dumps({"token": token, "admitted": g.admitted}) if hosted_mode() else signer.dumps(token)
         g.owner = hashlib.sha256(token.encode()).hexdigest()
         g.csrf = hmac.new(key, (g.owner + ":csrf").encode(), hashlib.sha256).hexdigest()
-        g.vault = CredentialVault(root())
         if request.method not in ("GET", "HEAD", "OPTIONS"):
             origin = request.headers.get("Origin")
-            if origin and origin != request.host_url.rstrip("/"):
+            expected_origin = g.hosted_config.origin if hosted_mode() else request.host_url.rstrip("/")
+            if origin and origin != expected_origin:
                 return jsonify({"error": "Cross-origin mentoring requests are not allowed."}), 403
             if not hmac.compare_digest(request.headers.get("X-Mentor-CSRF", ""), g.csrf):
                 return jsonify({"error": "Reload the mentoring page before making changes."}), 403
         if (request.is_json and request.content_length
                 and request.content_length > 2 * 1024 * 1024):
             return jsonify({"error": "The mentoring request is too large."}), 413
+        if hosted_mode() and not g.admitted:
+            if request.endpoint not in ("mentor.page", "mentor.session_info", "mentor.login"):
+                return jsonify({"error": "Enter the beta invitation code first.", "code": "LOGIN_REQUIRED"}), 401
+        elif hosted_mode():
+            g.vault = backend().vault
+        else:
+            g.vault = CredentialVault(root())
 
     @bp.after_request
     def response_security(response):
         if getattr(g, "mentor_cookie", None):
             response.set_cookie("mentor_browser", g.mentor_cookie, max_age=30 * 86400,
-                                httponly=True, secure=request.is_secure, samesite="Strict")
+                                httponly=True, secure=hosted_mode() or request.is_secure, samesite="Strict")
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
@@ -169,6 +234,17 @@ def create_mentor_blueprint(root_provider):
             return jsonify({"error": str(exc)}), 409
         return jsonify({"error": str(exc)}), 400
 
+    @bp.errorhandler(Exception)
+    def hosted_failure(exc):
+        from werkzeug.exceptions import HTTPException
+        if isinstance(exc, HTTPException):
+            return exc
+        if not hosted_mode():
+            raise exc
+        current_app.logger.error("Hosted request failed (%s)", type(exc).__name__)
+        return jsonify({"error": "A hosted service is unavailable. Check deployment configuration and retry.",
+                        "code": "HOSTED_SERVICE_ERROR"}), 503
+
     @bp.route("")
     @bp.route("/")
     def page():
@@ -176,8 +252,27 @@ def create_mentor_blueprint(root_provider):
 
     @bp.get("/api/session")
     def session_info():
-        return jsonify({"csrf": g.csrf, "credentials": g.vault.status(g.owner),
-                        "identity": "this-browser", "hosted_ready": False})
+        return jsonify({"csrf": g.csrf, "credentials": g.vault.status(g.owner) if g.admitted else [],
+                        "identity": "this-browser", "hosted_ready": hosted_mode(),
+                        "authenticated": g.admitted, "login_required": not g.admitted,
+                        "maximum_upload_bytes": 8 * 1024**3 if hosted_mode() else 256 * 1024**2})
+
+    @bp.post("/api/login")
+    def login():
+        if not hosted_mode():
+            return jsonify({"authenticated": True})
+        from hosted_auth import allow_login_attempt
+        data = payload()
+        limiter = current_app.config.get("HOSTED_LOGIN_LIMITER", allow_login_attempt)
+        peer = request.headers.get("x-vercel-forwarded-for") or request.remote_addr or "unknown"
+        if not limiter(g.hosted_config, peer):
+            return jsonify({"error": "Too many admission attempts. Please wait five minutes."}), 429
+        code = data.get("code", "")
+        if not isinstance(code, str) or not hmac.compare_digest(code, g.hosted_config.invite_code):
+            return jsonify({"error": "Invalid beta invitation code."}), 401
+        g.admitted = True
+        g.mentor_cookie = g.mentor_signer.dumps({"token": g.mentor_token, "admitted": True})
+        return jsonify({"authenticated": True})
 
     @bp.post("/api/credentials")
     def credentials():
@@ -193,7 +288,12 @@ def create_mentor_blueprint(root_provider):
 
     @bp.get("/api/workspaces")
     def workspaces():
-        return jsonify([public(w) for w in store().list_workspaces(g.owner)])
+        values = store().list_workspaces(g.owner)
+        if hosted_mode():
+            values = [{k: w[k] for k in ("id", "title", "stage", "revision", "draft_revision", "updated_at")} for w in values]
+        else:
+            values = [public(w) for w in values]
+        return jsonify(values)
 
     @bp.post("/api/workspaces")
     def create_workspace():
@@ -214,7 +314,14 @@ def create_mentor_blueprint(root_provider):
     @bp.get("/api/workspaces/<workspace_id>/inventory")
     def get_inventory(workspace_id):
         from mentor_service import inventory
-        return jsonify(inventory(store().get(g.owner, workspace_id)))
+        workspace = store().get(g.owner, workspace_id)
+        if hosted_mode() and workspace.get("source", {}).get("inventory"):
+            info = dict(workspace["source"]["inventory"])
+            info["materials"] = [{k: m.get(k) for k in ("id", "name", "role", "kind", "warnings")}
+                                 for m in workspace["materials"]]
+            return jsonify(info)
+        with with_source(workspace) as hydrated:
+            return jsonify(inventory(hydrated))
 
     @bp.put("/api/workspaces/<workspace_id>/brief")
     def save_brief(workspace_id):
@@ -226,6 +333,8 @@ def create_mentor_blueprint(root_provider):
 
     @bp.post("/api/workspaces/<workspace_id>/source")
     def source_file(workspace_id):
+        if hosted_mode():
+            return jsonify({"error": "Use the private multipart upload flow for hosted course files."}), 400
         workspace = store().get(g.owner, workspace_id)
         revision = int(request.form.get("revision", 0))
         if revision != workspace["revision"] or workspace.get("active_job"):
@@ -273,8 +382,63 @@ def create_mentor_blueprint(root_provider):
             shutil.rmtree(base, ignore_errors=True)
             raise
 
+    @bp.post("/api/workspaces/<workspace_id>/uploads")
+    def create_upload(workspace_id):
+        if not hosted_mode():
+            return jsonify({"error": "Direct Blob uploads are enabled only in hosted mode."}), 400
+        data = payload()
+        record = backend().uploads.create(
+            g.owner, workspace_id, data.get("revision"), data.get("filename"),
+            data.get("size"), kind=data.get("kind", "course"), role=data.get("role", "reference"),
+        )
+        return jsonify({
+            "upload_id": record["id"], "pathname": record["pathname"],
+            "ticket": sign_upload(record, g.hosted_config.upload_secret),
+            "maximum_size": record["size"], "expires_at": int(record["token_expires_at"]),
+        }), 201
+
+    @bp.get("/api/uploads/<upload_id>")
+    def upload_status(upload_id):
+        if not hosted_mode():
+            abort(404)
+        record = backend().uploads.get(g.owner, upload_id)
+        return jsonify({k: record.get(k) for k in
+                        ("id", "workspace_id", "filename", "size", "status", "cleanup_status", "attempts")})
+
+    @bp.post("/api/uploads/<upload_id>/complete")
+    def complete_upload(upload_id):
+        if not hosted_mode():
+            abort(404)
+        backend().uploads.get(g.owner, upload_id)
+        backend().verified_completion(upload_id)
+        return jsonify({"accepted": True}), 202
+
+    @bp.post("/internal/upload-complete")
+    def upload_callback():
+        if not hosted_mode():
+            abort(404)
+        data = payload()
+        signed = verify_upload(data.get("ticket"), g.hosted_config.upload_secret, allow_expired=True)
+        record = backend().uploads.internal_get(signed["upload_id"])
+        if any(record[key] != signed[claim] for key, claim in (
+            ("owner", "owner"), ("workspace_id", "workspace_id"),
+            ("pathname", "pathname"), ("size", "size"), ("kind", "kind"),
+        )):
+            raise ValueError("Callback does not match its persisted intent.")
+        backend().verified_completion(record["id"])
+        return jsonify({"accepted": True}), 202
+
+    @bp.get("/internal/cleanup")
+    def cleanup_cron():
+        if not hosted_mode():
+            abort(404)
+        from hosted_jobs import cleanup_batch
+        return jsonify(cleanup_batch(backend=backend()))
+
     @bp.post("/api/workspaces/<workspace_id>/canvas")
     def canvas_source(workspace_id):
+        if hosted_mode():
+            return jsonify({"error": "Hosted beta uses course-file uploads; local shared Canvas credentials are disabled."}), 400
         data = payload()
         workspace = store().get(g.owner, workspace_id)
         course_id = str(data.get("course_id", ""))
@@ -311,6 +475,8 @@ def create_mentor_blueprint(root_provider):
             else:
                 material = text_material(data.get("text", ""), data.get("name", "Instructor notes"), role)
         else:
+            if hosted_mode():
+                return jsonify({"error": "Use the private multipart upload flow for hosted documents."}), 400
             revision = int(request.form.get("revision", 0))
             role = request.form.get("role", "reference")
             upload = request.files.get("file")
@@ -346,7 +512,8 @@ def create_mentor_blueprint(root_provider):
         if not 1 <= len(message) <= 6000:
             raise ValueError("Enter a message of 1–6000 characters.")
         message = redact(message)
-        ai = client(data)
+        chosen, _ = provider_values(data)
+        ai = None if hosted_mode() else client(data)
         kind = "review" if data.get("kind") == "review" else "interview"
         try:
             if kind == "review":
@@ -363,6 +530,13 @@ def create_mentor_blueprint(root_provider):
             raise
         job_id = workspace["active_job"]["id"]
         store().add_message(g.owner, workspace_id, "user", message, kind)
+        if hosted_mode():
+            try:
+                backend().dispatch_mentor(g.owner, workspace, kind, chosen)
+            except Exception:
+                store().fail_job(g.owner, workspace_id, job_id, "Could not queue mentor discussion.")
+                return jsonify({"error": "Could not queue the discussion. Your feedback is saved; retry."}), 503
+            return jsonify(public(store().get(g.owner, workspace_id))), 202
         try:
             if kind == "review":
                 reply, revised = review_draft(workspace, message, ai)
@@ -416,14 +590,22 @@ def create_mentor_blueprint(root_provider):
     @bp.post("/api/workspaces/<workspace_id>/analyze")
     def analyze(workspace_id):
         data = payload()
-        ai = client(data)
+        chosen, _ = provider_values(data)
+        ai = None if hosted_mode() else client(data)
         try:
             workspace = store().begin_analysis(g.owner, workspace_id, data.get("revision"))
         except Exception:
             if ai is not None:
                 ai.close()
             raise
-        threading.Thread(target=run_job, args=(g.owner, workspace, "analysis", ai, root()), daemon=True).start()
+        if hosted_mode():
+            try:
+                backend().dispatch_mentor(g.owner, workspace, "analysis", chosen)
+            except Exception:
+                store().fail_job(g.owner, workspace_id, workspace["active_job"]["id"], "Could not queue analysis.")
+                return jsonify({"error": "Could not queue analysis. Please retry."}), 503
+        else:
+            threading.Thread(target=run_job, args=(g.owner, workspace, "analysis", ai, root()), daemon=True).start()
         return jsonify(public(workspace)), 202
 
     @bp.put("/api/workspaces/<workspace_id>/draft")
@@ -448,13 +630,23 @@ def create_mentor_blueprint(root_provider):
         data = payload()
         if not workspace.get("active_job") or workspace["active_job"]["id"] != data.get("job_id"):
             return jsonify({"error": "The job is no longer active."}), 409
+        if hosted_mode() and workspace["active_job"]["kind"] == "prepare":
+            backend().uploads.cancel(g.owner, data["job_id"])
+            return jsonify(public(store().get(g.owner, workspace_id)))
         return jsonify(public(store().fail_job(g.owner, workspace_id, data["job_id"],
                                                "Canceled or recovered by the owner.")))
 
     @bp.post("/api/workspaces/<workspace_id>/build")
     def build(workspace_id):
         workspace = store().begin_build(g.owner, workspace_id, payload().get("draft_revision"))
-        threading.Thread(target=run_job, args=(g.owner, workspace, "build", None, root()), daemon=True).start()
+        if hosted_mode():
+            try:
+                backend().dispatch_mentor(g.owner, workspace, "build")
+            except Exception:
+                store().fail_job(g.owner, workspace_id, workspace["active_job"]["id"], "Could not queue build.")
+                return jsonify({"error": "Could not queue the build. Please retry."}), 503
+        else:
+            threading.Thread(target=run_job, args=(g.owner, workspace, "build", None, root()), daemon=True).start()
         return jsonify(public(workspace)), 202
 
     @bp.get("/api/workspaces/<workspace_id>/download")
@@ -463,6 +655,9 @@ def create_mentor_blueprint(root_provider):
         artifact = workspace.get("artifact")
         if not artifact or workspace["stage"] != "built":
             abort(404)
+        if hosted_mode():
+            return Response(backend().stream_artifact(workspace), content_type="application/zip",
+                            headers={"Content-Disposition": 'attachment; filename="approved-course.zip"'})
         path = Path(artifact["path"]).resolve()
         if not path.is_relative_to(root() / "artifacts"):
             abort(404)
@@ -474,6 +669,12 @@ def create_mentor_blueprint(root_provider):
         artifact = workspace.get("artifact")
         if not artifact or workspace["stage"] != "built":
             abort(404)
+        if hosted_mode():
+            import mimetypes
+            response = Response(backend().preview_stream(workspace, filename),
+                                content_type=mimetypes.guess_type(filename)[0] or "application/octet-stream")
+            response.headers["Content-Security-Policy"] = "sandbox allow-same-origin; default-src 'none'; img-src 'self'; media-src 'self'; base-uri 'self'"
+            return response
         directory = Path(artifact["preview_dir"]).resolve()
         if not directory.is_relative_to(root() / "artifacts"):
             abort(404)

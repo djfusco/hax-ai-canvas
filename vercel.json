@@ -1,0 +1,17 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "flask",
+  "buildCommand": "npm ci --include=dev && npm run build:hosted",
+  "functions": {
+    "server.py": {
+      "maxDuration": 300,
+      "excludeFiles": "{tests/**,tests-js/**,node_modules/**,.vercel/**,web/**,scripts/**,**/__pycache__/**,**/mentor_data/**,**/.env*,**/*.sqlite*,**/*.db*,**/exports/**,**/hax_prep/**}"
+    },
+    "api/blob-upload.js": {
+      "maxDuration": 60
+    }
+  },
+  "crons": [
+    { "path": "/mentor/internal/cleanup", "schedule": "*/15 * * * *" }
+  ]
+}

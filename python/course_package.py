@@ -349,7 +349,10 @@ def _manifest(raw):
     return raw
 
 
-def _import(package_path, export_base):
+def _import(package_path, export_base, namespace=None):
+    if namespace is not None and (not isinstance(namespace, str)
+                                   or not re.fullmatch(r"imscc-[a-f0-9]{32}", namespace)):
+        raise IMSCCImportError("Invalid server-selected course namespace.")
     package_path = Path(package_path)
     if package_path.stat().st_size > MAX_PACKAGE_BYTES:
         raise IMSCCImportError("Review package exceeds the 64 MiB compressed limit.")
@@ -386,13 +389,18 @@ def _import(package_path, export_base):
         if counts != manifest["counts"]:
             raise IMSCCImportError("Package counts do not match normalized content.")
         id_map = {}
-        course_id = "imscc-" + uuid.uuid4().hex
+        course_id = namespace or "imscc-" + uuid.uuid4().hex
+
+        def fresh_id(kind, source):
+            suffix = (uuid.uuid5(uuid.UUID(course_id[6:]), kind + ":" + source).hex
+                      if namespace is not None else uuid.uuid4().hex)
+            return course_id + "-" + kind + "-" + suffix
         by_id = {}
         for folder, raw in records:
             old = raw["id"]
             if old in id_map:
                 raise IMSCCImportError("Duplicate normalized content ID.")
-            id_map[old] = course_id + "-" + KINDS[folder] + "-" + uuid.uuid4().hex
+            id_map[old] = fresh_id(KINDS[folder], old)
             by_id[old] = (folder, raw)
         file_map = {}
         claimed = set()
@@ -439,12 +447,12 @@ def _import(package_path, export_base):
                     (temporary / "files").mkdir(exist_ok=True)
                     (temporary / "files" / filename).write_bytes(assets[raw["filename"]])
                     raw["filename"] = filename
-                for question in raw.get("questions", []):
-                    question["id"] = course_id + "-question-" + uuid.uuid4().hex
-                    for answer in question["answers"]:
-                        answer["id"] = course_id + "-answer-" + uuid.uuid4().hex
-                for item in raw.get("items", []):
-                    item["id"] = course_id + "-module-item-" + uuid.uuid4().hex
+                for question_index, question in enumerate(raw.get("questions", [])):
+                    question["id"] = fresh_id("question", old + ":" + str(question_index))
+                    for answer_index, answer in enumerate(question["answers"]):
+                        answer["id"] = fresh_id("answer", question["id"] + ":" + str(answer_index))
+                for item_index, item in enumerate(raw.get("items", [])):
+                    item["id"] = fresh_id("module-item", old + ":" + str(item_index))
                     old_ref = item.get("content_id")
                     if old_ref is not None and (old_ref not in by_id or by_id[old_ref][0] in ("modules", "syllabus")):
                         raise IMSCCImportError("Unknown module content reference.")
@@ -478,10 +486,10 @@ def _import(package_path, export_base):
                 shutil.rmtree(temporary)
 
 
-def import_course_package(package_path, export_base):
+def import_course_package(package_path, export_base, *, namespace=None):
     """Validate and remap a local review package; do not render its HTML yet."""
     try:
-        return _import(package_path, export_base)
+        return _import(package_path, export_base, namespace=namespace)
     except IMSCCImportError:
         raise
     except (OSError, ValueError, TypeError, KeyError, RecursionError, zipfile.BadZipFile,

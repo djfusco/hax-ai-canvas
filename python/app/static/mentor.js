@@ -3,9 +3,20 @@ let mentorCSRF = '';
 let workspace = null;
 let busy = false;
 let pollTimer = null;
+let hosted = false;
+let uploadController = null;
+let renderedBriefWorkspace = null;
+let renderedBrief = '';
+let renderedDraftKey = null;
 const el = id => document.getElementById(id);
 const provider = () => el('mentor-provider').value;
 const endpoint = suffix => '/mentor/api/workspaces/' + workspace.id + suffix;
+function acceptWorkspace(next) {
+  workspace = next.keep_draft ? {...next, draft: workspace?.draft || null} : next;
+}
+async function fetchWorkspace() {
+  acceptWorkspace(await api(endpoint('?draft_revision=' + (workspace.draft_revision || 0))));
+}
 
 async function api(url, method = 'GET', body) {
   const options = {method, headers: {'X-Mentor-CSRF': mentorCSRF}};
@@ -19,6 +30,55 @@ async function api(url, method = 'GET', body) {
   if (!response.ok) throw new Error(data.error || 'The action failed.');
   return data;
 }
+el('mentor-login-form').onsubmit = event => {
+  event.preventDefault(); action(async () => {
+    await api('/mentor/api/login', 'POST', {code: el('mentor-invite-code').value});
+    el('mentor-invite-code').value = '';
+    await updateCredentials(); await refreshList();
+  });
+};
+
+async function uploadHosted(file, kind, role = 'reference') {
+  if (!window.HaxHostedUpload) throw new Error('Hosted upload support is missing. Run the hosted build before deployment.');
+  const intent = await api(endpoint('/uploads'), 'POST', {
+    revision: workspace.revision, filename: file.name, size: file.size, kind, role,
+  });
+  uploadController = new AbortController();
+  el('hosted-upload-progress').hidden = false;
+  el('upload-progress-label').hidden = false;
+  el('abort-upload').hidden = false;
+  el('hosted-upload-progress').value = 0;
+  workspace = await api(endpoint(''));
+  await renderWorkspace();
+  try {
+    await window.HaxHostedUpload.upload(file, intent, {
+      signal: uploadController.signal,
+      onProgress: progress => {
+        el('hosted-upload-progress').value = progress.percentage || 0;
+        el('mentor-status').textContent =
+          `Uploading ${Math.round(progress.percentage || 0)}% directly to private storage…`;
+      },
+    });
+    // Browser data is not proof: the server HEADs the registered private path.
+    await api('/mentor/api/uploads/' + intent.upload_id + '/complete', 'POST', {});
+    workspace = await api(endpoint(''));
+    await renderWorkspace();
+  } catch (error) {
+    if (uploadController.signal.aborted) {
+      try { await api(endpoint('/cancel-job'), 'POST', {job_id: intent.upload_id}); } catch (_) {}
+      throw new Error('Transfer canceled. Temporary upload data is scheduled for cleanup.');
+    }
+    throw error;
+  } finally {
+    uploadController = null;
+    el('abort-upload').hidden = true;
+    el('hosted-upload-progress').hidden = true;
+    el('upload-progress-label').hidden = true;
+  }
+}
+function abortHostedUpload() {
+  if (uploadController) uploadController.abort();
+}
 
 async function action(callback) {
   if (busy) return;
@@ -30,7 +90,7 @@ async function action(callback) {
     el('mentor-error').textContent = error.message;
     el('mentor-error').hidden = false;
     if (workspace) {
-      try { workspace = await api(endpoint('')); renderWorkspace(); } catch (_) {}
+      try { await fetchWorkspace(); renderWorkspace(); } catch (_) {}
     }
   } finally {
     busy = false;
@@ -68,7 +128,20 @@ async function renderWorkspace() {
   el('workspace-title').textContent = workspace.title;
   el('workspace-stage').textContent =
     `Stage: ${workspace.stage} · input revision ${workspace.revision} · draft revision ${workspace.draft_revision}`;
-  if (document.activeElement !== el('design-brief')) el('design-brief').value = workspace.brief;
+  if (workspace.upload) {
+    const upload = workspace.upload;
+    el('upload-state').textContent =
+      `Source: ${upload.filename} · ${upload.status}${upload.phase ? ' / ' + upload.phase : ''} · ` +
+      (upload.cleanup_status === 'deleted' ? 'Original cloud upload deletion accepted.'
+        : upload.cleanup_status === 'error' ? 'Raw-file cleanup pending retry.'
+        : 'Raw upload is temporary and will be cleaned up after processing or expiry.');
+  }
+  // Preserve dirty text even after focus moves to chat or upload controls.
+  if (renderedBriefWorkspace !== workspace.id || el('design-brief').value === renderedBrief) {
+    el('design-brief').value = workspace.brief;
+  }
+  renderedBriefWorkspace = workspace.id;
+  renderedBrief = workspace.brief;
   el('mentor-messages').replaceChildren();
   workspace.messages.forEach(message => {
     const box = document.createElement('div');
@@ -97,13 +170,15 @@ async function renderWorkspace() {
     !!workspace.active_job || workspace.direction_revision !== workspace.revision;
   el('draft-panel').hidden = !workspace.draft;
   el('chat-kind').value = workspace.draft ? 'review' : 'interview';
-  el('draft-items').replaceChildren();
+  const draftKey = workspace.draft ? workspace.id + ':' + workspace.draft_revision : null;
+  const draftChanged = draftKey !== renderedDraftKey;
+  if (draftChanged) el('draft-items').replaceChildren();
   if (workspace.draft) {
     el('draft-summary').textContent = workspace.draft.summary;
     el('draft-coverage').textContent = workspace.draft.coverage || '';
     el('draft-warnings').replaceChildren();
     (workspace.draft.warnings || []).forEach(w => itemText(el('draft-warnings'), 'li', w));
-    workspace.draft.items.forEach((item, index) => {
+    if (draftChanged) workspace.draft.items.forEach((item, index) => {
       const details = document.createElement('details');
       itemText(details, 'summary', `${item.changed ? 'Proposed/edited' : 'Retained'}: ${item.title}`);
       itemText(details, 'p', item.reason || '');
@@ -144,6 +219,7 @@ async function renderWorkspace() {
     el('build-course').disabled = !!workspace.active_job ||
       workspace.build_revision !== workspace.draft_revision;
   }
+  renderedDraftKey = draftKey;
   el('artifact-links').replaceChildren();
   if (workspace.artifact && workspace.stage === 'built') {
     const link = itemText(el('artifact-links'), 'a', 'Download approved course content');
@@ -169,7 +245,7 @@ async function renderWorkspace() {
     box.appendChild(warnings);
   } catch (error) { el('course-inventory').textContent = error.message; }
   if (workspace.active_job) pollTimer = setTimeout(async () => {
-    try { workspace = await api(endpoint('')); await renderWorkspace(); }
+    try { await fetchWorkspace(); await renderWorkspace(); }
     catch (error) { el('mentor-status').textContent = error.message; }
   }, 1000);
 }
@@ -177,9 +253,16 @@ async function renderWorkspace() {
 async function updateCredentials() {
   const data = await api('/mentor/api/session');
   mentorCSRF = data.csrf;
+  hosted = data.hosted_ready;
+  el('mentor-login-card').hidden = !data.login_required;
+  el('workspace-list').disabled = data.login_required;
+  el('new-workspace').querySelector('button').disabled = data.login_required;
+  el('provider-settings').hidden = data.login_required;
+  el('hosted-upload-help').hidden = !hosted;
   el('credential-status').textContent = data.credentials.map(c =>
     `${c.provider}: saved until ${new Date(c.expires_at * 1000).toLocaleString()}`).join(' · ')
     || 'No saved credentials. Guided mode is available.';
+  return data;
 }
 
 el('new-workspace').onsubmit = event => {
@@ -205,6 +288,10 @@ el('source-form').onsubmit = event => {
   event.preventDefault(); action(async () => {
     const file = el('source-file').files[0];
     if (!file) throw new Error('Choose a course export or prepared package.');
+    if (hosted) {
+      await uploadHosted(file, 'course');
+      return;
+    }
     if (file.size > 256 * 1024 * 1024) throw new Error('Use the local preparation tool for this large export.');
     const form = new FormData(); form.append('file', file); form.append('revision', workspace.revision);
     workspace = await api(endpoint('/source'), 'POST', form); await renderWorkspace();
@@ -222,6 +309,10 @@ el('material-file-form').onsubmit = event => {
   event.preventDefault(); action(async () => {
     const file = el('material-file').files[0];
     if (!file) throw new Error('Choose a document.');
+    if (hosted) {
+      await uploadHosted(file, 'material', el('material-role').value);
+      return;
+    }
     const form = new FormData();
     form.append('file', file); form.append('revision', workspace.revision);
     form.append('role', el('material-role').value);
@@ -250,7 +341,9 @@ el('mentor-chat-form').onsubmit = event => {
   });
 };
 function saveBrief() { action(async () => {
-  workspace = await api(endpoint('/brief'), 'PUT', {brief: el('design-brief').value, revision: workspace.revision});
+  const submitted = el('design-brief').value;
+  workspace = await api(endpoint('/brief'), 'PUT', {brief: submitted, revision: workspace.revision});
+  if (el('design-brief').value === submitted) el('design-brief').value = workspace.brief;
   await renderWorkspace();
 }); }
 function approveDirection() { action(async () => {
@@ -287,4 +380,7 @@ function cancelMentorJob() { action(async () => {
   workspace = await api(endpoint('/cancel-job'), 'POST', {job_id: workspace.active_job.id});
   await renderWorkspace();
 }); }
-action(async () => { await updateCredentials(); await refreshList(); });
+action(async () => {
+  const session = await updateCredentials();
+  if (session.authenticated) await refreshList();
+});

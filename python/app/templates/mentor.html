@@ -8,9 +8,18 @@
   </div>
   <div id="mentor-error" role="alert" class="banner banner-warn" hidden></div>
   <p id="mentor-status" role="status" aria-live="polite"></p>
+  <div class="card" id="mentor-login-card" hidden>
+    <h2>Welcome to the invited beta</h2>
+    <p>Enter the invitation code supplied by the administrator. This browser will remember your private workspace identity; this is not institutional SSO or cross-device recovery.</p>
+    <form id="mentor-login-form">
+      <label class="field-label" for="mentor-invite-code">Beta invitation code</label>
+      <input class="field-input" id="mentor-invite-code" type="password" autocomplete="off" required>
+      <button class="btn btn-primary" type="submit">Enter Faculty Mentor</button>
+    </form>
+  </div>
   <div class="card">
     <h2>Your workspaces</h2>
-    <p class="field-help">Saved on this computer and scoped to this browser's signed identity. This is not an institutional login. Clearing browser cookies loses access to this identity. Never paste API keys into the conversation.</p>
+    <p class="field-help">{% if is_hosted %}Saved in private hosted storage{% else %}Saved on this computer{% endif %} and scoped to this browser's signed identity. This is not an institutional login. Clearing browser cookies loses access to this identity. Never paste API keys into the conversation.</p>
     <label class="field-label" for="workspace-list">Resume a course</label>
     <select id="workspace-list" class="field-input" onchange="openWorkspace(this.value)"><option value="">Choose a workspace</option></select>
     <form id="new-workspace" style="margin-top:1rem">
@@ -21,7 +30,7 @@
   </div>
   <details class="card" id="provider-settings">
     <summary><strong>AI provider &amp; credential retention</strong></summary>
-    <p class="field-help">Guided mode makes no AI calls and does not invent analysis scores. With AI enabled, course excerpts and your design brief are sent to that provider. Keys are encrypted on the local server, never stored in browser storage or chat.</p>
+    <p class="field-help">Guided mode makes no AI calls and does not invent analysis scores. With AI enabled, course excerpts and your design brief are sent to that provider. Keys are encrypted server-side, never stored in browser storage or chat.</p>
     <label class="field-label" for="mentor-provider">Provider for this action</label>
     <select id="mentor-provider" class="field-input">
       <option value="guided">Guided mode — no AI calls</option>
@@ -52,13 +61,18 @@
         <input class="field-input" id="source-file" type="file" accept=".imscc,.haxcourse">
         <button class="btn btn-primary" type="submit">Import into this workspace</button>
       </form>
+      <p id="hosted-upload-help" class="field-help" hidden>Large exports upload directly to private Vercel storage in bounded parts. You do not need Python or a local helper. The original cloud upload is deleted only after the prepared result is saved and validated; your computer's original is unchanged.</p>
+      <label id="upload-progress-label" for="hosted-upload-progress" hidden>Upload progress</label>
+      <progress id="hosted-upload-progress" max="100" value="0" hidden></progress>
+      <button class="btn btn-ghost" id="abort-upload" type="button" onclick="abortHostedUpload()" hidden>Cancel transfer</button>
+      <p id="upload-state" role="status" aria-live="polite"></p>
       <details>
         <summary>Is your export 2 GB or media-heavy?</summary>
         <p>Use the local preparation tool. It reads text/metadata without inflating bulk media and records what was excluded. Your original remains untouched. Upload the resulting compact .haxcourse package here.</p>
         <pre>python3 python/prepare_course.py "/path/course.imscc" --output "/path/course.haxcourse"</pre>
         <p>This is a review package, not a complete backup. Videos/images omitted locally are not analyzed or rebuilt unless provided separately in supported form.</p>
       </details>
-      <details>
+      <details {% if is_hosted %}hidden{% endif %}>
         <summary>Or connect to Canvas using this local app's API configuration</summary>
         <p class="field-help">Acquires content only; it does not start analysis or bypass the mentoring checkpoints. Configure the local Canvas URL/token first. This legacy local configuration is not a hosted multi-user credential store.</p>
         <form id="mentor-canvas-form">
@@ -126,5 +140,8 @@
 </div>
 {% endblock %}
 {% block scripts %}
+{% if is_hosted %}
+<script src="{{ url_for('static', filename='hosted-upload.js') }}"></script>
+{% endif %}
 <script src="{{ url_for('static', filename='mentor.js') }}"></script>
 {% endblock %}

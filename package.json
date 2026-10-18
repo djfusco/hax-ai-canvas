@@ -2,6 +2,18 @@
   "name": "hax-ai-canvas",
   "version": "1.0.12",
   "description": "AI-powered Canvas course to HAX site builder — local web app for instructors",
+  "scripts": {
+    "build": "node scripts/build-hosted.cjs",
+    "build:hosted": "node scripts/build-hosted.cjs",
+    "test:upload": "node --test tests-js/*.test.cjs",
+    "check:hosted": "python3 scripts/check_hosted.py"
+  },
+  "dependencies": {
+    "@vercel/blob": "2.8.2"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  },
   "bin": {
     "hax-ai-canvas": "bin/index.js"
   },
@@ -16,7 +28,7 @@
     "README.md"
   ],
   "engines": {
-    "node": ">=16.0.0"
+    "node": ">=22.0.0"
   },
   "keywords": [
     "canvas",

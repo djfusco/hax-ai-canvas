@@ -22,6 +22,10 @@ exports/
 hax_prep/
 mentor_data/
 *.haxcourse
+.vercel/
+.env.local
+.env.*.local
+python/app/static/hosted-upload.js
 
 # Runtime markers written by bin/index.js
 .version
