@@ -45,7 +45,7 @@ _WARNINGS = {
 }
 _FIELDS = {"version", "provider", "model", "status", "api", "input_limit",
            "context_window", "output_limit", "reasoning", "effort",
-           "output_parameter", "source", "warnings"}
+           "output_parameter", "source", "warnings", "structured_outputs"}
 
 # Exact IDs only. Sources: https://developers.openai.com/api/docs/models/{id}
 # and /guides/reasoning. Never manufacture support for an arbitrary dated suffix.
@@ -145,6 +145,7 @@ def _base(provider, model):
     profile = {"version": 1, "provider": provider, "model": model,
                "status": "unverified", "api": api, "input_limit": 32768,
                "context_window": 32768, "output_limit": 4096, "reasoning": False,
+               "structured_outputs": False,
                "effort": None, "output_parameter": _OUTPUT_PARAMETER[api],
                "source": _SOURCES["fallback"],
                "warnings": [_WARNINGS["unverified"], _WARNINGS["access"]]}
@@ -163,11 +164,15 @@ def _base(provider, model):
                        reasoning=reasoning, status="documented")
     if profile["status"] == "documented":
         profile.update(source=_SOURCES[provider], warnings=[_WARNINGS["access"]])
+        # Native JSON schemas, not merely JSON mode. GPT-4o's May snapshot
+        # predates schema support. Gateway deployment names remain opaque.
+        profile["structured_outputs"] = model != "gpt-4o-2024-05-13"
         if provider == "anthropic" and model in ("claude-sonnet-4-5", "claude-sonnet-4-5-20250929"):
             profile["warnings"].append(_WARNINGS["deprecated"])
     if _unsupported(provider, model):
         profile.update(status="unsupported", api=None, source=_SOURCES["unsupported"],
-                       warnings=[_WARNINGS["unsupported"]], reasoning=False, effort=None)
+                       warnings=[_WARNINGS["unsupported"]], reasoning=False, effort=None,
+                       structured_outputs=False)
     return profile
 
 
@@ -196,6 +201,7 @@ def resolve_capabilities(provider, model, metadata=None):
         return profile
     if metadata.get("lifecycle") == "retired":
         profile.update(status="unsupported", api=None, reasoning=False, effort=None,
+                       structured_outputs=False,
                        output_parameter=_OUTPUT_PARAMETER[_DEFAULT_API[provider]],
                        source=_SOURCES["unsupported"], warnings=[_WARNINGS["unsupported"]])
         return profile
@@ -225,6 +231,7 @@ def resolve_capabilities(provider, model, metadata=None):
             if isinstance(methods, list) and all(isinstance(x, str) for x in methods):
                 if "generateContent" not in methods:
                     profile.update(status="unsupported", api=None, reasoning=False, effort=None,
+                                   structured_outputs=False,
                                    source=_SOURCES["unsupported"], warnings=[_WARNINGS["unsupported"]])
                     return profile
             else:
@@ -238,6 +245,12 @@ def resolve_capabilities(provider, model, metadata=None):
     elif provider in ("anthropic", "nebula"):
         caps = metadata.get("capabilities")
         if isinstance(caps, dict):
+            # Model-level support at an institutional gateway does not verify
+            # that gateway's forwarding of output_config.format.
+            structured = _supported(caps.get("structured_outputs"))
+            if provider == "anthropic" and structured is not None:
+                profile["structured_outputs"] = structured
+                changed = True
             thinking = _supported(caps.get("thinking"))
             if thinking is not None:
                 profile["reasoning"] = thinking
@@ -268,7 +281,15 @@ def validate_capabilities(provider, model, profile):
     """
     _identity(provider, model)
     error = "Invalid saved model capabilities. Refresh the provider's model catalog."
-    if not isinstance(profile, dict) or set(profile) != _FIELDS:
+    if not isinstance(profile, dict) or set(profile) not in (_FIELDS, _FIELDS - {"structured_outputs"}):
+        raise ModelCapabilityError(error)
+    if "structured_outputs" not in profile:
+        # Existing v1 selections/jobs remain usable without re-entering a key.
+        # Only exact documented first-party models gain the documented option.
+        profile = {**profile, "structured_outputs": _base(provider, model)["structured_outputs"]}
+    if (type(profile["structured_outputs"]) is not bool
+            or provider == "nebula" and profile["structured_outputs"]
+            or profile["status"] == "unsupported" and profile["structured_outputs"]):
         raise ModelCapabilityError(error)
     if (type(profile["version"]) is not int or profile["version"] != 1
             or profile["provider"] != provider or profile["model"] != model):

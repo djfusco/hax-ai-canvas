@@ -65,6 +65,7 @@ class CapabilityTests(unittest.TestCase):
         self.assertEqual(profile["input_limit"], 64000)
         self.assertIsNone(profile["effort"])
         self.assertFalse(profile["reasoning"])
+        self.assertFalse(profile["structured_outputs"])
 
     def test_anthropic_advertised_limits_and_support_take_precedence(self):
         metadata = {"max_input_tokens": 80000, "max_tokens": 12000, "capabilities": {
@@ -81,16 +82,46 @@ class CapabilityTests(unittest.TestCase):
         self.assertTrue(profile["reasoning"])
         self.assertNotIn("evil", str(profile))
         self.assertNotIn("UPSTREAM", str(profile))
-        self.assertNotIn("structured_outputs", profile)
+        self.assertTrue(profile["structured_outputs"])
         self.assertEqual(validate_capabilities("anthropic", "claude-sonnet-5-5", profile), profile)
 
     def test_false_support_flags_override_documented_fallback(self):
         profile = resolve_capabilities("anthropic", "claude-sonnet-5-5", {"capabilities": {
+            "structured_outputs": {"supported": False},
             "thinking": {"supported": False}, "effort": {
                 "supported": False, "medium": {"supported": True}}}})
+        self.assertFalse(profile["structured_outputs"])
         self.assertFalse(profile["reasoning"])
         self.assertIsNone(profile["effort"])
         self.assertTrue(any("partial" in w for w in profile["warnings"]))
+
+    def test_native_schema_support_is_scoped_and_old_snapshots_remain_usable(self):
+        for provider, model, expected in (
+                ("anthropic", "claude-sonnet-4-5", True),
+                ("anthropic", "claude-sonnet-4-6", True),
+                ("anthropic", "claude-sonnet-5-5", True),
+                ("openai", "gpt-4o", True), ("openai", "gpt-5-pro", True),
+                ("openai", "gpt-4o-2024-05-13", False),
+                ("gemini", "gemini-2.5-flash", True),
+                ("nebula", "claude-sonnet-5-5", False),
+                ("anthropic", "future-text", False)):
+            with self.subTest(provider=provider, model=model):
+                profile = resolve_capabilities(provider, model)
+                self.assertIs(profile["structured_outputs"], expected)
+                old = {k: v for k, v in profile.items() if k != "structured_outputs"}
+                restored = validate_capabilities(provider, model, old)
+                self.assertIs(restored["structured_outputs"], expected)
+                self.assertNotIn("structured_outputs", old)
+        metadata = {"capabilities": {"structured_outputs": {"supported": True}}}
+        self.assertTrue(resolve_capabilities("anthropic", "future-text", metadata)["structured_outputs"])
+        self.assertFalse(resolve_capabilities("nebula", "future-text", metadata)["structured_outputs"])
+        profile = resolve_capabilities("openai", "gpt-4o")
+        for bad in ("true", 1, None, {}):
+            with self.assertRaises(ModelCapabilityError):
+                validate_capabilities("openai", "gpt-4o", {**profile, "structured_outputs": bad})
+        retired = {**profile, "status": "unsupported", "api": None}
+        with self.assertRaises(ModelCapabilityError):
+            validate_capabilities("openai", "gpt-4o", retired)
 
     def test_metadata_model_scope_and_partial_provenance_are_explicit(self):
         wrong = resolve_capabilities("anthropic", "future-text", {

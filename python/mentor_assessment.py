@@ -151,6 +151,38 @@ _REPORT_WARNINGS = (
 )
 
 
+def response_schema():
+    """Portable native-schema subset; grounding and bounds still validate locally."""
+    def obj(properties):
+        return {"type": "object", "properties": properties,
+                "required": list(properties), "additionalProperties": False}
+
+    def number(maximum):
+        return {"anyOf": [{"type": "integer"}, {"type": "null"}],
+                "description": f"An integer from 1 through {maximum}, or null for insufficient evidence."}
+
+    def text(maximum=1800):
+        return {"type": "string", "description": f"Nonempty text, at most {maximum} characters."}
+
+    def strings():
+        return {"type": "array", "items": text(1200),
+                "description": "At most 12 concise entries."}
+
+    return obj({
+        "item_id": {"type": "string", "description": "Copy the current item's exact ID."},
+        "blooms": obj({"level": number(6), "rationale": text()}),
+        "aias": obj({"observed_level": number(5), "recommended_level": number(5),
+                     "rationale": text()}),
+        "dimensions": obj({key: obj({"score": number(10), "rationale": text()})
+                           for key in DIMENSIONS}),
+        "strengths": strings(), "concerns": strings(), "recommendations": strings(),
+        "evidence": {"type": "array", "items": obj({
+            "source_id": {"type": "string", "description": "An exact supplied evidence-source ID."},
+            "quote": text(600),
+        }), "description": "At most 12 exact excerpt quotes; include current-item evidence for non-null judgments."},
+        "limitations": strings(),
+    })
+
 class AssessmentError(ValueError):
     """Authored, user-safe assessment failure; never raw provider diagnostics."""
 
@@ -254,102 +286,109 @@ def _prepare_items(items):
     return prepared
 
 
-def _schema_error():
-    raise AssessmentError("The AI assessment response was incomplete or invalid. Retry with a model that supports structured JSON; no assessment or default scores were saved.")
+def _schema_error(reason="The required assessment structure or content rules were not satisfied."):
+    # Reasons and field paths below are authored constants, never returned
+    # values/unknown keys. Do not expose response text, quotes or credentials.
+    raise AssessmentError(
+        reason + " No complete assessment or default scores were saved. "
+        "Retry the assessment; if it persists, report this validation error or choose another model.")
 
 
-def _exact(value, keys):
+def _exact(value, keys, field="assessment"):
     if not isinstance(value, dict) or set(value) != set(keys):
-        _schema_error()
+        _schema_error(f"The response has missing/unexpected fields or is not an object at {field}.")
 
 
-def _output_text(value, *, maximum=1800):
+def _output_text(value, *, maximum=1800, field="assessment text"):
     if not isinstance(value, str) or not value.strip() or len(value) > maximum or "\0" in value:
-        _schema_error()
+        _schema_error(f"The response needs nonempty text without null characters, at most {maximum} characters, at {field}.")
     return value.strip()
 
 
-def _strings(value):
+def _strings(value, field="assessment list"):
     if not isinstance(value, list) or len(value) > 12:
-        _schema_error()
-    return [_output_text(item, maximum=1200) for item in value]
+        _schema_error(f"The response needs a list of at most 12 text entries at {field}.")
+    return [_output_text(item, maximum=1200, field=f"{field}[{index}]")
+            for index, item in enumerate(value)]
 
 
-def _number(value, maximum):
+def _number(value, maximum, field="classification/score"):
     if value is not None and (type(value) is not int or not 1 <= value <= maximum):
-        _schema_error()
+        _schema_error(f"The response needs an integer from 1 to {maximum}, or null, at {field}.")
     return value
 
 
 def _parse(text):
     if not isinstance(text, str) or len(text) > MAX_RESPONSE_CHARS:
-        _schema_error()
+        _schema_error("The response was not text or exceeded the local response-size limit.")
     text = text.strip()
     if text.startswith("```"):
         fenced = re.fullmatch(r"```(?:json)?[ \t]*\r?\n(.*)\r?\n```", text, re.DOTALL | re.IGNORECASE)
         if not fenced:
-            _schema_error()
+            _schema_error("The response contained an invalid JSON code fence or extra commentary.")
         text = fenced[1]
     def pairs(entries):
         result = {}
         for key, value in entries:
             if key in result:
-                _schema_error()
+                _schema_error("The response contained duplicate JSON fields.")
             result[key] = value
         return result
     def finite(value):
         number = float(value)
         if not math.isfinite(number):
-            _schema_error()
+            _schema_error("The response contained a non-finite JSON number.")
         return number
     try:
         return json.loads(text, object_pairs_hook=pairs, parse_float=finite,
-                          parse_constant=lambda _: _schema_error())
+                          parse_constant=lambda _: _schema_error("The response contained a non-finite JSON number."))
+    except AssessmentError:
+        raise
     except (ValueError, RecursionError, OverflowError):
-        _schema_error()
+        _schema_error("The response was not valid JSON or exceeded safe JSON parsing limits.")
 
 
 def _validate(raw, item, sources):
     _exact(raw, _RESPONSE_FIELDS)
     if raw["item_id"] != item["id"] or not isinstance(raw["item_id"], str):
-        _schema_error()
-    _exact(raw["blooms"], ("level", "rationale"))
-    bloom = _number(raw["blooms"]["level"], 6)
+        _schema_error("The response item_id did not match the item being assessed.")
+    _exact(raw["blooms"], ("level", "rationale"), "blooms")
+    bloom = _number(raw["blooms"]["level"], 6, "blooms.level")
     blooms = {"level": bloom, "label": BLOOM_LABELS.get(bloom, "Insufficient evidence"),
-              "rationale": _output_text(raw["blooms"]["rationale"])}
-    _exact(raw["aias"], ("observed_level", "recommended_level", "rationale"))
-    observed = _number(raw["aias"]["observed_level"], 5)
-    recommended = _number(raw["aias"]["recommended_level"], 5)
+              "rationale": _output_text(raw["blooms"]["rationale"], field="blooms.rationale")}
+    _exact(raw["aias"], ("observed_level", "recommended_level", "rationale"), "aias")
+    observed = _number(raw["aias"]["observed_level"], 5, "aias.observed_level")
+    recommended = _number(raw["aias"]["recommended_level"], 5, "aias.recommended_level")
     aias = {"observed_level": observed, "recommended_level": recommended,
             "label": AIAS_LABELS.get(recommended if recommended is not None else observed, "Insufficient evidence"),
-            "rationale": _output_text(raw["aias"]["rationale"])}
-    _exact(raw["dimensions"], DIMENSIONS)
+            "rationale": _output_text(raw["aias"]["rationale"], field="aias.rationale")}
+    _exact(raw["dimensions"], DIMENSIONS, "dimensions")
     dimensions = {}
     for key in DIMENSIONS:
-        _exact(raw["dimensions"][key], ("score", "rationale"))
-        dimensions[key] = {"score": _number(raw["dimensions"][key]["score"], 10),
-                           "rationale": _output_text(raw["dimensions"][key]["rationale"])}
-    strings = {key: _strings(raw[key]) for key in
+        _exact(raw["dimensions"][key], ("score", "rationale"), f"dimensions.{key}")
+        dimensions[key] = {"score": _number(raw["dimensions"][key]["score"], 10, f"dimensions.{key}.score"),
+                           "rationale": _output_text(raw["dimensions"][key]["rationale"], field=f"dimensions.{key}.rationale")}
+    strings = {key: _strings(raw[key], key) for key in
                ("strengths", "concerns", "recommendations", "limitations")}
     numeric = [bloom, observed, recommended, *[v["score"] for v in dimensions.values()]]
     if any(value is None for value in numeric) and not strings["limitations"]:
-        _schema_error()
+        _schema_error("The response omitted limitations explaining its null/insufficient-evidence judgments.")
     evidence = raw["evidence"]
     if not isinstance(evidence, list) or len(evidence) > 12:
-        _schema_error()
+        _schema_error("The response needs a list of at most 12 quotes at evidence.")
     validated = []
-    for entry in evidence:
-        _exact(entry, ("source_id", "quote"))
+    for index, entry in enumerate(evidence):
+        _exact(entry, ("source_id", "quote"), f"evidence[{index}]")
         source_id = entry["source_id"]
         if not isinstance(source_id, str) or source_id not in sources:
-            _schema_error()
-        quote = _output_text(entry["quote"], maximum=600)
+            _schema_error(f"The response cited an unknown or invalid evidence source at evidence[{index}].source_id.")
+        quote = _output_text(entry["quote"], maximum=600, field=f"evidence[{index}].quote")
         if _normalized(quote) not in sources[source_id]["text"]:
-            _schema_error()
+            _schema_error(f"The evidence quote did not exactly match its supplied excerpt at evidence[{index}].quote.")
         validated.append({"source_id": source_id, "quote": quote})
     if any(value is not None for value in numeric) and not any(
             entry["source_id"] == "course:" + item["id"] for entry in validated):
-        _schema_error()
+        _schema_error("The response supplied non-null judgments without a supporting quote from the current item.")
     return {
         "item_id": item["id"], "title": item["title"],
         "item_type": item["type"], "source_ids": list(item["source_ids"]),
@@ -393,6 +432,8 @@ def _prompt(title, item, scope, sources):
         + "Keep each rationale to one or two concise sentences (at most 60 words). "
           "Use at most three strengths, concerns and recommendations each, and one "
           "to three short evidence quotes when available (none for unassessable items). "
+          "Quotes must be at most 600 characters, copied verbatim without ellipses or paraphrasing. "
+          "All text must be nonempty; list entries are at most 1200 characters and rationales at most 1800. "
           "Cover all required fields without lengthy essays.\n"
         + json.dumps(shape, ensure_ascii=False)
     )
@@ -400,6 +441,10 @@ def _prompt(title, item, scope, sources):
 
 def _preflight(client, prompt):
     """Legacy test clients without a planner keep their existing call contract."""
+    structured = getattr(client, "preflight_structured", None)
+    if callable(structured):
+        plan = structured(SYSTEM, prompt, response_schema(), max_tokens=MAX_TOKENS)
+        return plan if isinstance(plan, dict) else {}
     planner = getattr(client, "preflight", None)
     if callable(planner):
         plan = planner(SYSTEM, prompt, max_tokens=MAX_TOKENS)
@@ -520,6 +565,11 @@ def assess_design(workspace, items, client, *, scope="draft", progress=None):
     if progress is not None and not callable(progress):
         raise AssessmentError("Assessment progress must be a callback.")
     title, context, warnings = _context(workspace)
+    capabilities = getattr(client, "capabilities", None)
+    if isinstance(capabilities, dict) and not capabilities.get("structured_outputs"):
+        warnings.append(
+            "Native JSON-schema output is not verified for this model/API; this run uses "
+            "prompt-only JSON with strict local validation. Evidence and approval checks remain required.")
     prepared = _prepare_items(items)
     if any("course:" + item["id"] in context for item in prepared):
         raise AssessmentError("Assessment evidence identifiers collide with course-item sources.")
@@ -550,7 +600,10 @@ def assess_design(workspace, items, client, *, scope="draft", progress=None):
             # Never echo provider exceptions, prompts, credentials or returned text.
             try:
                 _preflight(client, chunk["prompt"])
-                response = client.call(SYSTEM, chunk["prompt"], max_tokens=MAX_TOKENS)
+                structured = getattr(client, "call_structured", None)
+                response = (structured(SYSTEM, chunk["prompt"], response_schema(), max_tokens=MAX_TOKENS)
+                            if callable(structured)
+                            else client.call(SYSTEM, chunk["prompt"], max_tokens=MAX_TOKENS))
             except Exception as exc:
                 from ai_client import AIResponseError
                 if isinstance(exc, AIResponseError):
@@ -562,7 +615,13 @@ def assess_design(workspace, items, client, *, scope="draft", progress=None):
                     "Check the selected provider key, model, quota and connection, then retry. "
                     "No complete assessment or default scores were saved."
                 ) from None
-            judgment = _validate(_parse(response), item, chunk["sources"])
+            try:
+                judgment = _validate(_parse(response), item, chunk["sources"])
+            except AssessmentError as exc:
+                raise AssessmentError(
+                    f"AI assessment stopped at {scope} item {position} of {len(prepared)}, "
+                    f"chunk {index} of {len(chunks)}. {exc}"
+                ) from None
             if len(chunks) > 1:
                 text = item["text"][chunk["start"]:chunk["end"]]
                 judgment.update(

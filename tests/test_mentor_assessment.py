@@ -276,6 +276,71 @@ class AssessmentTests(unittest.TestCase):
                 self.evaluate(lambda response, data: value)
             self.assertNotIn(value[:30], str(error.exception))
 
+    def test_validation_failures_identify_category_and_position_without_returned_values(self):
+        changes = (
+            ("not valid JSON", lambda response, data: "PRIVATE_INVALID_JSON"),
+            ("duplicate JSON fields", lambda response, data: '{"PRIVATE_FIELD":1,"PRIVATE_FIELD":2}'),
+            ("non-finite JSON number", lambda response, data: '{"PRIVATE_FIELD":NaN}'),
+            ("missing/unexpected fields", lambda response, data: {**response, "PRIVATE_FIELD": "PRIVATE_VALUE"}),
+            ("item_id did not match", lambda response, data: {**response, "item_id": "PRIVATE_ITEM_ID"}),
+            ("dimensions.alignment.score", lambda response, data: {
+                **response, "dimensions": {**response["dimensions"],
+                                          "alignment": {"score": "PRIVATE_SCORE", "rationale": "Private"}}}),
+            ("blooms.level", lambda response, data: {
+                **response, "blooms": {"level": 99, "rationale": "Private"}}),
+            ("aias.recommended_level", lambda response, data: {
+                **response, "aias": {**response["aias"], "recommended_level": "PRIVATE_LEVEL"}}),
+            ("blooms.rationale", lambda response, data: {
+                **response, "blooms": {**response["blooms"], "rationale": ""}}),
+            ("recommendations[0]", lambda response, data: {**response, "recommendations": ["PRIVATE_LONG" * 200]}),
+            ("omitted limitations", lambda response, data: {**response, "limitations": []}),
+            ("unknown or invalid evidence source", lambda response, data: {
+                **response, "evidence": [{"source_id": "PRIVATE_SOURCE", "quote": "Compare"}]}),
+            ("evidence quote did not exactly match", lambda response, data: {
+                **response, "evidence": [{"source_id": "course:one", "quote": "PRIVATE_FABRICATION"}]}),
+            ("without a supporting quote", lambda response, data: {**response, "evidence": []}),
+        )
+        for expected, transform in changes:
+            with self.subTest(expected=expected):
+                client = MockClient(transform)
+                with self.assertRaises(AssessmentError) as failure:
+                    assess_design(workspace(), [item()], client, scope="baseline")
+                message = str(failure.exception)
+                self.assertIn(expected, message)
+                self.assertIn("baseline item 1 of 1, chunk 1 of 1", message)
+                self.assertIn("No complete assessment or default scores were saved", message)
+                self.assertNotIn("PRIVATE_", message)
+                self.assertNotIn("supports structured JSON", message)
+                self.assertLessEqual(len(message), 500)
+                self.assertEqual(len(client.calls), 1)
+
+    def test_native_schema_is_closed_portable_and_independently_generated(self):
+        from mentor_assessment import response_schema
+        schema = response_schema()
+        def check(node):
+            self.assertNotIn("minimum", node)
+            self.assertNotIn("maxLength", node)
+            if node.get("type") == "object":
+                self.assertIs(node["additionalProperties"], False)
+                self.assertEqual(set(node["required"]), set(node["properties"]))
+                for child in node["properties"].values():
+                    check(child)
+            elif node.get("type") == "array":
+                check(node["items"])
+            elif "anyOf" in node:
+                self.assertEqual(node["anyOf"], [{"type": "integer"}, {"type": "null"}])
+        check(schema)
+        self.assertEqual(set(schema["properties"]["dimensions"]["properties"]), set(DIMENSIONS))
+        schema["properties"].clear()
+        self.assertIn("evidence", response_schema()["properties"])
+
+    def test_unverified_schema_fallback_is_disclosed_in_report(self):
+        client = MockClient()
+        client.capabilities = {"structured_outputs": False}
+        report = assess_design(workspace(), [item()], client)
+        self.assertTrue(any("prompt-only JSON" in warning for warning in report["warnings"]))
+        self.assertTrue(assessment_current([item()], report))
+
     def test_provider_failures_do_not_echo_details_or_return_partial_report(self):
         class Failed(MockClient):
             def call(self, system, prompt, max_tokens):

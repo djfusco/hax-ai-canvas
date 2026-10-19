@@ -66,6 +66,17 @@ token spend; actual use is billed. It does not disable reasoning, retry
 incomplete responses automatically or enlarge budgets without a ceiling.
 Older/unknown models and institutional gateway request parameters are unchanged.
 
+Item assessments use native JSON-schema output for supported direct Anthropic
+(including Sonnet), OpenAI and Gemini model/API profiles. Institutional gateways
+and unknown models retain prompt-only JSON with an explicit report warning.
+The schema itself counts toward the request budget. Schema-conforming output
+still must pass local checks for score ranges, exact source quotes and complete
+coverage; it cannot bypass instructor approval. Validation failures identify the
+item/chunk position and failing rule rather than incorrectly claiming that the
+selected model cannot produce JSON. Raw model output and private quotes are
+never included in these error messages. Failed responses are not silently
+repaired, retried with another API, or replaced by default scores.
+
 ### Large local files and final-site media
 Original archives may be up to **8 GiB**, subject to archive safety,
 instructional quotas and free disk. Browser selections copy to the local app

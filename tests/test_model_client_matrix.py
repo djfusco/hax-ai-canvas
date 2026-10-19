@@ -12,6 +12,10 @@ import httpx
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
 from ai_client import AIClient, AIResponseError, HAS_ANTHROPIC, HAS_GEMINI, HAS_OPENAI
 from model_capabilities import ModelCapabilityError, resolve_capabilities
+from mentor_assessment import (
+    response_schema, assess_design, assessment_current, AssessmentError, SYSTEM, MAX_TOKENS,
+)
+from test_mentor_assessment import item, workspace, payload, response_for
 
 
 @unittest.skipUnless(HAS_ANTHROPIC and HAS_OPENAI and HAS_GEMINI, "Install repository provider SDK dependencies.")
@@ -90,6 +94,123 @@ class ModelClientMatrixTests(unittest.TestCase):
     def assert_timeout(self, request, seconds):
         timeout = request.extensions.get("timeout", {})
         self.assertEqual(timeout.get("read"), seconds, timeout)
+
+    def test_native_anthropic_schema_and_effort_are_merged(self):
+        for model in ("claude-sonnet-4-5", "claude-sonnet-4-6", "claude-sonnet-5-5"):
+            client, requests = self.client("anthropic", model, self.anthropic(model))
+            self.assertEqual(client.call_structured("System", "Prompt", response_schema()), "Final answer")
+            body = json.loads(requests[0].content)
+            self.assertEqual(body["output_config"]["format"],
+                             {"type": "json_schema", "schema": response_schema()})
+            if model != "claude-sonnet-4-5":
+                self.assertEqual(body["output_config"]["effort"], "medium")
+            self.assertLessEqual(body["max_tokens"], 16384)
+            self.assertEqual(len(requests), 1)
+
+    def test_native_openai_chat_and_responses_schema_formats(self):
+        for model in ("gpt-4o", "gpt-5", "gpt-5-pro"):
+            response = self.responses() if model == "gpt-5-pro" else self.chat(model)
+            client, requests = self.client("openai", model, response)
+            self.assertEqual(client.call_structured("System", "Prompt", response_schema()), "Final answer")
+            body = json.loads(requests[0].content)
+            config = (body["text"]["format"] if model == "gpt-5-pro"
+                      else body["response_format"]["json_schema"])
+            self.assertEqual(config["schema"], response_schema())
+            self.assertIs(config["strict"], True)
+            self.assertIs(body["store"], False)
+            self.assertEqual(len(requests), 1)
+
+    def test_native_gemini_json_schema_and_mime_are_serialized(self):
+        client, requests = self.client("gemini", "gemini-2.5-flash", self.gemini())
+        self.assertEqual(client.call_structured("System", "Prompt", response_schema(),
+                                                timeout=77), "Final answer")
+        config = json.loads(requests[0].content)["generationConfig"]
+        self.assertEqual(config["responseJsonSchema"], response_schema())
+        self.assertEqual(config["responseMimeType"], "application/json")
+        self.assertLessEqual(config["maxOutputTokens"], 16384)
+        self.assert_timeout(requests[0], 77)
+
+    def test_unknown_gateway_legacy_and_explicit_false_do_not_receive_native_options(self):
+        disabled = resolve_capabilities("anthropic", "claude-sonnet-5-5", {
+            "capabilities": {"structured_outputs": {"supported": False}}})
+        for provider, model, response, profile in (
+                ("nebula", "claude-sonnet-5-5", self.anthropic(), None),
+                ("anthropic", "future-text", self.anthropic("future-text"), None),
+                ("anthropic", "claude-sonnet-5-5", self.anthropic(), disabled),
+                ("openai", "gpt-4o-2024-05-13", self.chat(), None),
+                ("openai", "future-text", self.chat(), None),
+                ("gemini", "future-text", self.gemini(), None)):
+            client, requests = self.client(provider, model, response, capabilities=profile)
+            client.call_structured("System", "Prompt", response_schema())
+            body = json.loads(requests[0].content)
+            self.assertNotIn("format", body.get("output_config", {}))
+            self.assertNotIn("response_format", body)
+            self.assertNotIn("responseJsonSchema", body.get("generationConfig", {}))
+            self.assertEqual(client.preflight_structured("System", "Prompt", response_schema()),
+                             client.preflight("System", "Prompt"))
+            self.assertEqual(len(requests), 1)
+
+    def test_native_schema_bytes_are_budgeted_before_any_network_call(self):
+        profile = resolve_capabilities("openai", "gpt-4o")
+        profile.update(input_limit=1000, context_window=5096)
+        client, requests = self.client("openai", "gpt-4o", self.chat(), capabilities=profile)
+        client.preflight("System", "Prompt", max_tokens=100)
+        with self.assertRaises(ModelCapabilityError):
+            client.call_structured("System", "Prompt", response_schema(), max_tokens=100)
+        self.assertEqual(requests, [])
+        normal, requests = self.client("openai", "gpt-4o", self.chat())
+        plain = normal.preflight("System", "Prompt")
+        structured = normal.preflight_structured("System", "Prompt", response_schema())
+        overhead = len(json.dumps(response_schema(), ensure_ascii=False,
+                                  separators=(",", ":")).encode()) + len("\nRESPONSE JSON SCHEMA:\n")
+        self.assertEqual(structured["input_estimate"] - plain["input_estimate"], overhead)
+
+    def test_schema_requests_keep_completion_checks_and_never_downgrade_or_retry(self):
+        for provider, model, response in (
+                ("anthropic", "claude-sonnet-5-5", {**self.anthropic(), "stop_reason": "max_tokens"}),
+                ("openai", "gpt-4o", self.chat(reason="length")),
+                ("openai", "gpt-5-pro", self.responses(status="incomplete")),
+                ("gemini", "gemini-2.5-flash", self.gemini(reason="MAX_TOKENS"))):
+            client, requests = self.client(provider, model, response)
+            with patch("ai_client.time.sleep") as sleep, self.assertRaises(AIResponseError):
+                client.call_structured("System", "Prompt", response_schema())
+            sleep.assert_not_called()
+            self.assertEqual(len(requests), 1)
+        client, requests = self.client("anthropic", "claude-sonnet-5-5", self.anthropic(), statuses=[400])
+        with self.assertRaises(Exception):
+            client.call_structured("System", "Prompt", response_schema())
+        self.assertEqual(len(requests), 1)
+
+    def test_real_sdk_assessment_chunks_account_for_native_schema_and_reject_fake_quotes(self):
+        def response(request):
+            body = json.loads(request.content)
+            data = payload(body["messages"][-1]["content"])
+            return self.chat(content=json.dumps(response_for(data)))
+        profile = resolve_capabilities("openai", "gpt-4o")
+        profile.update(input_limit=18000, context_window=22096, output_limit=4096)
+        client, requests = self.client("openai", "gpt-4o", response, capabilities=profile)
+        original = item(html="<p>" + "Compare documented evidence. " * 500 + "</p>")
+        report = assess_design(workspace(), [original], client)
+        self.assertGreater(len(requests), 1)
+        self.assertTrue(assessment_current([original], report))
+        self.assertEqual(report["coverage"]["chunks_evaluated"], len(requests))
+        for request in requests:
+            body = json.loads(request.content)
+            plan = client.preflight_structured(SYSTEM, body["messages"][-1]["content"],
+                                               response_schema(), max_tokens=MAX_TOKENS)
+            self.assertLessEqual(plan["input_estimate"], 18000)
+            self.assertEqual(body["response_format"]["json_schema"]["schema"], response_schema())
+
+        def forged(request):
+            data = payload(json.loads(request.content)["messages"][-1]["content"])
+            value = response_for(data)
+            value["evidence"][0]["quote"] = "PRIVATE_FABRICATED_QUOTE"
+            return self.chat(content=json.dumps(value))
+        client, requests = self.client("openai", "gpt-4o", forged)
+        with self.assertRaisesRegex(AssessmentError, "evidence quote did not exactly match") as error:
+            assess_design(workspace(), [item()], client)
+        self.assertNotIn("PRIVATE_FABRICATED_QUOTE", str(error.exception))
+        self.assertEqual(len(requests), 1)
 
     def test_openai_chat_normal_budget_storage_role_and_explicit_timeout(self):
         client, requests = self.client("openai", "gpt-4o", self.chat())

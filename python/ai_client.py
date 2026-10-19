@@ -9,6 +9,7 @@ call interface used by both the evaluation and transform phases.
 from __future__ import annotations
 
 import logging
+import json
 import os
 import time
 from typing import Optional
@@ -248,10 +249,34 @@ class AIClient:
                                  else resolve_capabilities(self.provider, self.model))
         self._init(api_key, base_url)
 
-    def preflight(self, system, prompt, max_tokens=4096):
+    def _schema_context(self, prompt, response_schema):
+        if response_schema is None or not (self.capabilities or {}).get("structured_outputs"):
+            return prompt
+        from model_capabilities import ModelCapabilityError
+        try:
+            if not isinstance(response_schema, dict):
+                raise ValueError()
+            encoded = json.dumps(response_schema, ensure_ascii=False, allow_nan=False,
+                                 separators=(",", ":"))
+            if len(encoded) > 64000:
+                raise ValueError()
+        except (TypeError, ValueError, RecursionError):
+            raise ModelCapabilityError("The structured response schema is invalid or exceeds local limits.") from None
+        return prompt + "\nRESPONSE JSON SCHEMA:\n" + encoded
+
+    def preflight(self, system, prompt, max_tokens=4096, *, response_schema=None):
         """Offline admission only: never truncates text or sends provider data."""
         from model_capabilities import plan_request
-        return plan_request(self.provider, self.model, system, prompt, max_tokens, self.capabilities)
+        return plan_request(self.provider, self.model, system,
+                            self._schema_context(prompt, response_schema),
+                            max_tokens, self.capabilities)
+
+    def preflight_structured(self, system, prompt, schema, max_tokens=4096):
+        return self.preflight(system, prompt, max_tokens, response_schema=schema)
+
+    def call_structured(self, system, prompt, schema, max_tokens=4096, timeout=None):
+        """Request a native schema only when the pinned API/model supports it."""
+        return self.call(system, prompt, max_tokens, timeout, response_schema=schema)
 
     def input_budget(self, max_tokens=4096):
         return self.preflight("", "", max_tokens)["available_input_tokens"]
@@ -361,6 +386,8 @@ class AIClient:
         prompt:     str,
         max_tokens: int            = 4096,
         timeout:    Optional[int]  = None,
+        *,
+        response_schema: Optional[dict] = None,
     ) -> str:
         """
         Call the LLM.  Retries up to 3 times with exponential back-off
@@ -369,7 +396,10 @@ class AIClient:
         last_exc: Optional[Exception] = None
         for attempt in range(3):
             try:
-                return self._call_once(system, prompt, max_tokens, timeout)
+                if response_schema is None:
+                    return self._call_once(system, prompt, max_tokens, timeout)
+                return self._call_once(system, prompt, max_tokens, timeout,
+                                       response_schema=response_schema)
             except Exception as exc:
                 last_exc = exc
                 if not _retryable(exc):
@@ -393,16 +423,26 @@ class AIClient:
         prompt:     str,
         max_tokens: int,
         timeout:    Optional[int],
+        *,
+        response_schema: Optional[dict] = None,
     ) -> str:
         p = self.provider
-        plan = self.preflight(system, prompt, max_tokens) if self.isolated_credentials else None
+        plan = (self.preflight(system, prompt, max_tokens, response_schema=response_schema)
+                if self.isolated_credentials else None)
+        schema = (response_schema if plan and plan["capabilities"]["structured_outputs"] else None)
         output = plan["max_output_tokens"] if plan else max_tokens
         effective_timeout = timeout or max(60, 30 + output // 100)
 
         if p in ("anthropic", "nebula"):
             options = {"max_tokens": output}
+            output_config = {}
             if plan and plan["reasoning_effort"]:
-                options["extra_body"] = {"output_config": {"effort": plan["reasoning_effort"]}}
+                output_config["effort"] = plan["reasoning_effort"]
+            if schema is not None:
+                output_config["format"] = {"type": "json_schema", "schema": schema}
+            if output_config:
+                # extra_body preserves compatibility with older installed SDKs.
+                options["extra_body"] = {"output_config": output_config}
             r = self._client.messages.create(  # type: ignore[union-attr]
                 model=self.model,
                 **options,
@@ -418,11 +458,18 @@ class AIClient:
                            "max_output_tokens": output, "store": False, "timeout": effective_timeout}
                 if plan["reasoning_effort"]:
                     options["reasoning"] = {"effort": plan["reasoning_effort"]}
+                if schema is not None:
+                    options["text"] = {"format": {"type": "json_schema", "name": "course_assessment",
+                                                 "schema": schema, "strict": True}}
                 return _openai_response_text(self._client.responses.create(**options))
             token_options = ({plan["output_parameter"]: output, "store": False} if plan
                              else {"max_tokens": max_tokens, "temperature": 0.5})
             if plan and plan["reasoning_effort"]:
                 token_options["reasoning_effort"] = plan["reasoning_effort"]
+            if schema is not None:
+                token_options["response_format"] = {
+                    "type": "json_schema", "json_schema": {
+                        "name": "course_assessment", "schema": schema, "strict": True}}
             r = self._client.chat.completions.create(  # type: ignore[union-attr]
                 model=self.model,
                 **token_options,
@@ -437,11 +484,14 @@ class AIClient:
         if p == "gemini":
             # Gemini uses a single combined prompt
             combined = f"{system}\n\n{prompt}" if system else prompt
+            config = ({"max_output_tokens": output,
+                       "http_options": {"timeout": effective_timeout * 1000}} if plan else {})
+            if schema is not None:
+                config.update(response_mime_type="application/json", response_json_schema=schema)
             r = self._client.models.generate_content(  # type: ignore[union-attr]
                 model=self.model,
                 contents=combined,
-                **({"config": {"max_output_tokens": output,
-                                "http_options": {"timeout": effective_timeout * 1000}}} if plan else {}),
+                **({"config": config} if config else {}),
             )
             return _gemini_text(r) if plan else r.text.strip()
 

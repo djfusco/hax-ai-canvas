@@ -80,7 +80,7 @@ def synthetic_cartridge():
 
 
 def provider_fixture_model():
-    return "claude-sonnet-5-5" if OPTIONS.provider == "anthropic" else "synthetic-browser-model"
+    return "claude-sonnet-5-5" if OPTIONS.provider == "anthropic" else "gpt-4o"
 
 
 def environment(home, cli, node):
@@ -146,11 +146,20 @@ def install_provider_http_fixture(root):
             body = json.loads(request.content)
             if body["model"] != provider_fixture_model():
                 raise AssertionError("The selected model was not pinned into inference")
-            if anthropic and (body.get("output_config") != {"effort": "medium"}
+            if anthropic and (body.get("output_config", {}).get("effort") != "medium"
                               or not 8192 <= body["max_tokens"] <= 16384):
                 raise AssertionError("The bounded reasoning profile was not applied")
             prompt = body["messages"][-1]["content"]
             if prompt.startswith("Assess this one item in the explicit local review scope"):
+                from mentor_assessment import response_schema
+                if anthropic:
+                    expected_format = {"effort": "medium", "format": {
+                        "type": "json_schema", "schema": response_schema()}}
+                    if body.get("output_config") != expected_format:
+                        raise AssertionError("Native Sonnet schema and effort were not both applied")
+                elif body.get("response_format") != {"type": "json_schema", "json_schema": {
+                        "name": "course_assessment", "schema": response_schema(), "strict": True}}:
+                    raise AssertionError("Native OpenAI assessment schema was not applied")
                 payload = json.loads(prompt.split("\n", 1)[1].split("\nReturn exactly", 1)[0])
                 identifier = payload["item"]["id"]
                 sources = payload["evidence_sources"]
@@ -173,6 +182,10 @@ def install_provider_http_fixture(root):
                     "evidence": [{"source_id": current["source_id"], "quote": current["text"][:200]}],
                     "limitations": ["Synthetic fixture only; no measured outcomes or established AI conditions."],
                 }
+                reject = root / "reject-next-assessment"
+                if reject.is_file():
+                    data["evidence"][0]["quote"] = "PRIVATE-FABRICATED-EVIDENCE"
+                    reject.unlink()
                 if not any(call["kind"].startswith("assessment_") for call in calls):
                     time.sleep(1.2)  # Exercise visible waiting feedback without a paid request.
                 kind = "assessment_" + payload["scope"]
@@ -410,6 +423,30 @@ class LocalEndToEndTest(unittest.TestCase):
                     page.wait_for_function("busy === false && workspace.build_revision === null")
                     self.assertFalse(api(base)["draft"]["assessment_current"])
                     self.assertTrue(page.locator("#approve-build").is_disabled())
+                    # A valid JSON/schema response can still contain an invented
+                    # quote. Surface the actual rule, retain edits, and recover
+                    # only after a new successful review (never a hidden retry).
+                    (root / "reject-next-assessment").touch()
+                    before_failure = api(base)
+                    page.locator("#mentor-message").fill("Review the exact edited pages before approval.")
+                    page.locator("#send-mentor-message").click()
+                    page.wait_for_function(
+                        "busy === false && workspace.active_job === null && workspace.jobs.at(-1)?.status === 'failed'",
+                        timeout=30000)
+                    failure = page.locator("#analysis-feedback-message").inner_text()
+                    self.assertIn("draft item 1 of 2, chunk 1 of 1", failure)
+                    self.assertIn("evidence quote did not exactly match", failure)
+                    self.assertNotIn("PRIVATE-FABRICATED-EVIDENCE", failure)
+                    self.assertNotIn("supports structured JSON", failure)
+                    failed = api(base)
+                    self.assertEqual(failed["draft_revision"], before_failure["draft_revision"])
+                    self.assertEqual(failed["draft"]["items"], before_failure["draft"]["items"])
+                    self.assertFalse(failed["draft"]["assessment_current"])
+                    api(base + "/approve-build", "POST", {"draft_revision": failed["draft_revision"]}, status=409)
+                    api(base + "/build", "POST", {"draft_revision": failed["draft_revision"]}, status=409)
+                    self.assertTrue(page.locator("#approve-build").is_disabled())
+                    self.assertTrue(page.locator("#build-course").is_disabled())
+                    page.screenshot(path=str(root / "assessment-validation-error.png"), full_page=True)
                 draft_revision = page.evaluate("workspace.draft_revision")
                 api(base + "/approve-build", "POST", {"draft_revision": draft_revision}, status=409)
                 self.assertTrue(page.locator("#approve-build").is_disabled())
@@ -530,7 +567,7 @@ class LocalEndToEndTest(unittest.TestCase):
                         {call["kind"] for call in calls}))
                     kinds = [call["kind"] for call in calls]
                     self.assertEqual(kinds.count("assessment_baseline"), 2 if mode == "ai-imported" else 0)
-                    self.assertEqual(kinds.count("assessment_draft"), 2 if mode == "ai-imported" else 4)
+                    self.assertEqual(kinds.count("assessment_draft"), 2 if mode == "ai-imported" else 5)
                     self.assertTrue(all(call["path"] in ("/v1/models", "/v1/chat/completions", "/v1/messages")
                                         for call in calls))
                     self.assertNotIn("PRIVATE-THINKING-NOT-ANSWER", json.dumps(api(base)))
