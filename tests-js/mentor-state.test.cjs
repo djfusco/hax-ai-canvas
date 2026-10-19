@@ -877,3 +877,11 @@ test('late HAX polling cannot expose a different workspace site URL', async t =>
   assert.equal(ui.get('hax-site-panel').hidden, true);
   assert.equal(ui.evaluate('workspace.id'), 'workspace-two');
 });
+
+test('blank-course source card fires startBlankCourse on click', async t => {
+  const html = fs.readFileSync(path.join(__dirname, '../python/app/templates/mentor.html'), 'utf8');
+  const match = html.match(/<div[^>]*id="source-card-blank"[^>]*>/);
+  assert.ok(match, 'source-card-blank element not found');
+  assert.ok(match[0].includes('onclick="startBlankCourse()"'),
+    'source-card-blank must have onclick="startBlankCourse()"');
+});
