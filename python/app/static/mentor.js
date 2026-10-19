@@ -633,10 +633,11 @@ async function renderWorkspace() {
   el('artifact-links').replaceChildren();
   if (workspace.artifact && workspace.stage === 'built') {
     const link = itemText(el('artifact-links'), 'a', 'Download approved course content');
-    link.href = endpoint('/download'); link.className = 'btn btn-primary';
-    const preview = itemText(el('artifact-links'), 'a', 'Open approved preview');
+    link.href = endpoint('/download'); link.className = 'btn btn-ghost';
+    const preview = itemText(el('artifact-links'), 'a', 'Preview student view (opens in a new tab)');
     preview.href = endpoint('/preview/index.html'); preview.target = '_blank';
-    preview.rel = 'noopener'; preview.className = 'btn btn-ghost';
+    preview.rel = 'noopener noreferrer'; preview.className = 'btn btn-primary';
+    el('artifact-links').replaceChildren(preview, link);
   }
   el('mentor-jobs').textContent = (workspace.jobs || []).map(j =>
     `${j.kind}: ${j.status}${j.error ? ' — ' + j.error : ''}`).join('\n') || 'No processing jobs yet.';

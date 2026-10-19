@@ -827,17 +827,19 @@ def create_mentor_blueprint(root_provider):
         artifact = workspace.get("artifact")
         if not artifact or workspace["stage"] != "built":
             abort(404)
+        from mentor_preview import delivery_headers
+        headers = delivery_headers(filename, artifact.get("preview_style_hash"))
         if hosted_mode():
             import mimetypes
             response = Response(backend().preview_stream(workspace, filename),
                                 content_type=mimetypes.guess_type(filename)[0] or "application/octet-stream")
-            response.headers["Content-Security-Policy"] = "sandbox allow-same-origin; default-src 'none'; img-src 'self'; media-src 'self'; base-uri 'self'"
+            response.headers.update(headers)
             return response
         directory = Path(artifact["preview_dir"]).resolve()
         if not directory.is_relative_to(root() / "artifacts"):
             abort(404)
         response = send_from_directory(directory, filename)
-        response.headers["Content-Security-Policy"] = "sandbox allow-same-origin; default-src 'none'; img-src 'self'; media-src 'self'; base-uri 'self'"
+        response.headers.update(headers)
         return response
 
     return bp

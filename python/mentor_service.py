@@ -325,25 +325,20 @@ def build_artifact(workspace: dict, destination: Path) -> dict:
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=False)
     locations = {i["id"]: f"pages/{uuid.uuid4().hex}/index.html" for i in draft["items"]}
+    preview_locations = {identifier: location.rsplit("/", 1)[0] + "/preview.html"
+                         for identifier, location in locations.items()}
     manifest = {"id": workspace["id"], "title": workspace["title"], "items": []}
-    links = []
+    assets_in_preview = set()
     for position, item in enumerate(draft["items"]):
         location = locations[item["id"]]
         path = destination / location
         path.parent.mkdir(parents=True, exist_ok=True)
         content = rewrite_import_item_links(sanitize_import_html(item["html"]), locations)
         path.write_text(content, encoding="utf-8")
-        preview = path.with_name("preview.html")
-        preview.write_text(
-            '<!doctype html><html><head><meta charset="utf-8"><base href="../../">'
-            f"<title>{escape(item['title'])}</title></head><body>{content}</body></html>",
-            encoding="utf-8",
-        )
         manifest["items"].append({
             "id": item["id"], "title": item["title"], "location": location,
             "slug": str(position + 1), "order": position, "indent": 0, "parent": None,
         })
-        links.append(f'<li><a href="{preview.relative_to(destination).as_posix()}">{escape(item["title"])}</a></li>')
     export_dir = workspace.get("export_dir")
     if export_dir:
         from imscc_import import ASSET_EXTENSIONS
@@ -356,12 +351,14 @@ def build_artifact(workspace: dict, destination: Path) -> dict:
                     and source.suffix.lower() in ASSET_EXTENSIONS):
                 (destination / "files").mkdir(exist_ok=True)
                 shutil.copy2(source, destination / "files" / name)
+                assets_in_preview.add("files/" + name)
     (destination / "site.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    from mentor_preview import render_preview, PREVIEW_STYLE_HASH
+    for position, item in enumerate(draft["items"]):
+        (destination / preview_locations[item["id"]]).write_text(
+            render_preview(workspace, preview_locations, assets_in_preview, position=position), encoding="utf-8")
     (destination / "index.html").write_text(
-        '<!doctype html><html><head><meta charset="utf-8"><title>Approved course preview</title></head>'
-        f"<body><h1>{escape(workspace['title'])}</h1><p>Instructor-approved content preview. "
-        "This package contains a HAX-compatible content manifest, not an installed HAX runtime.</p><ol>"
-        + "".join(links) + "</ol></body></html>", encoding="utf-8"
+        render_preview(workspace, preview_locations, assets_in_preview), encoding="utf-8"
     )
     (destination / "approval.json").write_text(json.dumps({
         "workspace_id": workspace["id"], "input_revision": workspace["revision"],
@@ -375,4 +372,4 @@ def build_artifact(workspace: dict, destination: Path) -> dict:
                 archive.write(path, path.relative_to(destination))
     return {"path": str(package), "preview_dir": str(destination),
             "items": len(draft["items"]), "draft_revision": workspace["draft_revision"],
-            "kind": "approved-course-content"}
+            "kind": "approved-course-content", "preview_style_hash": PREVIEW_STYLE_HASH}

@@ -368,6 +368,19 @@ class HostedApiTests(unittest.TestCase):
         self.workspace = self.get(self.base).json
         self.assertEqual(self.workspace["stage"], "built")
         self.assertNotIn("blob_path", self.workspace["artifact"])
+        from mentor_preview import PREVIEW_STYLE_HASH
+        preview = self.get(self.base + "/preview/index.html")
+        self.assertEqual(preview.status_code, 200)
+        self.assertIn(PREVIEW_STYLE_HASH, preview.headers["Content-Security-Policy"])
+        self.assertIn("not published", preview.get_data(as_text=True))
+        self.assertNotIn("'unsafe-inline'", preview.headers["Content-Security-Policy"])
+        self.assertEqual(preview.headers["Cache-Control"], "no-store")
+        preview.close()
+        second = web.app.test_client()
+        session = self.get("/mentor/api/session", second).json
+        second.post("/mentor/api/login", json={"code": self.env["HAX_BETA_ACCESS_CODE"]},
+                    headers={"X-Mentor-CSRF": session["csrf"]}, base_url="https://mentor.example")
+        self.assertEqual(self.get(self.base + "/preview/index.html", second).status_code, 404)
         response = self.get(self.base + "?draft_revision=" + str(self.workspace["draft_revision"]))
         self.assertTrue(response.is_streamed)
         self.assertTrue(response.json["keep_draft"])

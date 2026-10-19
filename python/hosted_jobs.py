@@ -190,6 +190,7 @@ def execute_mentor(owner, workspace_id, job_id, kind, provider="guided", backend
                         "blob_path": path, "size": receipt["size"], "sha256": receipt["sha256"],
                         "items": artifact["items"], "draft_revision": workspace["draft_revision"],
                         "kind": artifact["kind"],
+                        "preview_style_hash": artifact.get("preview_style_hash"),
                     })
             else:
                 raise ValueError("Unsupported mentor job.")

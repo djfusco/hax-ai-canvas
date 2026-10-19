@@ -42,6 +42,7 @@ any stored source. Optional inputs and processing/revision details are grouped
 separately. Polling preserves unsaved edits and conversation reading position,
 and running-job status clears when the job completes.
 
+
 Hosted mode now defaults to verified email accounts through Neon managed Better
 Auth. In your Neon project/branch's **Auth / Better Auth** settings, enable email
 sign-in and Email OTP, configure a dedicated production SMTP sender, and add the
@@ -74,6 +75,28 @@ when migrating; do not keep them available against the production database.
 
 `HAX_AUTH_MODE=browser-beta` is an explicit compatibility/rollback option for
 the old browser-only beta, not real user accounts. The default is `neon`.
+
+### Private student-view preview
+
+After approving the exact draft and building its content, select **Preview
+student view (opens in a new tab)**. Newly built packages include a responsive
+course overview, course navigation, styled approved pages and previous/next
+links. A persistent **Private student-view preview — not published** banner
+distinguishes the preview from a public course. This is a static presentation,
+not an installed HAX runtime, a HAX theme preview, or the HAX editor.
+
+The preview uses only approved draft items, not chats, model rationale or raw
+reference/policy context. Retained images and supported media stay local to the
+package; linked documents download rather than run inside the page. Missing
+and external media are not silently restored or fetched. Every hosted page and
+asset request remains owner-authorized. There are no preview scripts, remote
+fonts or external stylesheets; only the server-generated stylesheet is allowed
+by its content-security hash.
+
+The downloaded ZIP also opens as a static course through `index.html`.
+Already-built packages are immutable: **build the approved content again** to
+get this layout for an older workspace. This does not publish anything or alter
+the approved draft; `site.json` still references the content fragments.
 
 ### Administrator setup
 
