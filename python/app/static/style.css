@@ -124,6 +124,11 @@ code { font-family: 'SF Mono', Consolas, monospace; background: #f0f0f0; padding
 .mentor-steps li[aria-current="step"] { background: #1565c0; border-color: #1565c0; color: #fff; font-weight: 700; }
 .mentor-eyebrow { font-weight: 700; font-size: .82rem; text-transform: uppercase; letter-spacing: .04em; color: #1565c0; }
 .mentor-mode { border-top: 1px solid #cbdcf0; margin-top: 18px; padding-top: 12px; overflow-wrap: anywhere; }
+.mentor-capabilities { margin: 14px 0; padding: 14px; border: 1px solid #a7c3e6; border-radius: 8px; background: #f5f9ff; overflow-wrap: anywhere; }
+.mentor-capabilities p { margin: 8px 0; }
+.mentor-capabilities ul { padding-left: 20px; }
+.mentor-capabilities[data-status="unverified"], .mentor-capabilities[data-status="unsupported"] { border-color: #d99a6c; background: #fff4ed; }
+.mentor-capabilities[hidden] { display: none; }
 .mentor-upload { margin: 18px 0; padding: 20px; background: #eef5ff; border: 2px solid #a7c3e6; border-radius: 10px; scroll-margin-top: 90px; }
 .mentor-upload h4 { font-size: 1.05rem; margin: 0 0 8px; color: #142e50; }
 .mentor-upload p { margin: 8px 0; overflow-wrap: anywhere; }

@@ -161,7 +161,8 @@ def execute_mentor(owner, workspace_id, job_id, kind, provider="guided", backend
                     or active.get("credential_version") != saved.get("version")):
                 raise ValueError("Provider credentials expired or were removed.")
             ai = AIClient(provider, api_key=saved["api_key"], model=active["model"],
-                          base_url=saved.get("base_url") or None, isolated_credentials=True)
+                          base_url=saved.get("base_url") or None, isolated_credentials=True,
+                          capabilities=active.get("model_capabilities"))
         with service.materialize(workspace) as hydrated:
             hydrated = _redact(service, owner, hydrated)
             if kind == "analysis":
@@ -195,9 +196,16 @@ def execute_mentor(owner, workspace_id, job_id, kind, provider="guided", backend
             else:
                 raise ValueError("Unsupported mentor job.")
         return {"status": "completed"}
-    except Exception:
+    except Exception as exc:
+        from ai_client import AIResponseError
+        from mentor_assessment import AssessmentError
+        from model_capabilities import ModelCapabilityError
+        message = (_redact(service, owner, str(exc))[:500]
+                   if isinstance(exc, (AIResponseError, AssessmentError, ModelCapabilityError))
+                   else None)
         try:
-            service.store.fail_job(owner, workspace_id, job_id, "Hosted processing failed.")
+            service.store.fail_job(owner, workspace_id, job_id, "Hosted processing failed.",
+                                   public_message=message)
         except WorkspaceConflict:
             pass
         return {"status": "failed"}

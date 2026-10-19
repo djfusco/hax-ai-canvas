@@ -3,6 +3,7 @@ import os
 import re
 import time
 from urllib.parse import urlsplit
+from model_capabilities import resolve_capabilities
 
 
 class ModelDiscoveryError(ValueError):
@@ -81,12 +82,14 @@ def discover_models(provider, saved, *, transport=None):
                     identifier = item.get("name", "") if provider == "gemini" else item.get("id", "")
                     if provider == "gemini":
                         identifier = identifier.removeprefix("models/")
-                        if "generateContent" not in item.get("supportedGenerationMethods", []):
+                        methods = item.get("supportedGenerationMethods", [])
+                        if not isinstance(methods, list) or "generateContent" not in methods:
                             continue
                     identifier = model_id(identifier)
                     if key in identifier:
                         continue
-                    if re.search(r"(embed|whisper|tts|image|audio|realtime|moderation|dall-e|video|sora)", identifier, re.I):
+                    if provider != "nebula" and re.search(
+                            r"(embed|whisper|tts|image|audio|realtime|moderation|dall-e|video|sora)", identifier, re.I):
                         continue
                     if item.get("lifecycle") == "retired" or identifier in seen:
                         continue
@@ -96,7 +99,8 @@ def discover_models(provider, saved, *, transport=None):
                         label = identifier
                     label = label.replace(key, "[credential removed]")
                     result.append({"id": identifier, "name": "".join(c for c in label[:160] if c.isprintable()),
-                                   "compatibility": "unverified" if provider in ("openai", "nebula") else "text"})
+                                   "compatibility": "unverified" if provider in ("openai", "nebula") else "text",
+                                   "capabilities": resolve_capabilities(provider, identifier, item)})
                     if len(result) > 500:
                         raise ModelDiscoveryError("More than 500 text-model candidates were returned. Narrow the provider catalog.")
                 cursor = data.get("nextPageToken") if provider == "gemini" else data.get("last_id") if data.get("has_more") else None

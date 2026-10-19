@@ -128,7 +128,7 @@ class CredentialVault:
     def update_preferences(self, owner, provider, expected_version, changes):
         """Compare-and-swap prevents a slow catalog response overwriting a new key."""
         from mentor_store import WorkspaceConflict
-        if not isinstance(changes, dict) or set(changes) - {"model", "catalog", "catalog_expires"}:
+        if not isinstance(changes, dict) or set(changes) - {"model", "catalog", "catalog_expires", "capabilities"}:
             raise ValueError("Invalid provider preferences.")
         with self._db() as db:
             row = db.execute("SELECT sealed, expires FROM credentials WHERE owner=? AND provider=?",
@@ -140,6 +140,12 @@ class CredentialVault:
                 raise WorkspaceConflict("Credentials changed. Refresh models for the new key.")
             if changes.get("model") and saved["api_key"] in changes["model"]:
                 raise ValueError("A model identifier must not contain the provider key.")
+            if "model" in changes and "capabilities" not in changes:
+                saved.pop("capabilities", None)
+            if "capabilities" in changes:
+                from model_capabilities import validate_capabilities
+                changes = {**changes, "capabilities": validate_capabilities(
+                    provider, changes.get("model", saved.get("model")), changes["capabilities"])}
             saved.update(changes)
             sealed = self.cipher.encrypt(json.dumps(saved, allow_nan=False).encode())
             cursor = db.execute("UPDATE credentials SET sealed=? WHERE owner=? AND provider=? AND sealed=?",

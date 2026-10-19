@@ -58,6 +58,13 @@ Truncation is disclosed. Review limits remain 500 items / 16 MiB instructional
 JSON, 2 MiB per item, and 30 optional materials. Media and unextracted text are
 not semantically assessed. Provider/schema failures produce no counterfeit
 neutral scores. Analysis/review can make multiple paid provider requests.
+For documented direct Anthropic reasoning models, the app uses medium effort
+and adds 8,192 tokens of thinking headroom to each answer allowance, with an
+automatic ceiling of 16,384 output tokens per request in the mentor workflow
+(11,692 for a 3,500-token assessment). This is an upper limit, not a forced
+token spend; actual use is billed. It does not disable reasoning, retry
+incomplete responses automatically or enlarge budgets without a ceiling.
+Older/unknown models and institutional gateway request parameters are unchanged.
 
 ### Large local files and final-site media
 Original archives may be up to **8 GiB**, subject to archive safety,

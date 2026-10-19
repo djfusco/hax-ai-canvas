@@ -11,6 +11,7 @@ import uuid
 import zipfile
 
 from bs4 import BeautifulSoup
+from model_capabilities import ModelCapabilityError
 
 from imscc_content import (
     original_import_html, preserve_import_resources, rewrite_import_item_links,
@@ -96,7 +97,23 @@ def inventory(workspace: dict) -> dict:
     }
 
 
-def context(workspace: dict, items: list[dict] | None = None) -> str:
+def _validate_prompt_items(items):
+    if not isinstance(items, list) or len(items) > MAX_ITEMS:
+        raise ValueError("Mentor review supports at most 500 instructional items; choose a smaller scope.")
+    total = 0
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError("Mentor instructional items must be structured objects.")
+        content = item.get("html", "")
+        if not isinstance(content, str):
+            raise ValueError("Mentor instructional text must be a string.")
+        size = len(content.encode("utf-8"))
+        total += size
+        if size > 2 * 1024**2 or total > 16 * 1024**2:
+            raise ValueError("Mentor text exceeds the 2 MiB item or 16 MiB review scope.")
+
+
+def context(workspace: dict, items: list[dict] | None = None, *, excerpt_scale=1.0) -> str:
     if items is None:
         items, _ = source_items(workspace)
     info = inventory(workspace)
@@ -109,23 +126,93 @@ def context(workspace: dict, items: list[dict] | None = None) -> str:
     ]
     # Reserve room for supplemental evidence instead of letting the course
     # consume the whole window. Report coverage rather than claiming full RAG.
-    remaining = 18000
+    remaining = int(18000 * excerpt_scale)
+    course_sent = 0
+    course_total = 0
     for item in items:
         text = BeautifulSoup(item["html"], "html.parser").get_text(" ", strip=True)
-        snippet = text[:min(1200, remaining)]
-        if not snippet:
-            break
+        snippet = text[:min(int(1200 * excerpt_scale), remaining)]
         sections.append(f"SOURCE course:{item['id']} ({item['type']}, {item['title']}): {snippet}")
         remaining -= len(snippet)
+        course_total += len(text)
+        course_sent += len(snippet)
+    material_total = 0
+    material_sent = 0
+    material_limit = int(min(2500, 14000 // max(1, len(workspace.get("materials", [])))) * excerpt_scale)
     for material in workspace.get("materials", []):
+        text = str(material.get("text", ""))
+        snippet = text[:material_limit]
         sections.append(
             f"SUPPLEMENT {material['id']} ({material.get('role')}, {material.get('name')}):\n"
-            + str(material.get("text", ""))[:2500]
+            + snippet
         )
+        material_total += len(text)
+        material_sent += len(snippet)
     sections.append(
-        "CONTEXT LIMIT: course and document excerpts are bounded. Do not claim to have read omitted text."
+        "CONTEXT LIMIT: course and document excerpts are bounded. Do not claim to have read omitted text. "
+        f"Course visible-text characters supplied: {course_sent}/{course_total}; "
+        f"supplemental text characters supplied: {material_sent}/{material_total}. "
+        "Source IDs and role labels are retained even when text is omitted. "
+        "Omitted policies/constraints are not evidence of permission; flag uncertainty and verify originals. "
+        "The instructor design brief is supplied unchanged."
     )
-    return "\n\n".join(sections)[:MAX_CONTEXT]
+    return "\n\n".join(sections)
+
+
+def _fit_prompt(workspace, client, build, max_tokens, *, items=None):
+    """Fit excerpts only; never slice JSON, instructor intent or response schema."""
+    planner = getattr(client, "preflight", None)
+    for scale in (1.0, 0.5, 0.25, 0.125, 0.0625, 0.0):
+        source_context = context(workspace, items, excerpt_scale=scale)
+        prompt = build(source_context, scale)
+        if not callable(planner):
+            return prompt, []
+        try:
+            plan = planner(SYSTEM, prompt, max_tokens=max_tokens)
+        except ValueError:
+            continue
+        warnings = list(plan.get("warnings", [])) if isinstance(plan, dict) else []
+        counts = re.findall(r"characters supplied: (\d+)/(\d+)", source_context)
+        if any(sent != total for sent, total in counts):
+            warnings.append(
+                "Prompt evidence coverage (text characters): course "
+                f"{counts[0][0]}/{counts[0][1]}, supplemental {counts[1][0]}/{counts[1][1]}. "
+                "Omitted text was not reviewed; verify original constraints. Instructor brief is unchanged."
+            )
+        if scale < 1:
+            warnings.append(
+                "Context excerpts/conversation were reduced for the selected model. Coverage is disclosed "
+                "in the prompt; omitted constraints require instructor verification against original sources."
+            )
+        return prompt, warnings
+    raise ModelCapabilityError(
+        "The selected model cannot fit the essential mentor instructions, instructor brief, source IDs "
+        "and response schema. Shorten the brief/review message, reduce the review scope, or choose "
+        "a larger-context model. No generation request was sent."
+    ) from None
+
+
+def _call_fitted(client, prompt, max_tokens):
+    planner = getattr(client, "preflight", None)
+    if callable(planner):
+        planner(SYSTEM, prompt, max_tokens=max_tokens)
+    return client.call(SYSTEM, prompt, max_tokens=max_tokens)
+
+
+def _draft_excerpt(draft, scale):
+    """Project a valid JSON snapshot; never mutate the proposed/approved draft."""
+    items = draft.get("items", [])
+    _validate_prompt_items(items)
+    limit = int(min(12000, 45000 // max(1, len(items))) * scale)
+    return {
+        "summary": str(draft.get("summary", ""))[:int(6000 * scale)],
+        "items": [{**{key: item.get(key) for key in ("id", "type", "title", "source_ids")},
+                   "html_excerpt": item.get("html", "")[:limit],
+                   "html_characters": len(item.get("html", "")),
+                   "excerpt_characters": min(limit, len(item.get("html", "")))}
+                  for item in items],
+        "coverage": "Draft HTML excerpts only; all item/source IDs retained. Omitted text is not reviewed.",
+    }
 
 
 def parse_json(text: str) -> dict:
@@ -151,16 +238,21 @@ def interview(workspace: dict, message: str, client=None) -> str:
             "Your feedback is recorded in the editable design brief. Approve the direction only when it reflects your intent."
         )
     history = workspace.get("messages", [])[-12:]
-    prompt = (
-        context(workspace) + "\n\nRECENT CONVERSATION:\n" + json.dumps(history, ensure_ascii=False)
+    def build(source_context, scale):
+        count = int(len(history) * scale)
+        retained = history[-count:] if count else []
+        return (
+        source_context + "\n\nRECENT CONVERSATION:\n" + json.dumps(retained, ensure_ascii=False)
+        + f"\nCONVERSATION COVERAGE: {len(retained)} of {len(history)} recent messages supplied."
         + "\n\nINSTRUCTOR: " + message
         + '\nReturn {"reply":"A concise evidence-aware response with 1-3 focused questions."}.'
-    )
-    data = parse_json(client.call(SYSTEM, prompt, max_tokens=1400))
+        )
+    prompt, fit_warnings = _fit_prompt(workspace, client, build, 1400)
+    data = parse_json(_call_fitted(client, prompt, 1400))
     reply = data.get("reply")
     if not isinstance(reply, str) or not reply.strip() or len(reply) > 12000:
         raise ValueError("The mentor response was empty or too large.")
-    return reply
+    return reply + ("\n\nContext coverage: " + " ".join(fit_warnings) if fit_warnings else "")
 
 
 def _proposals(data: dict, known: dict[str, dict], material_ids: set[str]) -> list[dict]:
@@ -210,6 +302,7 @@ def _proposals(data: dict, known: dict[str, dict], material_ids: set[str]) -> li
 
 def generate_draft(workspace: dict, client=None, *, assess=False, progress=None) -> dict:
     originals, warnings = source_items(workspace)
+    _validate_prompt_items(originals)
     known = {item["id"]: item for item in originals}
     if client is None:
         if not originals:
@@ -227,20 +320,15 @@ def generate_draft(workspace: dict, client=None, *, assess=False, progress=None)
         }
     baseline = None
     assessment_context = ""
-    if assess:
-        from mentor_assessment import assess_design
-        if originals:
-            baseline = assess_design(workspace, originals, client, scope="baseline", progress=progress)
-            assessment_context = "\n\nBASELINE ASSESSMENT PRIORITIES:\n" + json.dumps([
-                {"item_id": item["item_id"], "concerns": item["concerns"],
-                 "recommendations": item["recommendations"]}
-                for item in baseline["items"]
-            ], ensure_ascii=False)[:12000]
-        if progress:
-            progress("drafting", "Generating proposed student content from the approved direction and assessment.")
-    prompt = (
-        context(workspace, originals)
-        + assessment_context
+    def build(source_context, scale):
+        priorities = assessment_context if scale == 1 else (
+            "\n\nBASELINE ASSESSMENT PRIORITIES: omitted for model budget; "
+            "the complete assessment remains in the instructor report."
+            if assessment_context else ""
+        )
+        return (
+        source_context
+        + priorities
         + "\n\nCreate a concrete draft following the approved design brief. For an existing course, "
           "propose targeted revisions using exact item IDs above; unspecified originals are retained. "
           "For a blank course, propose an initial outline with actual HTML content, not invented baseline scores. "
@@ -250,20 +338,36 @@ def generate_draft(workspace: dict, client=None, *, assess=False, progress=None)
           'Return {"summary":"...", "items":[{"id":"","type":"pages","title":"...",'
           '"html":"<h1>...</h1><p>...</p>","reason":"...","source_ids":["instructor-brief"]}],'
           '"warnings":["..."]}. At most 20 focused proposals. No approvals or build instructions.'
-    )
-    data = parse_json(client.call(SYSTEM, prompt, max_tokens=7000))
+        )
+    # Prove the final generation's essential directions/brief fit before a
+    # baseline assessment can make paid calls. Priorities remain optional.
+    _fit_prompt(workspace, client, build, 7000, items=originals)
+    if assess:
+        from mentor_assessment import assess_design
+        if originals:
+            baseline = assess_design(workspace, originals, client, scope="baseline", progress=progress)
+            assessment_context = "\n\nBASELINE ASSESSMENT PRIORITIES:\n" + json.dumps([
+                {"item_id": item["item_id"], "concerns": item["concerns"],
+                 "recommendations": item["recommendations"]}
+                for item in baseline["items"]
+            ], ensure_ascii=False)
+        if progress:
+            progress("drafting", "Generating proposed student content from the approved direction and assessment.")
+    prompt, fit_warnings = _fit_prompt(workspace, client, build, 7000, items=originals)
+    data = parse_json(_call_fitted(client, prompt, 7000))
     changes = _proposals(data, known, {m["id"] for m in workspace.get("materials", [])})
     if not changes:
         raise ValueError("The provider returned no draft proposals.")
     combined = {item["id"]: {k: v for k, v in item.items() if k != "raw"} for item in originals}
     combined.update({item["id"]: item for item in changes})
+    _validate_prompt_items(list(combined.values()))
     model_warnings = data.get("warnings", [])
     if not isinstance(model_warnings, list):
         raise ValueError("Invalid draft warnings.")
     result = {
         "summary": str(data.get("summary", "Review proposed changes before building."))[:6000],
         "items": list(combined.values()),
-        "warnings": warnings + [str(w)[:1000] for w in model_warnings[:20]],
+        "warnings": warnings + fit_warnings + [str(w)[:1000] for w in model_warnings[:20]],
         "mode": "ai", "coverage": "Bounded excerpts and selected proposals; unchanged items are not claimed as AI-reviewed.",
     }
     if assess:
@@ -287,29 +391,40 @@ def review_draft(workspace: dict, message: str, client=None, *, assess=False, pr
     draft = workspace.get("draft")
     if not draft:
         raise ValueError("Generate a draft before the final review conversation.")
+    _validate_prompt_items(draft.get("items"))
     known = {item["id"]: item for item in draft["items"]}
     originals, _ = source_items(workspace)
     for item in originals:
         if item["id"] in known:
             known[item["id"]] = {**known[item["id"]], "raw": item["raw"]}
-    prompt = (
-        context(workspace)
-        + "\n\nCURRENT DRAFT (bounded): " + json.dumps(draft, ensure_ascii=False)[:45000]
+    def build(source_context, scale):
+        return (
+        source_context
+        + "\n\nCURRENT DRAFT (bounded): " + json.dumps(_draft_excerpt(draft, scale), ensure_ascii=False)
         + "\n\nINSTRUCTOR REVIEW: " + message
         + '\nReturn {"reply":"...", "items":[{"id":"existing ID or empty for new item",'
           '"type":"pages","title":"...","html":"...","reason":"...","source_ids":["instructor-brief"]}]} '
           "with only changes requested by the instructor. Empty items means discussion without edits. "
           "You cannot approve the draft. All revised content needs another instructor approval."
+        )
+    prompt, fit_warnings = _fit_prompt(workspace, client, build, 7000)
+    fit_warnings.append(
+        "Current draft supplied as bounded HTML excerpts with all item/source IDs retained. "
+        "Omitted draft text was not reviewed; the stored snapshot is unchanged unless explicit edits are proposed."
     )
-    data = parse_json(client.call(SYSTEM, prompt, max_tokens=7000))
+    data = parse_json(_call_fitted(client, prompt, 7000))
     reply = str(data.get("reply", "Review the revised draft before approval."))[:12000]
+    if fit_warnings:
+        reply += "\n\nContext coverage: " + " ".join(fit_warnings)
     changes = _proposals(data, known, {m["id"] for m in workspace.get("materials", [])})
     revised = dict(draft) if changes else None
     if changes:
         combined = {key: {k: v for k, v in item.items() if k != "raw"}
                     for key, item in known.items()}
         combined.update({item["id"]: item for item in changes})
+        _validate_prompt_items(list(combined.values()))
         revised["items"] = list(combined.values())
+        revised["warnings"] = list(draft.get("warnings", [])) + fit_warnings
     if assess:
         from mentor_assessment import assess_design, assessment_current
         candidate = revised or draft

@@ -79,6 +79,10 @@ def synthetic_cartridge():
     return output.getvalue()
 
 
+def provider_fixture_model():
+    return "claude-sonnet-5-5" if OPTIONS.provider == "anthropic" else "synthetic-browser-model"
+
+
 def environment(home, cli, node):
     result = {key: os.environ[key] for key in (
         "PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "LANG", "LC_ALL",
@@ -135,13 +139,16 @@ def install_provider_http_fixture(root):
             raise AssertionError("Unexpected synthetic provider identity")
         if request.method == "GET" and request.url.path == "/v1/models":
             result = {"object": "list", "data": [
-                {"id": "synthetic-browser-model", "object": "model", "owned_by": "synthetic"}]}
+                {"id": provider_fixture_model(), "object": "model", "owned_by": "synthetic"}]}
             kind = "models"
         elif request.method == "POST" and request.url.path == (
                 "/v1/messages" if anthropic else "/v1/chat/completions"):
             body = json.loads(request.content)
-            if body["model"] != "synthetic-browser-model":
+            if body["model"] != provider_fixture_model():
                 raise AssertionError("The selected model was not pinned into inference")
+            if anthropic and (body.get("output_config") != {"effort": "medium"}
+                              or not 8192 <= body["max_tokens"] <= 16384):
+                raise AssertionError("The bounded reasoning profile was not applied")
             prompt = body["messages"][-1]["content"]
             if prompt.startswith("Assess this one item in the explicit local review scope"):
                 payload = json.loads(prompt.split("\n", 1)[1].split("\nReturn exactly", 1)[0])
@@ -199,7 +206,7 @@ def install_provider_http_fixture(root):
                 raise AssertionError("Unknown inference prompt requires an explicit fixture schema")
             result = {
                 "id": "synthetic-completion", "object": "chat.completion", "created": 1,
-                "model": "synthetic-browser-model",
+                "model": provider_fixture_model(),
                 "choices": [{"index": 0, "finish_reason": "stop",
                              "message": {"role": "assistant", "content": json.dumps(data)}}],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
@@ -207,7 +214,7 @@ def install_provider_http_fixture(root):
             if anthropic:
                 result = {
                     "id": "msg_synthetic", "type": "message", "role": "assistant",
-                    "model": "synthetic-browser-model", "stop_reason": "end_turn", "stop_sequence": None,
+                    "model": provider_fixture_model(), "stop_reason": "end_turn", "stop_sequence": None,
                     "content": [
                         {"type": "thinking", "thinking": "PRIVATE-THINKING-NOT-ANSWER", "signature": "fixture"},
                         {"type": "text", "text": json.dumps(data)}],
@@ -334,10 +341,10 @@ class LocalEndToEndTest(unittest.TestCase):
                     page.locator("#mentor-key").fill("synthetic-browser-only-provider-key")
                     page.locator("#save-provider-key").click()
                     page.wait_for_function("busy === false && modelsLoadingProvider === ''")
-                    page.locator("#mentor-model").select_option("synthetic-browser-model")
+                    page.locator("#mentor-model").select_option(provider_fixture_model())
                     page.locator("#save-model").click()
                     page.wait_for_function("busy === false && mentorMode().ready")
-                    self.assertIn("synthetic-browser-model", page.locator("#mentor-mode").inner_text())
+                    self.assertIn(provider_fixture_model(), page.locator("#mentor-mode").inner_text())
                 if mode == "ai-blank":
                     page.locator("#start-blank-course").click()
                     self.assertEqual(api(base + "/inventory")["course_items"], 0)
@@ -385,7 +392,7 @@ class LocalEndToEndTest(unittest.TestCase):
                     initial_draft = api(base)["draft"]
                     self.assertTrue(initial_draft["assessment_required"])
                     self.assertTrue(initial_draft["assessment_current"])
-                    self.assertEqual(initial_draft["assessment"]["model"], "synthetic-browser-model")
+                    self.assertEqual(initial_draft["assessment"]["model"], provider_fixture_model())
                     self.assertEqual(initial_draft["assessment"]["coverage"]["items_evaluated"], 2)
                     self.assertTrue(page.locator("#assessment-panel").is_visible())
                     self.assertTrue(page.locator("#proposed-assessment").is_visible())

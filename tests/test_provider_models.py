@@ -25,7 +25,7 @@ class CatalogTests(unittest.TestCase):
         for isolated in (False, True):
             with patch("ai_client.OpenAI") as factory:
                 factory.return_value.chat.completions.create.return_value = SimpleNamespace(
-                    choices=[SimpleNamespace(message=SimpleNamespace(content="Fixture answer"))])
+                    choices=[SimpleNamespace(finish_reason="stop", message=SimpleNamespace(content="Fixture answer"))])
                 client = AIClient("openai", model="future-text", api_key="fixture-key",
                                   isolated_credentials=isolated)
                 try:
@@ -74,6 +74,47 @@ class CatalogTests(unittest.TestCase):
                                transport=httpx.MockTransport(upstream))
         self.assertEqual(len(data["models"]), 2)
 
+    def test_catalog_preserves_normalized_limits_not_upstream_urls_or_diagnostics(self):
+        catalogs = (
+            ("anthropic", {"data": [{"id": "future-text", "max_input_tokens": 100000,
+                "max_tokens": 12000, "capabilities": {"thinking": {"supported": True},
+                    "effort": {"medium": {"supported": True}}},
+                "endpoint": "https://evil.example", "source": "fixture-key",
+                "warnings": ["fixture-key"], "lifecycle": "active"}]}, 100000, 12000),
+            ("gemini", {"models": [{"name": "models/future-text", "inputTokenLimit": 64000,
+                "outputTokenLimit": 9000, "thinking": True,
+                "supportedGenerationMethods": ["generateContent"],
+                "endpoint": "https://evil.example"}]}, 64000, 9000),
+        )
+        for provider, catalog, limit, output in catalogs:
+            calls = []
+            def upstream(request):
+                calls.append(request)
+                return httpx.Response(200, json=catalog)
+            with self.subTest(provider=provider):
+                result = discover_models(provider, {"api_key": "fixture-key"},
+                                         transport=httpx.MockTransport(upstream))
+                profile = result["models"][0]["capabilities"]
+                self.assertEqual(profile["status"], "provider_metadata")
+                self.assertEqual(profile["input_limit"], limit)
+                self.assertEqual(profile["output_limit"], output)
+                self.assertEqual(profile["provider"], provider)
+                self.assertTrue(profile["reasoning"])
+                self.assertEqual(len(calls), 1)
+                self.assertNotIn("evil.example", json.dumps(result))
+                self.assertNotIn("fixture-key", json.dumps(result))
+
+    def test_catalog_bad_limits_do_not_become_trusted_or_lose_valid_fields(self):
+        catalog = {"data": [{"id": "future-text", "max_input_tokens": True, "max_tokens": 9000},
+                            {"id": "another-text", "max_input_tokens": -1, "max_tokens": "100000"}]}
+        result = discover_models("anthropic", {"api_key": "fixture-key"},
+                                 transport=httpx.MockTransport(lambda r: httpx.Response(200, json=catalog)))
+        valid_output, invalid = (m["capabilities"] for m in result["models"])
+        self.assertEqual(valid_output["input_limit"], 32768)
+        self.assertEqual(valid_output["output_limit"], 9000)
+        self.assertEqual(invalid["status"], "unverified")
+        self.assertEqual(invalid["output_limit"], 4096)
+
     def test_gateway_unsupported_is_manual_not_a_fabricated_catalog(self):
         def upstream(request):
             self.assertEqual(request.url.host, "example.azure-api.net")
@@ -84,6 +125,16 @@ class CatalogTests(unittest.TestCase):
                                transport=httpx.MockTransport(upstream))
         self.assertTrue(data["manual_allowed"])
         self.assertEqual(data["models"], [])
+
+    def test_gateway_deployment_names_are_opaque_not_nontext_filters(self):
+        catalog = {"data": [{"id": "course-image-reviewer", "max_input_tokens": 64000, "max_tokens": 8000},
+                            {"id": "audio-discussion-feedback"}]}
+        result = discover_models("nebula", {"api_key": "fixture-key",
+                                 "base_url": "https://example.azure-api.net/anthropic"},
+                                 transport=httpx.MockTransport(lambda r: httpx.Response(200, json=catalog)))
+        self.assertEqual(len(result["models"]), 2)
+        self.assertEqual(result["models"][0]["capabilities"]["status"], "provider_metadata")
+        self.assertEqual(result["models"][1]["capabilities"]["status"], "unverified")
 
     def test_failures_do_not_follow_redirects_or_echo_upstream_secrets(self):
         for status, body in ((302, b""), (401, b"fixture-key"), (200, b"x" * (1024 * 1024 + 1))):
@@ -195,3 +246,78 @@ class ModelApiTests(unittest.TestCase):
             outcome = execute_mentor(owner, work["id"], job, "interview", "openai", self.service)
             self.assertEqual(outcome["status"], "completed")
             self.assertEqual(factory.call_args.kwargs["model"], "model-a")
+
+    def test_hosted_worker_preserves_only_safe_authored_errors(self):
+        from ai_client import AIResponseError
+        from mentor_assessment import AssessmentError
+        from model_capabilities import ModelCapabilityError
+        owner = "d" * 64
+        self.service.vault.save(owner, "openai", {"api_key": "fixture-key"})
+        for error in (ModelCapabilityError("Choose a larger-context model: fixture-key"),
+                      AIResponseError("The answer exhausted its output allowance."),
+                      AssessmentError("Assessment evidence did not validate."),
+                      RuntimeError("private-upstream-fixture-key")):
+            with self.subTest(error=type(error).__name__):
+                work = self.service.store.create(owner, "Failure fixture")
+                work = self.service.store.begin_interview(owner, work["id"], work["revision"])
+                job = work["active_job"]["id"]
+                self.service.store.add_message(owner, work["id"], "user", "Teaching goals", "interview")
+                with patch("mentor_service.interview", side_effect=error):
+                    result = execute_mentor(owner, work["id"], job, "interview", backend=self.service)
+                self.assertEqual(result["status"], "failed")
+                state = self.service.store.get(owner, work["id"])
+                self.assertIsNone(state["active_job"])
+                message = state["jobs"][-1]["error"]
+                self.assertNotIn("fixture-key", message)
+                self.assertNotIn("private-upstream", message)
+                if not isinstance(error, RuntimeError):
+                    self.assertEqual(message, str(error).replace("fixture-key", "[credential removed]"))
+                else:
+                    self.assertIn("Job failed.", message)
+
+    def test_selected_capabilities_are_server_owned_and_legacy_models_are_explicitly_unverified(self):
+        info = self.request("/providers/openai/models/refresh", {})
+        selected = self.request("/providers/openai/model", {
+            "model": "future-text", "version": info["version"],
+            "capabilities": {"input_limit": 999999999, "api": "https://untrusted.example"}},
+            method="PUT")
+        profile = selected["selected_capabilities"]
+        self.assertEqual(profile["status"], "unverified")
+        self.assertEqual(profile["input_limit"], 32768)
+        self.assertEqual(profile["api"], "chat_completions")
+        restored = self.request("/providers/openai/models", method="GET")
+        self.assertEqual(restored["selected_capabilities"], profile)
+        self.assertNotIn("untrusted.example", json.dumps(restored))
+
+    def test_known_unsupported_model_is_rejected_before_sdk_construction(self):
+        web.app.config["MODEL_DISCOVERY"] = lambda provider, saved: {
+            "models": [{"id": "davinci-002", "name": "Legacy completion-only"}]}
+        info = self.request("/providers/openai/models/refresh", {})
+        with patch("ai_client.AIClient") as factory:
+            self.request("/providers/openai/model", {
+                "model": "davinci-002", "version": info["version"]}, method="PUT", status=400)
+            factory.assert_not_called()
+
+    def test_capability_snapshot_is_immutable_across_catalog_refresh_and_worker_execution(self):
+        from model_capabilities import resolve_capabilities
+        owner = "c" * 64
+        profile = resolve_capabilities("openai", "gpt-4o")
+        changed = {**profile, "input_limit": 32768, "context_window": 32768, "output_limit": 2048}
+        self.service.vault.save(owner, "openai", {"api_key": "fixture-key", "model": "gpt-4o"})
+        saved = self.service.vault.get(owner, "openai")
+        work = self.service.store.create(owner, "Pinned capability fixture")
+        work = self.service.store.begin_interview(owner, work["id"], work["revision"])
+        job = work["active_job"]["id"]
+        self.service.store.pin_provider(owner, work["id"], job, "openai", "gpt-4o",
+                                         saved["version"], profile)
+        self.service.store.add_message(owner, work["id"], "user", "Teaching goals", "interview")
+        self.service.vault.update_preferences(owner, "openai", saved["version"], {"capabilities": changed})
+        with self.assertRaises(WorkspaceConflict):
+            self.service.store.pin_provider(owner, work["id"], job, "openai", "gpt-4o",
+                                             saved["version"], changed)
+        with patch("ai_client.AIClient") as factory:
+            factory.return_value.call.return_value = '{"reply":"What evidence should learners produce?"}'
+            outcome = execute_mentor(owner, work["id"], job, "interview", "openai", self.service)
+            self.assertEqual(outcome["status"], "completed")
+            self.assertEqual(factory.call_args.kwargs["capabilities"], profile)
+            self.assertNotEqual(factory.call_args.kwargs["capabilities"], changed)

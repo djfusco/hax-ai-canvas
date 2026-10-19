@@ -90,7 +90,7 @@
       <option value="guided">Continue without AI — Guided walkthrough</option>
     </select>
     <p id="ai-setup-state" class="banner banner-info" role="status">Choose how to work. AI is not enabled until you save a provider key and model.</p>
-    <p id="assessment-cost-help" class="field-help" hidden>AI drafting and final review can make several provider requests to assess instructional items and the proposed draft. Your selected provider may charge for each request. Bounded excerpts are used; assessment coverage and truncation are disclosed in the instructor-only report. Guided mode makes no AI requests or assessment report.</p>
+    <p id="assessment-cost-help" class="field-help" hidden>AI drafting and final review can make several provider requests to assess instructional items and the proposed draft, including separate judgments for chunks of longer retained excerpts. Your selected provider may charge for each request. Model-specific limits and reasoning controls are shown below; automatic output is capped at 16,384 tokens per request for this workflow. Actual token usage determines charges; incomplete responses are not automatically retried with larger budgets. Bounded excerpts are used; assessment coverage, context reductions and truncation are disclosed. Chunk judgments are not aggregate item scores. Guided mode makes no AI requests or assessment report.</p>
     <form id="credential-form" hidden>
       <label class="field-label" for="mentor-key">API key</label>
       <input class="field-input" id="mentor-key" type="password" autocomplete="off">
@@ -104,12 +104,13 @@
     </form>
     <div id="model-settings" hidden>
       <label class="field-label" for="mentor-model">Model for this provider</label>
-      <select class="field-input" id="mentor-model"><option value="">Save a key, then fetch models</option></select>
+      <select class="field-input" id="mentor-model" aria-describedby="model-status model-capabilities"><option value="">Save a key, then fetch models</option></select>
       <button class="btn btn-ghost" id="refresh-models" type="button" onclick="refreshModels()">Refresh models from provider</button>
       <label class="step-check-item" id="manual-model-label" hidden><input id="manual-model-enabled" type="checkbox"> Enter an institutional gateway deployment/model ID manually</label>
       <input class="field-input" id="manual-model" maxlength="120" aria-label="Institutional model or deployment ID" hidden>
       <button class="btn btn-primary" id="save-model" type="button" onclick="saveModel()">Use selected model</button>
       <p id="model-status" role="status"></p>
+      <section id="model-capabilities" class="mentor-capabilities field-help" aria-label="Model capabilities" aria-live="polite" hidden></section>
     </div>
     <p id="credential-status" role="status"></p>
   </section>

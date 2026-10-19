@@ -10,13 +10,13 @@ import httpx
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "python"), str(ROOT / "tests")]
-from ai_client import AIClient, AIResponseError
+from ai_client import AIClient, AIResponseError, _anthropic_request_options
 from mentor_assessment import AssessmentError, assess_design
 from test_mentor_assessment import item, payload, response_for, workspace
 
 
 class AnthropicResponseTests(unittest.TestCase):
-    def client(self, content, stop="end_turn", statuses=None):
+    def client(self, content, stop="end_turn", statuses=None, model="claude-sonnet-5-5", provider="anthropic"):
         requests = []
         statuses = list(statuses or [])
         def reply(request):
@@ -28,7 +28,8 @@ class AnthropicResponseTests(unittest.TestCase):
             blocks = content(request) if callable(content) else content
             return httpx.Response(200, json={
                 "id": "msg_synthetic", "type": "message", "role": "assistant",
-                "model": "claude-sonnet-5-5", "content": blocks, "stop_reason": stop,
+                "model": model, "content": blocks,
+                "stop_reason": stop(request) if callable(stop) else stop,
                 "stop_sequence": None, "usage": {"input_tokens": 1, "output_tokens": 10}})
         real_client = httpx.Client
         class FixtureClient(real_client):
@@ -36,8 +37,9 @@ class AnthropicResponseTests(unittest.TestCase):
                 kwargs["transport"] = httpx.MockTransport(reply)
                 super().__init__(*args, **kwargs)
         with patch("httpx.Client", FixtureClient):
-            client = AIClient("anthropic", model="claude-sonnet-5-5",
-                              api_key="synthetic-anthropic-fixture", isolated_credentials=True)
+            client = AIClient(provider, model=model,
+                              api_key="synthetic-anthropic-fixture", isolated_credentials=True,
+                              base_url="https://fixture.azure-api.net/anthropic" if provider == "nebula" else None)
         self.addCleanup(client.close)
         return client, requests
 
@@ -51,7 +53,55 @@ class AnthropicResponseTests(unittest.TestCase):
         self.assertEqual(len(requests), 1)
         body = json.loads(requests[0].content)
         self.assertEqual(body["model"], "claude-sonnet-5-5")
-        self.assertNotIn("thinking", body, "Do not silently change model thinking configuration")
+        self.assertNotIn("thinking", body)
+
+    def test_reasoning_requests_use_medium_effort_and_bounded_headroom(self):
+        client, requests = self.client([{"type": "text", "text": "Answer"}])
+        for requested in (1400, 3500, 7000, 16000):
+            client.call("System", "Prompt", max_tokens=requested)
+            body = json.loads(requests[-1].content)
+            self.assertEqual(body["max_tokens"], min(requested + 8192, 16384))
+            self.assertEqual(body["output_config"], {"effort": "medium"})
+            self.assertNotIn("thinking", body, "Do not disable thinking or send obsolete budget_tokens.")
+        self.assertEqual(len(requests), 4)
+
+    def test_unknown_models_and_gateways_keep_original_compatible_parameters(self):
+        for provider, model in (
+            ("anthropic", "claude-sonnet-4-5"),
+            ("anthropic", "claude-future-unknown"),
+            ("anthropic", "claude-sonnet-5-5-custom"),
+            ("nebula", "claude-sonnet-5-5"),
+        ):
+            with self.subTest(provider=provider, model=model):
+                client, requests = self.client([{"type": "text", "text": "Answer"}],
+                                               model=model, provider=provider)
+                client.call("System", "Prompt", max_tokens=3500)
+                body = json.loads(requests[0].content)
+                self.assertEqual(body["max_tokens"], 3500)
+                self.assertNotIn("output_config", body)
+
+    def test_unknown_dated_aliases_are_not_assumed_capable_and_legacy_calls_are_unchanged(self):
+        self.assertEqual(_anthropic_request_options("anthropic", "claude-sonnet-5-5-20261001", 3500, True),
+                         {"max_tokens": 3500})
+        self.assertEqual(_anthropic_request_options("anthropic", "claude-sonnet-5-5", 3500, False),
+                         {"max_tokens": 3500})
+        self.assertEqual(_anthropic_request_options("anthropic", "claude-sonnet-5-5", 32768, True)["max_tokens"],
+                         16384, "All isolated mentor calls retain the shared application spending ceiling.")
+
+    def test_thirty_item_reasoning_scope_succeeds_with_one_request_per_item(self):
+        def content(request):
+            data = payload(json.loads(request.content)["messages"][0]["content"])
+            return [self.thinking(), {"type": "text", "text": json.dumps(response_for(data))}]
+        def stop(request):
+            body = json.loads(request.content)
+            # A synthetic provider requiring room for thinking plus a report.
+            return ("end_turn" if body["max_tokens"] >= 8192 and
+                    body.get("output_config", {}).get("effort") == "medium" else "max_tokens")
+        client, requests = self.client(content, stop=stop)
+        report = assess_design(workspace(), [item(str(index)) for index in range(30)], client, scope="baseline")
+        self.assertEqual(report["coverage"]["items_evaluated"], 30)
+        self.assertEqual(len(requests), 30)
+        self.assertTrue(all(json.loads(request.content)["max_tokens"] == 11692 for request in requests))
 
     def test_redacted_thinking_and_multiple_text_blocks_are_combined(self):
         client, requests = self.client([
@@ -61,8 +111,9 @@ class AnthropicResponseTests(unittest.TestCase):
         self.assertEqual(len(requests), 1)
 
     def test_text_only_legacy_response_still_works(self):
-        client, _ = self.client([{"type": "text", "text": "  Legacy answer  "}])
+        client, requests = self.client([{"type": "text", "text": "  Legacy answer  "}], model="claude-haiku-4-5")
         self.assertEqual(client.call("System", "Prompt"), "Legacy answer")
+        self.assertNotIn("output_config", json.loads(requests[0].content))
 
     def test_thinking_only_and_empty_answers_are_not_retried(self):
         for content in ([self.thinking()], [], [{"type": "text", "text": "  "}]):
@@ -78,7 +129,7 @@ class AnthropicResponseTests(unittest.TestCase):
         for stop in ("max_tokens", "model_context_window_exceeded"):
             with self.subTest(stop=stop):
                 client, requests = self.client([self.thinking(), {"type": "text", "text": '{"partial":'}], stop)
-                with self.assertRaisesRegex(AIResponseError, "Thinking uses"):
+                with self.assertRaisesRegex(AIResponseError, "Thinking uses" if stop == "max_tokens" else "context window"):
                     client.call("System", "Prompt")
                 self.assertEqual(len(requests), 1)
 
@@ -129,7 +180,7 @@ class AnthropicResponseTests(unittest.TestCase):
 
     def test_token_limit_reaches_user_safe_assessment_error(self):
         client, requests = self.client([self.thinking()], "max_tokens")
-        with self.assertRaisesRegex(AssessmentError, "baseline item 1 of 1.*output or context limit") as error:
+        with self.assertRaisesRegex(AssessmentError, "baseline item 1 of 1.*output-token allowance") as error:
             assess_design(workspace(), [item()], client, scope="baseline")
         self.assertNotIn("private-thinking-fixture", str(error.exception))
         self.assertEqual(len(requests), 1)

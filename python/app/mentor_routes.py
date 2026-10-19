@@ -238,6 +238,19 @@ def create_mentor_blueprint(root_provider):
     def with_source(workspace):
         return backend().materialize(workspace) if hosted_mode() else nullcontext(workspace)
 
+    def capabilities_for_values(provider, values, selected=None, prefer_catalog=False):
+        from model_capabilities import resolve_capabilities, validate_capabilities
+        chosen = selected or values.get("model")
+        if not chosen:
+            return None
+        if not prefer_catalog and chosen == values.get("model") and values.get("capabilities"):
+            return validate_capabilities(provider, chosen, values["capabilities"])
+        record = next((row for row in values.get("catalog", {}).get("models", [])
+                       if row.get("id") == chosen), None)
+        if record and record.get("capabilities"):
+            return validate_capabilities(provider, chosen, record["capabilities"])
+        return resolve_capabilities(provider, chosen)
+
     def provider_values(data):
         provider = data.get("provider", "guided")
         if provider == "guided":
@@ -250,16 +263,19 @@ def create_mentor_blueprint(root_provider):
         validate_gateway(provider, values.get("base_url", ""))
         if not values.get("model"):
             raise ValueError("Fetch the provider's models and save an explicit model selection first.")
-        return provider, values
+        profile = capabilities_for_values(provider, values)
+        if profile["status"] == "unsupported":
+            raise ValueError("The selected model is not supported for this text workflow. Choose a compatible model.")
+        return provider, {**values, "capabilities": profile}
 
-    def client(data):
+    def client(data, resolved=None):
         from ai_client import AIClient
-        provider, values = provider_values(data)
+        provider, values = resolved or provider_values(data)
         if values is None:
             return None
         return AIClient(provider, model=values.get("model") or None,
                         api_key=values["api_key"], base_url=values.get("base_url") or None,
-                        isolated_credentials=True)
+                        isolated_credentials=True, capabilities=values.get("capabilities"))
 
     def validate_gateway(provider, base_url):
         if provider != "nebula":
@@ -550,6 +566,7 @@ def create_mentor_blueprint(root_provider):
         catalog = saved.get("catalog", {})
         return {**catalog, "models": catalog.get("models", []),
                 "selected": saved.get("model", ""), "version": saved.get("version"),
+                "selected_capabilities": capabilities_for_values(provider, saved),
                 "manual_allowed": provider == "nebula",
                 "expired": saved.get("catalog_expires", 0) <= time.time()}
 
@@ -568,8 +585,11 @@ def create_mentor_blueprint(root_provider):
                 return jsonify({"error": "Wait five minutes before refreshing more catalogs."}), 429
         discover = current_app.config.get("MODEL_DISCOVERY", discover_models)
         catalog = redact(discover(provider, saved))
-        updated = g.vault.update_preferences(g.owner, provider, saved.get("version"),
-                    {"catalog": catalog, "catalog_expires": time.time() + 600})
+        changes = {"catalog": catalog, "catalog_expires": time.time() + 600}
+        if saved.get("model") and any(row.get("id") == saved["model"] for row in catalog.get("models", [])):
+            changes["capabilities"] = capabilities_for_values(
+                provider, {**saved, "catalog": catalog}, prefer_catalog=True)
+        updated = g.vault.update_preferences(g.owner, provider, saved.get("version"), changes)
         return jsonify(public_models(provider, updated))
 
     @bp.put("/api/providers/<provider>/model")
@@ -583,8 +603,12 @@ def create_mentor_blueprint(root_provider):
         if not manual and (saved.get("catalog_expires", 0) <= time.time() or selected not in
                            {row["id"] for row in saved.get("catalog", {}).get("models", [])}):
             raise ValueError("Refresh models and choose an entry from this key's current catalog.")
-        g.vault.update_preferences(g.owner, provider, data.get("version"), {"model": selected})
-        return jsonify({"selected": selected})
+        profile = capabilities_for_values(provider, saved, selected, prefer_catalog=True)
+        if profile["status"] == "unsupported":
+            raise ValueError("This model is not supported by the text-generation workflow.")
+        g.vault.update_preferences(g.owner, provider, data.get("version"),
+                                   {"model": selected, "capabilities": profile})
+        return jsonify({"selected": selected, "selected_capabilities": profile})
 
     @bp.get("/api/workspaces")
     def workspaces():
@@ -1013,7 +1037,7 @@ def create_mentor_blueprint(root_provider):
             raise ValueError("Enter a message of 1–6000 characters.")
         message = redact(message)
         chosen, selected_values = provider_values(data)
-        ai = None if hosted_mode() else client(data)
+        ai = None if hosted_mode() else client(data, (chosen, selected_values))
         kind = "review" if data.get("kind") == "review" else "interview"
         try:
             if kind == "review":
@@ -1031,7 +1055,7 @@ def create_mentor_blueprint(root_provider):
         job_id = workspace["active_job"]["id"]
         if selected_values:
             workspace = store().pin_provider(g.owner, workspace_id, job_id, chosen,
-                                              selected_values["model"], selected_values.get("version"))
+                                              selected_values["model"], selected_values.get("version"), selected_values.get("capabilities"))
         store().add_message(g.owner, workspace_id, "user", message, kind)
         if hosted_mode():
             try:
@@ -1052,13 +1076,20 @@ def create_mentor_blueprint(root_provider):
             else:
                 reply = interview(store().get(g.owner, workspace_id), message, ai)
                 store().finish_interview(g.owner, workspace_id, job_id)
-        except Exception:
+        except Exception as exc:
+            from ai_client import AIResponseError
+            from mentor_assessment import AssessmentError
+            from model_capabilities import ModelCapabilityError
+            failure = (redact(str(exc))[:500]
+                       if isinstance(exc, (AIResponseError, AssessmentError, ModelCapabilityError))
+                       else "Mentor response failed. Your feedback was saved; check provider settings and retry.")
             try:
-                store().fail_job(g.owner, workspace_id, job_id, "Mentor response failed.")
+                store().fail_job(g.owner, workspace_id, job_id, "Mentor response failed.",
+                                 public_message=failure)
             except WorkspaceConflict:
                 pass
             # Never return provider exception text, which can contain credentials.
-            return jsonify({"error": "Mentor response failed. Your feedback was saved; check provider settings and retry."}), 502
+            return jsonify({"error": failure}), 502
         finally:
             if ai is not None:
                 ai.close()
@@ -1121,7 +1152,8 @@ def create_mentor_blueprint(root_provider):
         except Exception as exc:
             from ai_client import AIResponseError
             from mentor_assessment import AssessmentError
-            failure = (str(exc)[:500] if isinstance(exc, (AIResponseError, AssessmentError))
+            from model_capabilities import ModelCapabilityError
+            failure = (str(exc)[:500] if isinstance(exc, (AIResponseError, AssessmentError, ModelCapabilityError))
                        else "AI review failed. Check the selected model and retry. "
                        "No approval was granted and no scores were fabricated.")
             try:
@@ -1174,7 +1206,8 @@ def create_mentor_blueprint(root_provider):
                 if assess_ai:
                     from ai_client import AIResponseError
                     from mentor_assessment import AssessmentError
-                    if isinstance(exc, (AIResponseError, AssessmentError)):
+                    from model_capabilities import ModelCapabilityError
+                    if isinstance(exc, (AIResponseError, AssessmentError, ModelCapabilityError)):
                         message = str(exc)[:500]
                 database.fail_job(owner, workspace["id"], job_id,
                                   "Processing failed. Check the input/provider and retry; no approval was granted.",
@@ -1189,7 +1222,7 @@ def create_mentor_blueprint(root_provider):
     def analyze(workspace_id):
         data = payload()
         chosen, selected_values = provider_values(data)
-        ai = None if hosted_mode() else client(data)
+        ai = None if hosted_mode() else client(data, (chosen, selected_values))
         try:
             workspace = store().begin_analysis(g.owner, workspace_id, data.get("revision"))
         except Exception:
@@ -1201,7 +1234,7 @@ def create_mentor_blueprint(root_provider):
                 if selected_values:
                     workspace = store().pin_provider(g.owner, workspace_id,
                         workspace["active_job"]["id"], chosen, selected_values["model"],
-                        selected_values.get("version"))
+                        selected_values.get("version"), selected_values.get("capabilities"))
                 backend().dispatch_mentor(g.owner, workspace, "analysis", chosen)
             except Exception:
                 store().fail_job(g.owner, workspace_id, workspace["active_job"]["id"], "Could not queue analysis.")
@@ -1210,7 +1243,7 @@ def create_mentor_blueprint(root_provider):
             if selected_values:
                 workspace = store().pin_provider(g.owner, workspace_id,
                     workspace["active_job"]["id"], chosen, selected_values["model"],
-                    selected_values.get("version"))
+                    selected_values.get("version"), selected_values.get("capabilities"))
             threading.Thread(target=run_job,
                              args=(g.owner, workspace, "analysis", ai, root(), None,
                                    local_hax_enabled() and ai is not None), daemon=True).start()

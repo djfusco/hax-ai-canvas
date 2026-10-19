@@ -25,6 +25,8 @@ MAX_MATERIAL_EXCERPT = 2000
 MAX_MATERIAL_CONTEXT = 12000
 MAX_RESPONSE_CHARS = 96000
 MAX_TOKENS = 3500
+MAX_ITEM_CHUNKS = 32
+MAX_ASSESSMENT_CHUNKS = 2000
 DIMENSIONS = (
     "ai_leverage", "delegation_risk", "authenticity", "pedagogical_quality",
     "transparency", "alignment",
@@ -377,6 +379,10 @@ def _prompt(title, item, scope, sources):
         + json.dumps({
             "scope": scope, "course_title": title,
             "item": {key: item[key] for key in ("id", "title", "type", "source_ids", "truncated")},
+            "excerpt_coverage": item.get("excerpt_coverage", {
+                "start": 0, "end": len(item["text"]), "retained_characters": len(item["text"]),
+            }),
+            "context_limitations": item.get("context_limitations", []),
             "evidence_sources": list(sources.values()),
             "framework_references": list(FRAMEWORKS),
         }, ensure_ascii=False)
@@ -384,8 +390,119 @@ def _prompt(title, item, scope, sources):
         "An evidence list may be empty only if all classifications and dimension scores are null. "
         "When any value is null, limitations must explain the insufficient or inapplicable evidence. "
         "Provide a concrete, quoted basis for non-null judgments and targeted feasible recommendations.\n"
+        + "Keep each rationale to one or two concise sentences (at most 60 words). "
+          "Use at most three strengths, concerns and recommendations each, and one "
+          "to three short evidence quotes when available (none for unassessable items). "
+          "Cover all required fields without lengthy essays.\n"
         + json.dumps(shape, ensure_ascii=False)
     )
+
+
+def _preflight(client, prompt):
+    """Legacy test clients without a planner keep their existing call contract."""
+    planner = getattr(client, "preflight", None)
+    if callable(planner):
+        plan = planner(SYSTEM, prompt, max_tokens=MAX_TOKENS)
+        return plan if isinstance(plan, dict) else {}
+    return {}
+
+
+def _plan_item(client, title, item, scope, context):
+    """Plan every retained character before spending on any assessment call."""
+    context = deepcopy(context)
+    warnings = []
+
+    def request(text, start=0):
+        sources = {**context, "course:" + item["id"]: {
+            "source_id": "course:" + item["id"], "role": "course_item", "text": text,
+        }}
+        excerpt_item = {**item, "excerpt_coverage": {
+            "start": start, "end": start + len(text), "retained_characters": len(item["text"]),
+        }, "context_limitations": warnings}
+        prompt = _prompt(title, excerpt_item, scope, sources)
+        plan = _preflight(client, prompt)
+        return {"prompt": prompt, "sources": deepcopy(sources), "plan": plan}
+
+    try:
+        full = request(item["text"])
+        return [dict(full, start=0, end=len(item["text"]))], warnings
+    except ValueError:
+        pass
+    # The brief and schema are essential. Supplemental excerpts may shrink,
+    # but source identities/roles and a reduction disclosure remain.
+    for _ in range(13):
+        try:
+            request("")
+            break
+        except ValueError:
+            reduced = False
+            for source in context.values():
+                if source["role"] != "instructor_brief" and source["text"]:
+                    source["text"] = source["text"][:len(source["text"]) // 2]
+                    reduced = True
+            if not reduced:
+                raise AssessmentError(
+                    "The selected model cannot fit the essential assessment instructions, schema and "
+                    "instructor brief. Choose a larger-context model or shorten the brief before assessment."
+                ) from None
+            if not warnings:
+                warnings.append(
+                    "Supplemental excerpts were reduced for the selected model; omitted policy, "
+                    "reference and student text was not assessed. Verify constraints against the original sources."
+                )
+    else:
+        raise AssessmentError("Assessment supplemental context could not fit the selected model.") from None
+    chunks, start, text = [], 0, item["text"]
+    while start < len(text) or not chunks:
+        low, high, best = 1 if text else 0, len(text) - start, None
+        while low <= high:
+            length = (low + high) // 2
+            try:
+                candidate = request(text[start:start + length], start)
+                best = dict(candidate, start=start, end=start + length)
+                low = length + 1
+            except ValueError:
+                high = length - 1
+        if best is None:
+            raise AssessmentError(
+                "The selected model has no room for instructional evidence after essential assessment "
+                "instructions. Choose a larger-context model or a smaller review scope."
+            ) from None
+        chunks.append(best)
+        if len(chunks) > MAX_ITEM_CHUNKS:
+            raise AssessmentError(
+                "Assessment would exceed 32 chunks for one retained item. Choose a larger-context model "
+                "or split the instructional item; no assessment calls were sent."
+            )
+        start = best["end"]
+        if start == len(text):
+            break
+    return chunks, warnings
+
+
+def _bounded_union(chunks, key, maximum=12):
+    values = []
+    for chunk in chunks:
+        for value in chunk[key]:
+            if value not in values:
+                values.append(value)
+    return values[:maximum]
+
+
+def _combine_chunks(chunks):
+    result = deepcopy(chunks[0])
+    for key in ("chunk_id", "index", "start", "end", "text_sha256"):
+        result.pop(key, None)
+    explanation = "See chunk-specific judgments"
+    result["blooms"] = {"level": None, "label": "Insufficient evidence", "rationale": explanation}
+    result["aias"] = {"observed_level": None, "recommended_level": None,
+                      "label": "Insufficient evidence", "rationale": explanation}
+    result["dimensions"] = {key: {"score": None, "rationale": explanation} for key in DIMENSIONS}
+    for key in ("strengths", "concerns", "recommendations", "evidence", "limitations"):
+        result[key] = _bounded_union(chunks, key)
+    result["limitations"] = [explanation, *result["limitations"]][:12]
+    result["chunks"] = chunks
+    return result
 
 
 def assess_design(workspace, items, client, *, scope="draft", progress=None):
@@ -406,29 +523,55 @@ def assess_design(workspace, items, client, *, scope="draft", progress=None):
     prepared = _prepare_items(items)
     if any("course:" + item["id"] in context for item in prepared):
         raise AssessmentError("Assessment evidence identifiers collide with course-item sources.")
-    report_items = []
-    for position, item in enumerate(prepared, 1):
-        if progress:
-            progress("assessing_" + scope, f"AI-assessing {scope} item {position} of {len(prepared)} against pedagogical frameworks.")
-        sources = {**context, "course:" + item["id"]: {
-            "source_id": "course:" + item["id"], "role": "course_item",
-            "text": item["text"],
-        }}
-        # Never echo provider exceptions, prompts, credentials or returned text.
-        try:
-            response = client.call(SYSTEM, _prompt(title, item, scope, sources), max_tokens=MAX_TOKENS)
-        except Exception as exc:
-            from ai_client import AIResponseError
-            if isinstance(exc, AIResponseError):
-                raise AssessmentError(
-                    f"AI assessment stopped at {scope} item {position} of {len(prepared)}. {exc}"
-                ) from None
+    requests = []
+    chunks_total = 0
+    for item in prepared:
+        chunks, fit_warnings = _plan_item(client, title, item, scope, context)
+        chunks_total += len(chunks)
+        if chunks_total > MAX_ASSESSMENT_CHUNKS:
             raise AssessmentError(
-                f"AI assessment could not complete item {position} of {len(prepared)}. "
-                "Check the selected provider key, model, quota and connection, then retry. "
-                "No complete assessment or default scores were saved."
-            ) from None
-        assessed = _validate(_parse(response), item, sources)
+                "Assessment exceeds the bounded 2000-chunk review scope. Choose a larger-context "
+                "model or fewer items; no assessment calls were sent."
+            )
+        requests.append(chunks)
+        warnings.extend(fit_warnings)
+        for chunk in chunks:
+            warnings.extend(chunk["plan"].get("warnings", []))
+    report_items = []
+    for position, (item, chunks) in enumerate(zip(prepared, requests), 1):
+        if progress:
+            progress("assessing_" + scope, f"AI-assessing {scope} item {position} of {len(prepared)} "
+                     f"against pedagogical frameworks; {chunks_total} total planned chunk requests.")
+        judgments = []
+        for index, chunk in enumerate(chunks, 1):
+            if progress and len(chunks) > 1:
+                progress("assessing_" + scope, f"AI-assessing {scope} item {position} of {len(prepared)}, "
+                         f"chunk {index} of {len(chunks)}; {chunks_total} total planned chunk requests.")
+            # Never echo provider exceptions, prompts, credentials or returned text.
+            try:
+                _preflight(client, chunk["prompt"])
+                response = client.call(SYSTEM, chunk["prompt"], max_tokens=MAX_TOKENS)
+            except Exception as exc:
+                from ai_client import AIResponseError
+                if isinstance(exc, AIResponseError):
+                    raise AssessmentError(
+                        f"AI assessment stopped at {scope} item {position} of {len(prepared)}. {exc}"
+                    ) from None
+                raise AssessmentError(
+                    f"AI assessment could not complete item {position} of {len(prepared)}. "
+                    "Check the selected provider key, model, quota and connection, then retry. "
+                    "No complete assessment or default scores were saved."
+                ) from None
+            judgment = _validate(_parse(response), item, chunk["sources"])
+            if len(chunks) > 1:
+                text = item["text"][chunk["start"]:chunk["end"]]
+                judgment.update(
+                    chunk_id=f"{item['id']}:chunk:{index}", index=index,
+                    start=chunk["start"], end=chunk["end"],
+                    text_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                )
+            judgments.append(judgment)
+        assessed = _combine_chunks(judgments) if len(chunks) > 1 else judgments[0]
         if item["truncated"]:
             assessed["limitations"].append(
                 f"Only the first {MAX_ITEM_EXCERPT} visible-text characters of this item were supplied; omitted content was not assessed.")
@@ -463,13 +606,14 @@ def assess_design(workspace, items, client, *, scope="draft", progress=None):
         "version": 1, "scope": scope, "mode": "ai",
         "frameworks": deepcopy(list(FRAMEWORKS)),
         "coverage": {"items_total": len(prepared), "items_evaluated": len(report_items),
-                     "truncated_items": truncated},
+                     "truncated_items": truncated, "chunks_total": chunks_total,
+                     "chunks_evaluated": chunks_total},
         "items": report_items, "summary": summary, "warnings": list(dict.fromkeys(warnings)),
         **metadata,
     }
 
 
-def assessment_current(items, report):
+def _assessment_current_single(items, report):
     """Check a server-owned draft report against exact IDs, HTML and titles.
 
     This is not authentication or approval. Workspace input revisions must fence
@@ -559,4 +703,74 @@ def assessment_current(items, report):
                 return False
         return seen == set(expected)
     except (AssessmentError, TypeError, KeyError, UnicodeError, RecursionError):
+        return False
+
+
+def assessment_current(items, report):
+    """Validate all retained chunks, not just a plausible aggregate placeholder."""
+    if not _assessment_current_single(items, report):
+        return False
+    try:
+        prepared = {item["id"]: item for item in _prepare_items(items)}
+        originals = {item["id"]: item for item in items}
+        count = 0
+        for value in report["items"]:
+            item = prepared[value["item_id"]]
+            chunks = value.get("chunks")
+            if chunks is None:
+                if (value["blooms"]["rationale"] == "See chunk-specific judgments"
+                        or any(dimension["rationale"] == "See chunk-specific judgments"
+                               for dimension in value["dimensions"].values())):
+                    return False
+                count += 1
+                continue
+            if not isinstance(chunks, list) or not 2 <= len(chunks) <= MAX_ITEM_CHUNKS:
+                return False
+            end = 0
+            for index, chunk in enumerate(chunks, 1):
+                if not isinstance(chunk, dict) or "chunks" in chunk:
+                    return False
+                if (type(chunk.get("index")) is not int or chunk["index"] != index
+                        or chunk.get("chunk_id") != f"{item['id']}:chunk:{index}"
+                        or type(chunk.get("start")) is not int or chunk["start"] != end
+                        or type(chunk.get("end")) is not int
+                        or not end < chunk["end"] <= len(item["text"])
+                        or chunk.get("item_id") != item["id"]):
+                    return False
+                text = item["text"][end:chunk["end"]]
+                if chunk.get("text_sha256") != hashlib.sha256(text.encode("utf-8")).hexdigest():
+                    return False
+                for entry in chunk.get("evidence", []):
+                    if entry.get("source_id") == "course:" + item["id"]:
+                        if _normalized(entry.get("quote", "")) not in text:
+                            return False
+                single = {**report, "items": [chunk], "coverage": {
+                    "items_total": 1, "items_evaluated": 1,
+                    "truncated_items": [item["id"]] if item["truncated"] else [],
+                }}
+                if not _assessment_current_single([originals[item["id"]]], single):
+                    return False
+                end = chunk["end"]
+            if end != len(item["text"]):
+                return False
+            aggregate = _combine_chunks(chunks)
+            for key in ("blooms", "aias", "dimensions", "strengths", "concerns",
+                        "recommendations", "evidence"):
+                if value.get(key) != aggregate[key]:
+                    return False
+            if value["limitations"][:len(aggregate["limitations"])] != aggregate["limitations"]:
+                return False
+            count += len(chunks)
+        coverage = report["coverage"]
+        if ("chunks_total" not in coverage and "chunks_evaluated" not in coverage
+                and all("chunks" not in value for value in report["items"])):
+            # Prior server-owned v1 reports assessed each entire retained excerpt
+            # once. They remain current without retroactively revoking approval.
+            return True
+        return (count <= MAX_ASSESSMENT_CHUNKS
+                and type(coverage.get("chunks_total")) is int
+                and type(coverage.get("chunks_evaluated")) is int
+                and coverage["chunks_total"] == count
+                and coverage["chunks_evaluated"] == count)
+    except (AssessmentError, TypeError, KeyError, AttributeError, UnicodeError, RecursionError):
         return False

@@ -400,15 +400,20 @@ class MentorStore:
             self._invalidate(state)
         return self._change(owner, id, transition)
 
-    def pin_provider(self, owner, id, job_id, provider, model, credential_version):
+    def pin_provider(self, owner, id, job_id, provider, model, credential_version, capabilities=None):
         """Pin only nonsecret execution choices; never read mutable model preferences later."""
         from provider_models import model_id
         if provider not in ("openai", "anthropic", "gemini", "nebula"):
             raise ValueError("Unsupported AI provider.")
         model_id(model)
+        if capabilities is not None:
+            from model_capabilities import validate_capabilities
+            capabilities = validate_capabilities(provider, model, capabilities)
         def transition(state):
             active = self._active(state, job_id)
             choices = {"provider": provider, "model": model, "credential_version": credential_version}
+            if capabilities is not None:
+                choices["model_capabilities"] = capabilities
             if active.get("model") and any(active.get(k) != v for k, v in choices.items()):
                 raise WorkspaceConflict("The queued provider/model cannot be changed.")
             active.update(choices)

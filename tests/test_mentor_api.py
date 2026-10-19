@@ -81,6 +81,33 @@ class MentorApiTests(unittest.TestCase):
         self.assertEqual(result["stage"], "draft")
         return result
 
+    def test_synchronous_chat_exposes_only_safe_authored_errors(self):
+        from ai_client import AIResponseError
+        from mentor_assessment import AssessmentError
+        from model_capabilities import ModelCapabilityError
+        self.request("/mentor/api/credentials",
+                     data={"provider": "openai", "api_key": "fixture-key"})
+        for error in (ModelCapabilityError("Choose a larger-context model: fixture-key"),
+                      AIResponseError("The answer exhausted its output allowance."),
+                      AssessmentError("Assessment evidence did not validate."),
+                      RuntimeError("private-upstream-fixture-key")):
+            with self.subTest(error=type(error).__name__):
+                self.create()
+                with patch("mentor_service.interview", side_effect=error):
+                    result = self.request(self.base + "/chat", data={
+                        "message": "Teaching goals", "provider": "guided",
+                    }, expected=502)
+                state = self.fetch()
+                self.assertIsNone(state["active_job"])
+                message = result["error"]
+                self.assertEqual(state["jobs"][-1]["error"], message)
+                self.assertNotIn("fixture-key", message)
+                self.assertNotIn("private-upstream", message)
+                if not isinstance(error, RuntimeError):
+                    self.assertEqual(message, str(error).replace("fixture-key", "[credential removed]"))
+                else:
+                    self.assertIn("Your feedback was saved", message)
+
     def test_blank_course_full_guided_workflow(self):
         self.create()
         self.request(self.base + "/approve-direction", data={"revision": 1}, expected=400)

@@ -373,6 +373,156 @@ const reportFixture = () => ({
 });
 const nodeText = node => [node.textContent || '', ...(node.children || []).map(nodeText)].join(' ');
 const descendants = node => [node, ...(node.children || []).flatMap(descendants)];
+const capabilityFixture = (model, overrides = {}) => ({
+  version: 1, provider: 'openai', model, status: 'documented', api: 'chat_completions',
+  input_limit: 12000, context_window: 16000, output_limit: 4000, reasoning: false,
+  effort: null, output_parameter: 'max_tokens', source: 'Documented fixture', warnings: [],
+  ...overrides,
+});
+
+test('legacy catalog limits remain unverified and never invent a large context window', async t => {
+  const ui = await harness({authenticated: true, session: {credentials: [{provider: 'openai'}]},
+    request: url => url.endsWith('/models') ? jsonResponse({version: 2, selected: 'future-model',
+      models: [{id: 'future-model', name: 'Future'}]}) : undefined});
+  t.after(ui.dispose);
+  ui.get('mentor-provider').value = 'openai';
+  await ui.context.loadModels();
+  const panel = ui.get('model-capabilities');
+  assert.match(nodeText(panel), /Saved model: future-model.*Unverified/);
+  assert.match(nodeText(panel), /Input: Not verified.*Context: Not verified/);
+  assert.match(nodeText(panel), /conservative request ceilings/);
+  assert(!nodeText(panel).includes('128,000'));
+  assert.equal(ui.get('mentor-model').value, 'future-model');
+  assert.match(ui.get('mentor-model').children[1].text, /unverified/);
+  const nodes = panel.children;
+  ui.context.renderFlow();
+  assert.equal(panel.children, nodes, 'Unchanged polls do not replace capability nodes');
+});
+
+test('unsupported catalog and saved models cannot admit a selection or chat', async t => {
+  const profile = capabilityFixture('image-only', {status: 'unsupported', api: null});
+  const ui = await harness({authenticated: true, session: {credentials: [{provider: 'openai'}]},
+    request: url => url.endsWith('/models') ? jsonResponse({version: 2, selected: 'image-only',
+      selected_capabilities: profile, models: [{id: 'image-only', name: 'Image', capabilities: profile}]}) : undefined});
+  t.after(ui.dispose);
+  ui.get('mentor-provider').value = 'openai';
+  await ui.context.loadModels();
+  assert.equal(ui.get('mentor-model').children[1].disabled, true);
+  assert.equal(ui.get('save-model').disabled, true);
+  assert.equal(ui.get('send-mentor-message').disabled, true);
+  assert.match(ui.evaluate('mentorMode().message'), /unsupported/);
+  const before = ui.calls.length;
+  ui.context.saveModel();
+  await ui.settle();
+  assert(!ui.calls.slice(before).some(call => call.method === 'PUT'));
+  assert.match(ui.get('model-status').textContent, /unsupported/);
+});
+
+test('metadata warnings and sources are literal text, pending selection stays explicit, PUT has no snapshot', async t => {
+  const saved = capabilityFixture('saved');
+  const pending = capabilityFixture('new', {status: 'provider_metadata', reasoning: true, effort: 'medium',
+    source: 'https://metadata.example.test/<script>literal</script>',
+    warnings: ['<img src=x onerror=alert(1)> Warning', 'Catalog does not prove access.']});
+  const ui = await harness({authenticated: true, session: {credentials: [{provider: 'openai'}]},
+    request: (url, options) => {
+      if (url.endsWith('/models')) return jsonResponse({version: 9, selected: 'saved',
+        selected_capabilities: {...saved, input_limit: 11000},
+        models: [{id: 'saved', name: 'Saved', capabilities: saved}, {id: 'new', name: 'New', capabilities: pending}]});
+      if (url.endsWith('/model')) return jsonResponse({selected: 'new', selected_capabilities: pending});
+    }});
+  t.after(ui.dispose);
+  ui.get('mentor-provider').value = 'openai';
+  await ui.context.loadModels();
+  assert.match(nodeText(ui.get('model-capabilities')), /11,000/);
+  ui.get('mentor-model').value = 'new';
+  ui.get('mentor-model').onchange();
+  const panel = ui.get('model-capabilities');
+  assert.match(nodeText(panel), /Pending model: new.*Provider metadata/);
+  assert.match(nodeText(panel), /Saved model remains saved/);
+  assert.match(nodeText(panel), /Reasoning: enabled · Effort: medium/);
+  assert.match(nodeText(panel), /<img src=x onerror=alert\(1\)> Warning/);
+  assert(!descendants(panel).some(node => ['a', 'img', 'script'].includes(node.tag)));
+  assert.equal(ui.get('send-mentor-message').disabled, true);
+  ui.context.saveModel();
+  await ui.settle();
+  const put = ui.calls.find(call => call.method === 'PUT' && call.url.endsWith('/model'));
+  assert.deepEqual(JSON.parse(put.body), {model: 'new', version: 9, manual: false});
+  assert.match(nodeText(panel), /Saved model: new/);
+});
+
+test('manual gateway selection remains unverified and never inherits direct-provider limits', async t => {
+  const ui = await harness({authenticated: true, session: {credentials: [{provider: 'nebula'}]},
+    request: url => url.endsWith('/models') ? jsonResponse({version: 2, selected: null, models: []}) : undefined});
+  t.after(ui.dispose);
+  ui.get('mentor-provider').value = 'nebula';
+  await ui.context.loadModels();
+  assert.equal(ui.get('mentor-model').value, '');
+  ui.get('manual-model-enabled').checked = true;
+  ui.get('manual-model').value = 'claude-sonnet-4-6';
+  ui.get('manual-model').oninput();
+  assert.match(nodeText(ui.get('model-capabilities')), /Pending model: claude-sonnet-4-6.*Unverified/);
+  assert.match(nodeText(ui.get('model-capabilities')), /Context: Not verified/);
+});
+
+test('catalog load and selection errors remain beside controls without changing saved models', async t => {
+  let failLoad = true;
+  const ui = await harness({authenticated: true, session: {credentials: [{provider: 'openai'}]},
+    request: url => {
+      if (url.endsWith('/models') && !failLoad) return jsonResponse({version: 2, selected: 'saved',
+        models: [{id: 'saved', name: 'Saved'}, {id: 'new', name: 'New'}]});
+      if (/\/models?$/.test(url)) return {ok: false, status: 400,
+        json: async () => ({error: 'Synthetic incompatible API'})};
+    }});
+  t.after(ui.dispose);
+  ui.get('mentor-provider').value = 'openai';
+  ui.context.refreshModels();
+  await ui.settle();
+  assert.match(ui.get('model-status').textContent, /could not be loaded.*incompatible API/);
+  failLoad = false;
+  await ui.context.loadModels();
+  ui.get('mentor-model').value = 'new';
+  ui.context.saveModel();
+  await ui.settle();
+  assert.match(ui.get('model-status').textContent, /not saved.*incompatible API/);
+  assert.equal(ui.evaluate("selectedModels.get('openai')"), 'saved');
+});
+
+test('chat preflight errors are surfaced in the existing analysis feedback without losing text', async t => {
+  const ui = await harness({authenticated: true, request: url => url.endsWith('/chat')
+    ? {ok: false, status: 400, json: async () => ({error: 'Input exceeds conservative model budget.'})} : undefined});
+  t.after(ui.dispose);
+  ui.get('mentor-provider').value = 'guided';
+  ui.get('mentor-message').value = 'Retain my message';
+  ui.get('mentor-chat-form').onsubmit({preventDefault() {}});
+  await ui.settle();
+  assert.match(ui.get('analysis-feedback-message').textContent, /conservative model budget/);
+  assert.equal(ui.get('analysis-feedback').hidden, false);
+  assert.equal(ui.get('mentor-message').value, 'Retain my message');
+});
+
+test('multi-chunk reports show nested judgments and totals without misleading aggregate numbers', async t => {
+  const ui = await harness({authenticated: true, session: localSession});
+  t.after(ui.dispose);
+  const report = reportFixture();
+  const original = report.items[0];
+  report.coverage.chunks_total = 2;
+  report.coverage.chunks_evaluated = 2;
+  report.items = [{...original, blooms: {level: null, label: 'See chunk-specific judgments'},
+    aias: {observed_level: null, recommended_level: null}, dimensions: {},
+    chunks: [{...original, index: 1, start: 0, end: 50},
+      {...original, index: 2, start: 50, end: 100, evidence: [
+        {source_id: 'course:item-one', quote: '<script>second chunk literal</script>'}]}]}];
+  await ui.render({...ui.fixture, draft: {...ui.fixture.draft, assessment: report}});
+  const content = ui.get('proposed-assessment-content');
+  assert.match(nodeText(content), /Chunk coverage: 2 of 2/);
+  assert.match(nodeText(content), /no aggregate numeric judgment/);
+  assert.match(nodeText(content), /Chunk 1 · excerpt characters 0–50/);
+  assert.match(nodeText(content), /Chunk 2 · excerpt characters 50–100/);
+  assert.equal(descendants(content).filter(node => node.tag === 'details').length, 3);
+  assert.equal((nodeText(content).match(/level 4/g) || []).length, 2);
+  assert.match(nodeText(content), /<script>second chunk literal<\/script>/);
+  assert(!descendants(content).some(node => node.tag === 'script'));
+});
 
 test('local framework reports separate baseline/proposed and render references and evidence as text', async t => {
   const ui = await harness({authenticated: true, session: localSession});

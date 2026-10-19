@@ -35,6 +35,20 @@ class LocalMentorBrowserTest(unittest.TestCase):
             "reviewed_draft_revision": None,
         }
         state = {"offset": 0, "size": 0, "calls": [], "chunks": [], "running": False}
+        capabilities = {
+            "version": 1, "provider": "openai", "model": "fixture-text", "status": "provider_metadata",
+            "api": "responses", "input_limit": 12000, "context_window": 16000, "output_limit": 4000,
+            "reasoning": True, "effort": "medium", "output_parameter": "max_output_tokens",
+            "source": "https://metadata.example.test/<script>literal source</script>",
+            "warnings": ["<img src=x onerror=alert(1)> Literal provider warning"],
+        }
+        catalog = {
+            "version": 7, "selected": "legacy-unknown", "models": [
+                {"id": "legacy-unknown", "name": "Legacy"},
+                {"id": "fixture-text", "name": "Fixture text", "capabilities": capabilities},
+                {"id": "fixture-image", "name": "Image only", "capabilities": {
+                    **capabilities, "model": "fixture-image", "status": "unsupported", "api": None}}],
+        }
 
         def handle(route):
             req = route.request
@@ -54,7 +68,7 @@ class LocalMentorBrowserTest(unittest.TestCase):
             state["calls"].append((req.method, path))
             if req.method != "GET":
                 self.assertEqual(req.headers["x-mentor-csrf"], "fixture")
-            if req.method == "PUT":
+            if req.method == "PUT" and "/local-uploads/" in path:
                 self.assertEqual(req.headers["content-type"], "application/octet-stream")
                 offset = int(parse_qs(parsed.query)["offset"][0])
                 self.assertEqual(offset, state["offset"])
@@ -67,7 +81,13 @@ class LocalMentorBrowserTest(unittest.TestCase):
                 data = {"csrf": "fixture", "authenticated": True, "login_required": False,
                         "hosted_ready": False, "local_mode": True, "local_hax": True,
                         "local_accounts": True, "account": {"email": "faculty@example.test"},
-                        "credentials": []}
+                        "credentials": [{"provider": "openai", "expires_at": 2000000000}]}
+            elif path.endswith("/models"):
+                data = catalog
+            elif path.endswith("/model"):
+                self.assertEqual(req.post_data_json, {"model": "fixture-text", "version": 7, "manual": False})
+                catalog.update(selected="fixture-text", selected_capabilities=capabilities)
+                data = catalog
             elif path == "/mentor/api/workspaces":
                 data = [work]
             elif path.endswith("/local-uploads"):
@@ -113,6 +133,23 @@ class LocalMentorBrowserTest(unittest.TestCase):
                 page.goto("http://127.0.0.1:8765/mentor")
                 page.wait_for_function("busy === false")
                 self.assertIn("Account-scoped local", page.locator("#workspace-storage-help").inner_text())
+                page.locator("#mentor-provider").select_option("openai")
+                page.wait_for_function("busy === false && selectedModels.get('openai') === 'legacy-unknown'")
+                panel = page.locator("#model-capabilities")
+                self.assertIn("Unverified", panel.inner_text())
+                self.assertIn("Context: Not verified", panel.inner_text())
+                self.assertTrue(page.locator('#mentor-model option[value="fixture-image"]').is_disabled())
+                page.locator("#mentor-model").select_option("fixture-text")
+                self.assertIn("Pending model", panel.inner_text())
+                self.assertIn("Provider metadata", panel.inner_text())
+                self.assertIn("Input: 12,000", panel.inner_text())
+                self.assertIn("API: Responses", panel.inner_text())
+                self.assertIn("Reasoning: enabled", panel.inner_text())
+                self.assertIn("<img src=x onerror=alert(1)>", panel.inner_text())
+                self.assertEqual(page.locator("#model-capabilities a, #model-capabilities img, #model-capabilities script").count(), 0)
+                page.locator("#save-model").click()
+                page.wait_for_function("busy === false && selectedModels.get('openai') === 'fixture-text'")
+                self.assertIn("Saved model", panel.inner_text())
                 page.locator("#workspace-list").select_option(work["id"])
                 page.wait_for_function("busy === false")
                 page.locator("#source-file").set_input_files({
@@ -134,7 +171,8 @@ class LocalMentorBrowserTest(unittest.TestCase):
                         {"id": "blooms", "title": "Bloom taxonomy", "version": "revised",
                          "url": "https://framework.example.test/blooms"},
                         {"id": "unsafe", "title": "Unsafe reference", "url": "javascript:alert(1)"}],
-                    "coverage": {"items_total": 1, "items_evaluated": 1, "truncated_items": ["one"]},
+                    "coverage": {"items_total": 1, "items_evaluated": 1, "truncated_items": ["one"],
+                                 "chunks_total": 2, "chunks_evaluated": 2},
                     "summary": "<img src=x onerror=alert(1)> Literal assessment summary",
                     "warnings": ["Synthetic bounded-excerpt limitation"],
                     "items": [{
@@ -148,6 +186,12 @@ class LocalMentorBrowserTest(unittest.TestCase):
                         "recommendations": ["Explain evidence provenance"],
                         "limitations": ["Bounded excerpt only"]}],
                 }
+                original = deepcopy(report["items"][0])
+                report["items"][0].update(
+                    blooms={"level": None, "label": "See chunk-specific judgments"},
+                    aias={"observed_level": None, "recommended_level": None}, dimensions={},
+                    chunks=[{**original, "index": 1, "start": 0, "end": 50},
+                            {**original, "index": 2, "start": 50, "end": 100}])
                 work.update(stage="built", active_job=None, brief="Saved brief", draft_revision=1,
                             reviewed_draft_revision=1, build_revision=1,
                             draft={"summary": "Synthetic draft", "warnings": [],
@@ -164,6 +208,13 @@ class LocalMentorBrowserTest(unittest.TestCase):
                 self.assertTrue(page.locator("#assessment-panel").is_visible())
                 self.assertIn("1 of 1", page.locator("#proposed-assessment-content").inner_text())
                 self.assertIn("Truncated item excerpts: one", page.locator("#proposed-assessment-content").inner_text())
+                self.assertIn("Chunk coverage: 2 of 2", page.locator("#proposed-assessment-content").inner_text())
+                item_details = page.locator("#proposed-assessment-content > details").first
+                item_details.locator(":scope > summary").click()
+                self.assertIn("no aggregate numeric judgment", item_details.inner_text())
+                self.assertIn("Chunk 1", item_details.inner_text())
+                self.assertIn("Chunk 2", item_details.inner_text())
+                self.assertEqual(item_details.locator("details").count(), 2)
                 self.assertEqual(page.locator("#proposed-assessment-content a").count(), 1)
                 self.assertEqual(page.locator("#assessment-panel img, #assessment-panel script").count(), 0)
                 self.assertIn("higher AIAS levels are not inherently better",

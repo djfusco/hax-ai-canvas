@@ -30,13 +30,62 @@ let sentCodeEmail = '';
 let mentorAuthenticated = false;
 let renderedMessagesKey = '';
 let renderedAssessmentKey = '';
+let renderedCapabilitiesKey = '';
 const selectedModels = new Map();
+const modelCatalogs = new Map();
+const selectedCapabilities = new Map();
 const blankCourses = new Set();
 const inventories = new Map();
 const inventoryErrors = new Map();
 const el = id => document.getElementById(id);
 const provider = () => el('mentor-provider').value;
 const endpoint = suffix => '/mentor/api/workspaces/' + workspace.id + suffix;
+function pendingModel() {
+  return provider() === 'nebula' && el('manual-model-enabled').checked
+    ? el('manual-model').value.trim() : el('mentor-model').value;
+}
+function modelCapability(model, saved = false) {
+  const chosen = provider();
+  const profile = saved ? selectedCapabilities.get(chosen)
+    : modelCatalogs.get(chosen)?.get(model);
+  if (profile?.version === 1 && profile.provider === chosen && profile.model === model &&
+      ['documented', 'provider_metadata', 'unverified', 'unsupported'].includes(profile.status))
+    return profile;
+  return {status: 'unverified', warnings: [
+    'Limits are not verified. The server uses conservative request ceilings; compatibility and access are not guaranteed.']};
+}
+function renderModelCapabilities() {
+  const panel = el('model-capabilities');
+  const model = pendingModel();
+  const saved = selectedModels.get(provider());
+  const isSaved = model === saved && !(provider() === 'nebula' && el('manual-model-enabled').checked);
+  const profile = modelCapability(model, isSaved);
+  const key = JSON.stringify([provider(), model, saved, isSaved, profile]);
+  if (key === renderedCapabilitiesKey) return;
+  renderedCapabilitiesKey = key;
+  panel.replaceChildren();
+  panel.hidden = !provider() || provider() === 'guided' || !model;
+  if (panel.hidden) return;
+  const labels = {documented: 'Documented', provider_metadata: 'Provider metadata',
+    unverified: 'Unverified — conservative ceilings', unsupported: 'Unsupported'};
+  panel.dataset.status = profile.status;
+  itemText(panel, 'strong', `${isSaved ? 'Saved' : 'Pending'} model: ${model} · ${labels[profile.status]}`);
+  if (!isSaved && saved) itemText(panel, 'p', `Saved model remains ${saved} until you save this choice. Running jobs keep their pinned model and capability snapshot.`);
+  const limit = value => Number.isSafeInteger(value) && value > 0 ? value.toLocaleString('en-US') : 'Not verified';
+  const verified = ['documented', 'provider_metadata'].includes(profile.status);
+  itemText(panel, 'p', `${verified ? 'Known limits' : 'Conservative request ceilings (not verified model limits)'} · Input: ${limit(profile.input_limit)} tokens · Context: ${limit(profile.context_window)} tokens · Output: ${limit(profile.output_limit)} tokens`);
+  const apis = {messages: 'Messages', chat_completions: 'Chat Completions',
+    responses: 'Responses', generate_content: 'Generate Content'};
+  itemText(panel, 'p', `API: ${apis[profile.api] || 'Not verified / unavailable'} · Reasoning: ${profile.reasoning === true ? 'enabled' : verified ? 'not enabled' : 'not verified / not enabled'} · Effort: ${profile.effort === 'medium' ? 'medium' : 'not enabled'}`);
+  itemText(panel, 'p', 'Source: ' + (typeof profile.source === 'string' ? profile.source : 'No verified capability source'));
+  const warnings = document.createElement('ul');
+  for (const warning of Array.isArray(profile.warnings) ? profile.warnings : [])
+    if (typeof warning === 'string') itemText(warnings, 'li', warning);
+  if (profile.status === 'unsupported') itemText(warnings, 'li', 'This model cannot be selected for generation. Choose a compatible model; the server validates every request.');
+  if (profile.status === 'unverified') itemText(warnings, 'li', 'Unverified models use conservative ceilings and no speculative reasoning controls.');
+  panel.appendChild(warnings);
+  itemText(panel, 'p', 'Catalog metadata does not confirm inference access, funding or answer quality. Input preflight uses a conservative estimate, not exact tokenization. Automatic output is capped at 16,384 tokens per request; incomplete answers are not automatically retried with larger budgets.');
+}
 
 function mentorMode() {
   const chosen = provider();
@@ -52,6 +101,8 @@ function mentorMode() {
   const pending = manual ? el('manual-model').value.trim() : el('mentor-model').value;
   if (pending !== saved)
     return {ready: false, message: 'Your model choice has unsaved changes. Click Use selected model.', target: 'save-model'};
+  if (modelCapability(saved, true).status === 'unsupported')
+    return {ready: false, message: 'The saved model is unsupported for generation. Choose and save a compatible model.', target: 'mentor-model'};
   const names = {openai: 'OpenAI', anthropic: 'Anthropic', gemini: 'Gemini', nebula: 'NebulaONE'};
   return {ready: true, message: `${names[chosen] || chosen} · ${saved}`};
 }
@@ -109,6 +160,8 @@ function renderAssessmentReport(parent, report) {
   itemText(parent, 'p', report.summary || 'No assessment summary was provided.');
   const coverage = report.coverage || {};
   itemText(parent, 'p', `Coverage: ${coverage.items_evaluated ?? 'not reported'} of ${coverage.items_total ?? 'not reported'} instructional items assessed using bounded excerpts.`);
+  if (coverage.chunks_evaluated != null || coverage.chunks_total != null)
+    itemText(parent, 'p', `Chunk coverage: ${coverage.chunks_evaluated ?? 'not reported'} of ${coverage.chunks_total ?? 'not reported'} retained excerpt chunks assessed. Chunk judgments are not an aggregate item or course score.`);
   if (Array.isArray(coverage.truncated_items) && coverage.truncated_items.length)
     itemText(parent, 'p', 'Truncated item excerpts: ' + coverage.truncated_items.join(', ') +
       '. The assessment cannot establish what omitted content contains.');
@@ -134,10 +187,7 @@ function renderAssessmentReport(parent, report) {
   const dimensions = {ai_leverage: 'AI leverage', delegation_risk: 'Delegation risk',
     authenticity: 'Authenticity', pedagogical_quality: 'Pedagogical quality',
     transparency: 'Transparency', alignment: 'Alignment'};
-  for (const item of report.items || []) {
-    const details = document.createElement('details');
-    itemText(details, 'summary', `${item.title || item.item_id} · ${item.item_id}`);
-    if (item.content_sha256) itemText(details, 'p', 'Assessed content SHA-256: ' + item.content_sha256);
+  const judgment = (details, item) => {
     itemText(details, 'p', `Bloom's taxonomy: ${item.blooms?.label || 'Not assessed'}${item.blooms?.level != null ? ' · level ' + item.blooms.level : ''}. ${item.blooms?.rationale || ''}`);
     itemText(details, 'p', `AIAS task design: observed ${item.aias?.observed_level ?? 'not assessed'}; recommended ${item.aias?.recommended_level ?? 'not assessed'}${item.aias?.label ? ' · ' + item.aias.label : ''}. ${item.aias?.rationale || ''}`);
     for (const [id, label] of Object.entries(dimensions)) {
@@ -155,6 +205,23 @@ function renderAssessmentReport(parent, report) {
       }
     }
     list(details, 'Item limitations', item.limitations);
+  };
+  for (const item of report.items || []) {
+    const details = document.createElement('details');
+    itemText(details, 'summary', `${item.title || item.item_id} · ${item.item_id}`);
+    if (item.content_sha256) itemText(details, 'p', 'Assessed content SHA-256: ' + item.content_sha256);
+    if (Array.isArray(item.chunks) && item.chunks.length > 1) {
+      itemText(details, 'p', 'See chunk-specific judgments. This item was assessed in separate retained excerpt chunks; no aggregate numeric judgment is assigned.');
+      list(details, 'Item limitations', item.limitations);
+      for (const [index, chunk] of item.chunks.entries()) {
+        const nested = document.createElement('details');
+        const range = Number.isSafeInteger(chunk.start) && Number.isSafeInteger(chunk.end)
+          ? ` · excerpt characters ${chunk.start}–${chunk.end}` : '';
+        itemText(nested, 'summary', `Chunk ${chunk.index ?? index + 1}${range}`);
+        judgment(nested, chunk);
+        details.appendChild(nested);
+      }
+    } else judgment(details, item);
     parent.appendChild(details);
   }
 }
@@ -579,6 +646,7 @@ function renderFlow() {
   el('gateway-settings').hidden = provider() !== 'nebula';
   el('model-settings').hidden = !chosenAI || !configuredProviders.has(provider());
   el('model-settings').setAttribute('aria-busy', String(modelsLoadingProvider === provider() && !!provider()));
+  renderModelCapabilities();
   for (let number = 1; number <= 6; number++) {
     const node = el('flow-step-' + number);
     node.dataset.state = number < flow.number ? 'past' : number === flow.number ? 'current' : 'upcoming';
@@ -594,6 +662,8 @@ function renderFlow() {
   ['save-provider-key', 'forget-provider-key', 'refresh-models', 'save-model'].forEach(id => {
     el(id).disabled = waiting;
   });
+  el('save-model').disabled = waiting || !pendingModel() ||
+    modelCapability(pendingModel(), pendingModel() === selectedModels.get(provider())).status === 'unsupported';
   el('workspace-list').disabled = busy;
   el('new-workspace').querySelector('button').disabled = busy;
   el('import-local-source').disabled = waiting || !workspace || localNeedsRecovery;
@@ -682,6 +752,15 @@ el('local-auth-form').onsubmit = event => {
     window.location.reload();
   });
 };
+async function mentorRequest(url, body) {
+  const id = workspace.id;
+  analysisRequestError = null;
+  try { return await api(url, 'POST', body); }
+  catch (error) {
+    analysisRequestError = {workspaceId: id, message: error.message};
+    throw error;
+  } finally { renderAnalysisFeedback(); }
+}
 el('mentor-login-form').onsubmit = event => {
   event.preventDefault(); action(async () => {
     await api('/mentor/api/login', 'POST', {code: el('mentor-invite-code').value});
@@ -788,6 +867,8 @@ function signOutAccount() { action(async () => {
 async function loadModels(refresh = false) {
   const selectedProvider = provider();
   selectedModels.delete(selectedProvider);
+  selectedCapabilities.delete(selectedProvider);
+  modelCatalogs.delete(selectedProvider);
   const requestId = ++modelRequest;
   modelVersion = null;
   el('mentor-model').replaceChildren(new Option('Choose a model', ''));
@@ -807,7 +888,13 @@ async function loadModels(refresh = false) {
   modelsLoadingProvider = selectedProvider;
   el('model-status').textContent = refresh ? 'Fetching available models from your provider…' : 'Loading saved provider settings…';
   renderFlow();
-  let data = await api(url);
+  let data;
+  try { data = await api(url); }
+  catch (error) {
+    if (requestId === modelRequest && provider() === selectedProvider)
+      el('model-status').textContent = 'Model settings could not be loaded. ' + error.message;
+    throw error;
+  }
   if (requestId !== modelRequest || provider() !== selectedProvider) return;
   modelVersion = data.version;
   if (refresh) {
@@ -820,9 +907,19 @@ async function loadModels(refresh = false) {
   }
   if (requestId !== modelRequest || provider() !== selectedProvider) return;
   modelVersion = data.version;
-  data.models.forEach(model => el('mentor-model').add(new Option(model.name + ' — ' + model.id, model.id)));
-  if (data.selected && !data.models.some(model => model.id === data.selected))
-    el('mentor-model').add(new Option(data.selected + ' (saved selection)', data.selected));
+  const models = Array.isArray(data.models) ? data.models : [];
+  modelCatalogs.set(selectedProvider, new Map(models.map(model => [model.id, model.capabilities])));
+  if (data.selected) selectedCapabilities.set(selectedProvider,
+    data.selected_capabilities || modelCatalogs.get(selectedProvider).get(data.selected));
+  const addModel = (id, label, profile) => {
+    const option = new Option(label + (profile?.status === 'unsupported' ? ' (unsupported)'
+      : !profile || profile.status === 'unverified' ? ' (unverified)' : ''), id);
+    option.disabled = profile?.status === 'unsupported';
+    el('mentor-model').add(option);
+  };
+  models.forEach(model => addModel(model.id, model.name + ' — ' + model.id, model.capabilities));
+  if (data.selected && !models.some(model => model.id === data.selected))
+    addModel(data.selected, data.selected + ' (saved selection)', data.selected_capabilities);
   el('mentor-model').value = data.selected || '';
   if (data.selected) selectedModels.set(selectedProvider, data.selected);
   modelsLoadingProvider = '';
@@ -834,13 +931,24 @@ function refreshModels() { action(() => loadModels(true)); }
 function saveModel() { action(async () => {
   const selectedProvider = provider();
   const manual = selectedProvider === 'nebula' && el('manual-model-enabled').checked;
-  el('model-status').textContent = 'Saving your model choice…';
-  const result = await api('/mentor/api/providers/' + selectedProvider + '/model', 'PUT', {
-    model: manual ? el('manual-model').value.trim() : el('mentor-model').value,
-    version: modelVersion, manual,
-  });
+  const model = pendingModel();
+  let result;
+  try {
+    if (!model) throw new Error('Choose a model or explicitly enter your gateway deployment ID.');
+    if (modelCapability(model, model === selectedModels.get(selectedProvider)).status === 'unsupported')
+      throw new Error('This model is unsupported for generation. Choose a compatible model.');
+    el('model-status').textContent = 'Saving your model choice…';
+    result = await api('/mentor/api/providers/' + selectedProvider + '/model', 'PUT', {
+      model, version: modelVersion, manual,
+    });
+  } catch (error) {
+    el('model-status').textContent = 'Model choice was not saved. ' + error.message;
+    throw error;
+  }
   el('model-status').textContent = 'Saved model: ' + result.selected;
   selectedModels.set(selectedProvider, result.selected);
+  selectedCapabilities.set(selectedProvider,
+    result.selected_capabilities || modelCatalogs.get(selectedProvider)?.get(result.selected));
   if (manual) {
     el('mentor-model').add(new Option(result.selected + ' (manual)', result.selected));
     el('manual-model-enabled').checked = false;
@@ -1501,6 +1609,8 @@ el('credential-form').onsubmit = event => {
 function forgetKey() { action(async () => {
   await api('/mentor/api/credentials/' + provider(), 'DELETE'); await updateCredentials();
   selectedModels.delete(provider());
+  selectedCapabilities.delete(provider());
+  modelCatalogs.delete(provider());
   modelVersion = null; ++modelRequest;
   el('mentor-model').replaceChildren(new Option('Save a key, then fetch models', ''));
   el('model-status').textContent = 'Provider key and cached catalog removed.';
@@ -1562,7 +1672,7 @@ el('material-text-form').onsubmit = event => {
 el('mentor-chat-form').onsubmit = event => {
   event.preventDefault(); action(async () => {
     requireMentorReady();
-    workspace = await api(endpoint('/chat'), 'POST', {message: el('mentor-message').value,
+    workspace = await mentorRequest(endpoint('/chat'), {message: el('mentor-message').value,
       kind: el('chat-kind').value, provider: provider()});
     el('mentor-message').value = ''; await renderWorkspace();
   });
@@ -1587,7 +1697,7 @@ function analyzeCourse() { action(async () => {
   renderAnalysisFeedback();
   el('analysis-feedback').scrollIntoView({block: 'nearest'});
   try {
-    workspace = await api(endpoint('/analyze'), 'POST', {revision: workspace.revision, provider: provider()});
+    workspace = await mentorRequest(endpoint('/analyze'), {revision: workspace.revision, provider: provider()});
     analysisPending = null;
     await renderWorkspace();
   } catch (error) {

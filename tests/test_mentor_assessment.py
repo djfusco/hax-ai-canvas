@@ -94,7 +94,10 @@ class AssessmentTests(unittest.TestCase):
         phases = []
         report, client = self.evaluate(items=items, progress=lambda phase, message: phases.append((phase, message)))
         self.assertEqual(len(client.calls), len(items))
-        self.assertEqual(report["coverage"], {"items_total": 25, "items_evaluated": 25, "truncated_items": []})
+        self.assertEqual(report["coverage"], {
+            "items_total": 25, "items_evaluated": 25, "truncated_items": [],
+            "chunks_total": 25, "chunks_evaluated": 25,
+        })
         self.assertEqual([value["item_id"] for value in report["items"]], [value["id"] for value in items])
         self.assertEqual(len(phases), 25)
         self.assertTrue(all(phase == "assessing_draft" and isinstance(message, str) for phase, message in phases))
