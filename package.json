@@ -1,6 +1,6 @@
 {
   "name": "hax-ai-canvas",
-  "version": "1.0.12",
+  "version": "1.0.13",
   "description": "AI-powered Canvas course to HAX site builder — local web app for instructors",
   "scripts": {
     "build": "node scripts/build-hosted.cjs",
