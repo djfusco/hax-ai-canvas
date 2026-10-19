@@ -21,7 +21,8 @@ from test_hosted_integration import fixture_environment, MemoryBlob
 class HostedSetupTests(unittest.TestCase):
     def test_generated_environment_validates_and_secrets_are_distinct(self):
         values = configure_hosted.create_environment(
-            "postgresql://fixture", "https://mentor.example/", "fixture-blob")
+            "postgresql://fixture", "https://mentor.example/", "fixture-blob",
+            "https://ep-fixture.neonauth.us-east-1.aws.neon.tech/neondb/auth")
         self.assertEqual(settings(values).origin, "https://mentor.example")
         names = ("HAX_SESSION_SECRET", "HAX_UPLOAD_SIGNING_SECRET",
                  "HAX_INTERNAL_SECRET", "HAX_BETA_ACCESS_CODE", "CRON_SECRET")

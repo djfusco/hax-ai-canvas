@@ -219,14 +219,15 @@ class AIClient:
             return r.content[0].text.strip()
 
         if p == "openai":
+            token_options = ({"max_completion_tokens": max_tokens} if self.isolated_credentials
+                             else {"max_tokens": max_tokens, "temperature": 0.5})
             r = self._client.chat.completions.create(  # type: ignore[union-attr]
                 model=self.model,
-                max_tokens=max_tokens,
+                **token_options,
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user",   "content": prompt},
                 ],
-                temperature=0.5,
                 timeout=effective_timeout,
             )
             return r.choices[0].message.content.strip()
@@ -237,6 +238,7 @@ class AIClient:
             r = self._client.models.generate_content(  # type: ignore[union-attr]
                 model=self.model,
                 contents=combined,
+                **({"config": {"max_output_tokens": max_tokens}} if self.isolated_credentials else {}),
             )
             return r.text.strip()
 

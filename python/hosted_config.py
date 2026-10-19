@@ -30,6 +30,8 @@ class HostedSettings:
     encryption_key: str = field(repr=False)
     cron_secret: str = field(repr=False)
     origin: str
+    auth_url: str = ""
+    auth_mode: str = "neon"
 
 
 def settings(environ=None):
@@ -40,7 +42,13 @@ def settings(environ=None):
         "invite_code": "HAX_BETA_ACCESS_CODE", "encryption_key": "HAX_MENTOR_ENCRYPTION_KEY",
         "cron_secret": "CRON_SECRET", "origin": "HAX_APP_ORIGIN",
     }
-    missing = [name for name in [*names.values(), "BLOB_READ_WRITE_TOKEN"] if not env.get(name)]
+    mode = env.get("HAX_AUTH_MODE", "neon")
+    if mode not in ("neon", "browser-beta"):
+        raise HostedSetupError("HAX_AUTH_MODE must be neon or browser-beta.")
+    required = [*names.values(), "BLOB_READ_WRITE_TOKEN"]
+    if mode == "neon":
+        required.append("NEON_AUTH_BASE_URL")
+    missing = [name for name in required if not env.get(name)]
     if missing:
         raise HostedSetupError("Configure deployment variables: " + ", ".join(missing))
     for key in ("session_secret", "upload_secret", "internal_secret", "invite_code", "cron_secret"):
@@ -61,7 +69,15 @@ def settings(environ=None):
         raise HostedSetupError("HAX_APP_ORIGIN must be a canonical HTTPS origin without a trailing slash.")
     if urlsplit(env["DATABASE_URL"]).scheme not in ("postgres", "postgresql"):
         raise HostedSetupError("DATABASE_URL must be a PostgreSQL connection URL.")
-    return HostedSettings(**{key: env[name] for key, name in names.items()})
+    auth_url = env.get("NEON_AUTH_BASE_URL", "") if mode == "neon" else ""
+    if auth_url:
+        from hosted_accounts import validate_auth_url
+        try:
+            validate_auth_url(auth_url)
+        except ValueError:
+            raise HostedSetupError("NEON_AUTH_BASE_URL must be the HTTPS Auth Base URL from Neon.") from None
+    return HostedSettings(**{key: env[name] for key, name in names.items()},
+                          auth_url=auth_url, auth_mode=mode)
 
 
 def sign_upload(record, secret):

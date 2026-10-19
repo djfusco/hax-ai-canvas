@@ -204,7 +204,7 @@ class MentorApiTests(unittest.TestCase):
     def test_credentials_are_encrypted_not_returned_and_explicitly_injected(self):
         key = "unit-test-provider-key-not-real"
         result = self.request("/mentor/api/credentials", data={
-            "provider": "openai", "api_key": key, "remember": True,
+            "provider": "openai", "api_key": key, "remember": True, "model": "fixture-text",
         })
         self.assertNotIn(key, json.dumps(result))
         self.assertNotIn(key, self.client.get("/mentor/api/session").get_data(as_text=True))
@@ -222,7 +222,7 @@ class MentorApiTests(unittest.TestCase):
 
     def test_provider_failure_never_grants_approval(self):
         self.request("/mentor/api/credentials", data={
-            "provider": "openai", "api_key": "unit-test-key",
+            "provider": "openai", "api_key": "unit-test-key", "model": "fixture-text",
         })
         self.create()
         with patch("ai_client.AIClient") as factory:
@@ -242,7 +242,7 @@ class MentorApiTests(unittest.TestCase):
         self.workspace = response.json
         original = next((self.root / "courses" / self.workspace["id"]).rglob("pages/*.json"))
         source_id = json.loads(original.read_text())["id"]
-        self.request("/mentor/api/credentials", data={"provider": "openai", "api_key": "test-only-ai-key"})
+        self.request("/mentor/api/credentials", data={"provider": "openai", "api_key": "test-only-ai-key", "model": "fixture-text"})
         initial = {"id": source_id, "type": "pages", "title": "Stronger overview",
                    "html": "<p>Investigate the evidence and document your reasoning.</p>",
                    "reason": "Targets authentic reasoning.", "source_ids": ["course:" + source_id]}
@@ -286,7 +286,7 @@ class MentorApiTests(unittest.TestCase):
         self.create()
         self.draft()
         self.request("/mentor/api/credentials", data={
-            "provider": "openai", "api_key": "unit-test-review-key",
+            "provider": "openai", "api_key": "unit-test-review-key", "model": "fixture-text",
         })
         with patch("ai_client.AIClient") as factory:
             factory.return_value.call.side_effect = RuntimeError("provider failed")

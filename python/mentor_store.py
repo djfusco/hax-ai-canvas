@@ -314,6 +314,21 @@ class MentorStore:
     def begin_analysis(self, owner, id, revision):
         return self._begin(owner, id, revision, "analysis")
 
+    def pin_provider(self, owner, id, job_id, provider, model, credential_version):
+        """Pin only nonsecret execution choices; never read mutable model preferences later."""
+        from provider_models import model_id
+        if provider not in ("openai", "anthropic", "gemini", "nebula"):
+            raise ValueError("Unsupported AI provider.")
+        model_id(model)
+        def transition(state):
+            active = self._active(state, job_id)
+            choices = {"provider": provider, "model": model, "credential_version": credential_version}
+            if active.get("model") and any(active.get(k) != v for k, v in choices.items()):
+                raise WorkspaceConflict("The queued provider/model cannot be changed.")
+            active.update(choices)
+            next(j for j in state["jobs"] if j["id"] == job_id).update(choices)
+        return self._change(owner, id, transition)
+
     def begin_interview(self, owner, id, revision):
         return self._begin(owner, id, revision, "interview")
 

@@ -13,6 +13,7 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import time
+from uuid import uuid4
 from contextlib import contextmanager
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -80,9 +81,15 @@ class CredentialVault:
         if not key or len(key) > 2048 or any(ord(c) < 32 for c in key):
             raise ValueError("Enter a valid provider API key.")
         model = str(values.get("model", "")).strip()
+        if model:
+            from provider_models import model_id
+            model_id(model)
         if len(model) > 120 or any(ord(c) < 32 for c in model):
             raise ValueError("Invalid model name.")
-        payload = {"api_key": key, "model": model, "base_url": values.get("base_url", "")}
+        if model and key in model:
+            raise ValueError("A model identifier must not contain the provider key.")
+        payload = {"api_key": key, "model": model, "base_url": values.get("base_url", ""),
+                   "version": uuid4().hex}
         sealed = self.cipher.encrypt(json.dumps(payload).encode())
         expires = self.clock() + (REMEMBER_TTL if remember else SESSION_TTL)
         with self._db() as db:
@@ -117,3 +124,26 @@ class CredentialVault:
     def forget(self, owner: str, provider: str):
         with self._db() as db:
             db.execute("DELETE FROM credentials WHERE owner=? AND provider=?", (owner, provider))
+
+    def update_preferences(self, owner, provider, expected_version, changes):
+        """Compare-and-swap prevents a slow catalog response overwriting a new key."""
+        from mentor_store import WorkspaceConflict
+        if not isinstance(changes, dict) or set(changes) - {"model", "catalog", "catalog_expires"}:
+            raise ValueError("Invalid provider preferences.")
+        with self._db() as db:
+            row = db.execute("SELECT sealed, expires FROM credentials WHERE owner=? AND provider=?",
+                             (owner, provider)).fetchone()
+            if row is None or row[1] <= self.clock():
+                raise WorkspaceConflict("Credentials expired or were removed.")
+            saved = json.loads(self.cipher.decrypt(row[0]))
+            if saved.get("version") != expected_version:
+                raise WorkspaceConflict("Credentials changed. Refresh models for the new key.")
+            if changes.get("model") and saved["api_key"] in changes["model"]:
+                raise ValueError("A model identifier must not contain the provider key.")
+            saved.update(changes)
+            sealed = self.cipher.encrypt(json.dumps(saved, allow_nan=False).encode())
+            cursor = db.execute("UPDATE credentials SET sealed=? WHERE owner=? AND provider=? AND sealed=?",
+                                (sealed, owner, provider, row[0]))
+            if cursor.rowcount != 1:
+                raise WorkspaceConflict("Provider settings changed. Please retry.")
+        return saved

@@ -18,6 +18,9 @@ class HostedBackend:
         self.store = PostgresMentorStore(self.config.database_url)
         self.vault = PostgresCredentialVault(self.config.database_url, self.config.encryption_key)
         self.uploads = PostgresUploads(self.config.database_url)
+        if self.config.auth_mode == "neon":
+            from hosted_accounts import PostgresAccounts
+            self.accounts = PostgresAccounts(self.config.database_url)
         from hosted_worker import VercelBlobStore
         self.blob = VercelBlobStore()
 

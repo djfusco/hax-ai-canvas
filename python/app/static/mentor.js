@@ -8,6 +8,9 @@ let uploadController = null;
 let renderedBriefWorkspace = null;
 let renderedBrief = '';
 let renderedDraftKey = null;
+let modelVersion = null;
+let modelRequest = 0;
+let configuredProviders = new Set();
 const el = id => document.getElementById(id);
 const provider = () => el('mentor-provider').value;
 const endpoint = suffix => '/mentor/api/workspaces/' + workspace.id + suffix;
@@ -34,8 +37,92 @@ el('mentor-login-form').onsubmit = event => {
   event.preventDefault(); action(async () => {
     await api('/mentor/api/login', 'POST', {code: el('mentor-invite-code').value});
     el('mentor-invite-code').value = '';
+    const session = await updateCredentials();
+    if (session.authenticated) await refreshList();
+  });
+};
+
+el('account-code-form').onsubmit = event => {
+  event.preventDefault(); action(async () => {
+    await api('/mentor/api/auth/send-code', 'POST', {email: el('account-email').value.trim()});
+    el('account-code-status').textContent = 'Check your email for a sign-in code.';
+  });
+};
+el('account-verify-form').onsubmit = event => {
+  event.preventDefault(); action(async () => {
+    await api('/mentor/api/auth/verify-code', 'POST', {
+      email: el('account-email').value.trim(), code: el('account-code').value,
+      claim_browser: el('claim-browser-work').checked,
+    });
+    el('account-code').value = '';
+    workspace = null;
     await updateCredentials(); await refreshList();
   });
+};
+function signOutAccount() { action(async () => {
+  try { await api('/mentor/api/auth/logout', 'POST', {}); }
+  finally { window.location.reload(); }
+}); }
+
+async function loadModels(refresh = false) {
+  const selectedProvider = provider();
+  const requestId = ++modelRequest;
+  modelVersion = null;
+  el('mentor-model').replaceChildren(new Option('Choose a model', ''));
+  el('model-status').textContent = '';
+  el('model-settings').hidden = selectedProvider === 'guided';
+  el('manual-model-label').hidden = selectedProvider !== 'nebula';
+  el('manual-model-enabled').checked = false;
+  el('manual-model').hidden = true;
+  el('manual-model').value = '';
+  if (selectedProvider === 'guided') return;
+  if (!configuredProviders.has(selectedProvider)) {
+    el('model-status').textContent = 'Save this provider key to fetch its models.';
+    return;
+  }
+  const url = '/mentor/api/providers/' + selectedProvider + '/models';
+  let data = await api(url);
+  if (requestId !== modelRequest || provider() !== selectedProvider) return;
+  modelVersion = data.version;
+  if (refresh) {
+    try { data = await api(url + '/refresh', 'POST', {}); }
+    catch (error) {
+      if (requestId !== modelRequest || provider() !== selectedProvider) return;
+      data = {...data, warning: error.message + (selectedProvider === 'nebula'
+        ? ' You can explicitly enter your gateway deployment/model ID below.' : '')};
+    }
+  }
+  if (requestId !== modelRequest || provider() !== selectedProvider) return;
+  modelVersion = data.version;
+  data.models.forEach(model => el('mentor-model').add(new Option(model.name + ' — ' + model.id, model.id)));
+  if (data.selected && !data.models.some(model => model.id === data.selected))
+    el('mentor-model').add(new Option(data.selected + ' (saved selection)', data.selected));
+  el('mentor-model').value = data.selected || '';
+  el('model-status').textContent = (data.selected ? 'Saved model: ' + data.selected + '. ' : '') +
+    (data.expired ? 'Refresh the catalog before making a new selection. ' : '') + (data.warning || '');
+}
+function refreshModels() { action(() => loadModels(true)); }
+function saveModel() { action(async () => {
+  const selectedProvider = provider();
+  const manual = selectedProvider === 'nebula' && el('manual-model-enabled').checked;
+  const result = await api('/mentor/api/providers/' + selectedProvider + '/model', 'PUT', {
+    model: manual ? el('manual-model').value.trim() : el('mentor-model').value,
+    version: modelVersion, manual,
+  });
+  el('model-status').textContent = 'Saved model: ' + result.selected;
+}); }
+el('mentor-provider').onchange = () => {
+  el('mentor-key').value = '';
+  ++modelRequest; modelVersion = null;
+  el('mentor-model').replaceChildren(new Option('Choose a model', ''));
+  el('model-status').textContent = 'Provider changed. Refresh models after the active request finishes.';
+  el('manual-model-label').hidden = provider() !== 'nebula';
+  el('manual-model').hidden = true;
+  el('manual-model-enabled').checked = false;
+  action(() => loadModels());
+};
+el('manual-model-enabled').onchange = () => {
+  el('manual-model').hidden = !el('manual-model-enabled').checked;
 };
 
 async function uploadHosted(file, kind, role = 'reference') {
@@ -254,7 +341,13 @@ async function updateCredentials() {
   const data = await api('/mentor/api/session');
   mentorCSRF = data.csrf;
   hosted = data.hosted_ready;
-  el('mentor-login-card').hidden = !data.login_required;
+  configuredProviders = new Set(data.credentials.map(item => item.provider));
+  el('mentor-login-card').hidden = data.invite_required === undefined ? !data.login_required : !data.invite_required;
+  el('account-login-card').hidden = !data.account_required;
+  el('account-profile').hidden = !data.account;
+  el('account-label').textContent = data.account ? 'Signed in as ' + data.account.email : '';
+  el('claim-browser-work').disabled = !data.can_claim_browser;
+  el('claim-browser-work').checked = false;
   el('workspace-list').disabled = data.login_required;
   el('new-workspace').querySelector('button').disabled = data.login_required;
   el('provider-settings').hidden = data.login_required;
@@ -275,14 +368,17 @@ el('credential-form').onsubmit = event => {
   event.preventDefault(); action(async () => {
     await api('/mentor/api/credentials', 'POST', {
       provider: provider(), api_key: el('mentor-key').value,
-      model: el('mentor-model').value, base_url: provider() === 'nebula' ? el('mentor-gateway').value : '',
+      model: '', base_url: provider() === 'nebula' ? el('mentor-gateway').value : '',
       remember: el('remember-key').checked,
     });
-    el('mentor-key').value = ''; await updateCredentials();
+    el('mentor-key').value = ''; await updateCredentials(); await loadModels(true);
   });
 };
 function forgetKey() { action(async () => {
   await api('/mentor/api/credentials/' + provider(), 'DELETE'); await updateCredentials();
+  modelVersion = null; ++modelRequest;
+  el('mentor-model').replaceChildren(new Option('Save a key, then fetch models', ''));
+  el('model-status').textContent = 'Provider key and cached catalog removed.';
 }); }
 el('source-form').onsubmit = event => {
   event.preventDefault(); action(async () => {
@@ -383,4 +479,5 @@ function cancelMentorJob() { action(async () => {
 action(async () => {
   const session = await updateCredentials();
   if (session.authenticated) await refreshList();
+  if (session.authenticated && provider() && provider() !== 'guided') await loadModels();
 });

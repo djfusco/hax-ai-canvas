@@ -34,7 +34,7 @@ from test_local_import import cartridge_bytes
 
 def fixture_environment():
     return {
-        "HAX_HOSTED_ENABLED": "1", "DATABASE_URL": "postgresql://fixture",
+        "HAX_HOSTED_ENABLED": "1", "HAX_AUTH_MODE": "browser-beta", "DATABASE_URL": "postgresql://fixture",
         "HAX_APP_ORIGIN": "https://mentor.example",
         "HAX_SESSION_SECRET": "test-session-" + "s" * 40,
         "HAX_UPLOAD_SIGNING_SECRET": "test-upload-" + "u" * 40,

@@ -12,6 +12,7 @@ import secrets
 import shutil
 import tempfile
 import threading
+import time
 from urllib.parse import urlsplit
 import uuid
 from contextlib import nullcontext
@@ -24,6 +25,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from werkzeug.utils import secure_filename
 from mentor_store import WorkspaceConflict, WorkspaceNotFound
 from hosted_config import hosted_mode, settings, HostedSetupError, sign_upload, verify_upload
+from hosted_accounts import AccountAuthError, NeonAuth, session_cookies, COOKIE_NAMES
 
 
 def acquire_canvas_course(course_id: str, destination: Path) -> Path:
@@ -60,6 +62,12 @@ def create_mentor_blueprint(root_provider):
             factory = current_app.config.get("HOSTED_BACKEND_FACTORY", HostedBackend)
             g.hosted_backend = factory(settings())
         return g.hosted_backend
+
+    def auth():
+        if not hasattr(g, "neon_auth"):
+            factory = current_app.config.get("HOSTED_AUTH_FACTORY", NeonAuth)
+            g.neon_auth = factory(g.hosted_config.auth_url, g.hosted_config.origin)
+        return g.neon_auth
 
     def jsonify(value):
         if not hosted_mode():
@@ -138,6 +146,8 @@ def create_mentor_blueprint(root_provider):
         if values is None:
             raise ValueError("Save credentials for the selected provider, or choose guided mode.")
         validate_gateway(provider, values.get("base_url", ""))
+        if not values.get("model"):
+            raise ValueError("Fetch the provider's models and save an explicit model selection first.")
         return provider, values
 
     def client(data):
@@ -192,8 +202,14 @@ def create_mentor_blueprint(root_provider):
             isinstance(identity, dict) and identity.get("admitted") is True
         )
         g.mentor_token, g.mentor_signer = token, signer
-        g.mentor_cookie = signer.dumps({"token": token, "admitted": g.admitted}) if hosted_mode() else signer.dumps(token)
+        g.mentor_cookie = signer.dumps({"token": token, "admitted": g.admitted,
+                                        "account": bool(isinstance(identity, dict) and identity.get("account"))}) if hosted_mode() else signer.dumps(token)
         g.owner = hashlib.sha256(token.encode()).hexdigest()
+        g.legacy_owner = g.owner
+        g.legacy_claimable = g.admitted and isinstance(identity, dict) and not identity.get("account")
+        g.account = None
+        g.neon_updates = []
+        g.account_mode = hosted_mode() and g.hosted_config.auth_mode == "neon"
         g.csrf = hmac.new(key, (g.owner + ":csrf").encode(), hashlib.sha256).hexdigest()
         if request.method not in ("GET", "HEAD", "OPTIONS"):
             origin = request.headers.get("Origin")
@@ -205,9 +221,18 @@ def create_mentor_blueprint(root_provider):
         if (request.is_json and request.content_length
                 and request.content_length > 2 * 1024 * 1024):
             return jsonify({"error": "The mentoring request is too large."}), 413
-        if hosted_mode() and not g.admitted:
-            if request.endpoint not in ("mentor.page", "mentor.session_info", "mentor.login"):
-                return jsonify({"error": "Enter the beta invitation code first.", "code": "LOGIN_REQUIRED"}), 401
+        auth_endpoints = ("mentor.auth_send", "mentor.auth_verify", "mentor.auth_logout")
+        if g.account_mode and request.endpoint not in auth_endpoints:
+            account, updates = auth().session(session_cookies(request.cookies))
+            g.neon_updates.extend(updates)
+            if account:
+                g.owner = backend().accounts.resolve(g.hosted_config.auth_url, account, admit=g.admitted)
+                g.admitted = True
+                g.account = account
+        g.authenticated = g.admitted and (not g.account_mode or g.account is not None)
+        if hosted_mode() and not g.authenticated:
+            if request.endpoint not in ("mentor.page", "mentor.session_info", "mentor.login", *auth_endpoints):
+                return jsonify({"error": "Sign in to your account first.", "code": "LOGIN_REQUIRED"}), 401
         elif hosted_mode():
             g.vault = backend().vault
         else:
@@ -215,6 +240,9 @@ def create_mentor_blueprint(root_provider):
 
     @bp.after_request
     def response_security(response):
+        for name, value, age in getattr(g, "neon_updates", []):
+            response.set_cookie(name, value, max_age=age, path="/mentor",
+                                httponly=True, secure=True, samesite="Strict")
         if getattr(g, "mentor_cookie", None):
             response.set_cookie("mentor_browser", g.mentor_cookie, max_age=30 * 86400,
                                 httponly=True, secure=hosted_mode() or request.is_secure, samesite="Strict")
@@ -232,7 +260,7 @@ def create_mentor_blueprint(root_provider):
             return jsonify({"error": "Workspace not found."}), 404
         if isinstance(exc, WorkspaceConflict):
             return jsonify({"error": str(exc)}), 409
-        return jsonify({"error": str(exc)}), 400
+        return jsonify({"error": str(exc)}), exc.status if isinstance(exc, AccountAuthError) else 400
 
     @bp.errorhandler(Exception)
     def hosted_failure(exc):
@@ -252,9 +280,12 @@ def create_mentor_blueprint(root_provider):
 
     @bp.get("/api/session")
     def session_info():
-        return jsonify({"csrf": g.csrf, "credentials": g.vault.status(g.owner) if g.admitted else [],
-                        "identity": "this-browser", "hosted_ready": hosted_mode(),
-                        "authenticated": g.admitted, "login_required": not g.admitted,
+        return jsonify({"csrf": g.csrf, "credentials": g.vault.status(g.owner) if g.authenticated else [],
+                        "identity": "account" if g.account_mode else "this-browser",
+                        "account": g.account, "account_required": g.account_mode and g.account is None,
+                        "can_claim_browser": bool(g.legacy_claimable),
+                        "invite_required": not g.admitted, "hosted_ready": hosted_mode(),
+                        "authenticated": g.authenticated, "login_required": not g.authenticated,
                         "maximum_upload_bytes": 8 * 1024**3 if hosted_mode() else 256 * 1024**2})
 
     @bp.post("/api/login")
@@ -272,7 +303,73 @@ def create_mentor_blueprint(root_provider):
             return jsonify({"error": "Invalid beta invitation code."}), 401
         g.admitted = True
         g.mentor_cookie = g.mentor_signer.dumps({"token": g.mentor_token, "admitted": True})
+        return jsonify({"authenticated": not g.account_mode, "account_required": g.account_mode})
+
+    def account_input():
+        if not hosted_mode() or not g.account_mode:
+            abort(404)
+        data = payload()
+        email = data.get("email", "")
+        if (not isinstance(email, str) or len(email) > 320
+                or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email)):
+            raise ValueError("Enter a valid email address.")
+        from hosted_auth import allow_login_attempt
+        limiter = current_app.config.get("HOSTED_LOGIN_LIMITER", allow_login_attempt)
+        peer = request.headers.get("x-vercel-forwarded-for") or request.remote_addr or "unknown"
+        if not limiter(g.hosted_config, "email-auth:" + peer) or not limiter(
+                g.hosted_config, "email:" + email.casefold()):
+            raise AccountAuthError("Too many sign-in attempts. Wait five minutes.", 429)
+        return data, email
+
+    @bp.post("/api/auth/send-code")
+    def auth_send():
+        _, email = account_input()
+        auth().call("send", data={"email": email, "type": "sign-in"})
+        return jsonify({"sent": True, "message": "Check your email for a sign-in code."})
+
+    @bp.post("/api/auth/verify-code")
+    def auth_verify():
+        data, email = account_input()
+        code = data.get("code", "")
+        if not isinstance(code, str) or not re.fullmatch(r"[0-9]{6}", code):
+            raise ValueError("Enter the six-digit code from your email.")
+        _, updates = auth().call("verify", data={"email": email, "otp": code})
+        if not any(name in COOKIE_NAMES and value for name, value, _ in updates):
+            raise AccountAuthError("The authentication service did not establish a session.", 503)
+        # Better Auth sign-in responses can be {token,user}, not {session,user}.
+        # Resolve identity from the newly issued opaque cookie, never from a
+        # browser assertion or an assumed SDK-normalized response shape.
+        account, refreshed = auth().session(session_cookies(
+            {name: value for name, value, age in updates if age != 0}))
+        if account is None:
+            raise AccountAuthError("The new email session could not be verified.", 401)
+        claim = data.get("claim_browser") is True
+        if claim and not g.legacy_claimable:
+            raise WorkspaceConflict("This browser has no claimable legacy identity.")
+        backend().accounts.resolve(g.hosted_config.auth_url, account, admit=g.admitted,
+                                   legacy_owner=g.legacy_owner if claim else None)
+        g.neon_updates.extend(updates)
+        g.neon_updates.extend(refreshed)
+        g.mentor_cookie = g.mentor_signer.dumps(
+            {"token": secrets.token_hex(32), "admitted": True, "account": True})
         return jsonify({"authenticated": True})
+
+    @bp.post("/api/auth/logout")
+    def auth_logout():
+        if not hosted_mode() or not g.account_mode:
+            abort(404)
+        failed = False
+        try:
+            auth().call("logout", cookies=session_cookies(request.cookies), data={})
+        except AccountAuthError:
+            failed = True
+        for name in COOKIE_NAMES:
+            g.neon_updates.append((name, "", 0))
+        g.mentor_cookie = g.mentor_signer.dumps({"token": secrets.token_hex(32), "admitted": False})
+        if failed:
+            return jsonify({"signed_out": True, "error": "Signed out here; remote revocation failed. "
+                            "Revoke this session in your auth service if the device is shared."}), 503
+        return jsonify({"signed_out": True})
 
     @bp.post("/api/credentials")
     def credentials():
@@ -285,6 +382,56 @@ def create_mentor_blueprint(root_provider):
     def forget_credentials(provider):
         g.vault.forget(g.owner, provider)
         return jsonify({"ok": True})
+
+    def model_preferences(provider):
+        from mentor_credentials import PROVIDERS
+        if provider not in PROVIDERS:
+            raise ValueError("Unsupported AI provider.")
+        saved = g.vault.get(g.owner, provider)
+        if not saved:
+            raise ValueError("Save a provider key before requesting models.")
+        validate_gateway(provider, saved.get("base_url", ""))
+        return saved
+
+    def public_models(provider, saved):
+        catalog = saved.get("catalog", {})
+        return {**catalog, "models": catalog.get("models", []),
+                "selected": saved.get("model", ""), "version": saved.get("version"),
+                "manual_allowed": provider == "nebula",
+                "expired": saved.get("catalog_expires", 0) <= time.time()}
+
+    @bp.get("/api/providers/<provider>/models")
+    def get_models(provider):
+        return jsonify(redact(public_models(provider, model_preferences(provider))))
+
+    @bp.post("/api/providers/<provider>/models/refresh")
+    def refresh_models(provider):
+        from provider_models import discover_models
+        saved = model_preferences(provider)
+        if hosted_mode():
+            from hosted_auth import allow_login_attempt
+            limiter = current_app.config.get("HOSTED_LOGIN_LIMITER", allow_login_attempt)
+            if not limiter(g.hosted_config, "models:" + g.owner + ":" + provider):
+                return jsonify({"error": "Wait five minutes before refreshing more catalogs."}), 429
+        discover = current_app.config.get("MODEL_DISCOVERY", discover_models)
+        catalog = redact(discover(provider, saved))
+        updated = g.vault.update_preferences(g.owner, provider, saved.get("version"),
+                    {"catalog": catalog, "catalog_expires": time.time() + 600})
+        return jsonify(public_models(provider, updated))
+
+    @bp.put("/api/providers/<provider>/model")
+    def select_model(provider):
+        from provider_models import model_id
+        data, saved = payload(), model_preferences(provider)
+        selected = model_id(data.get("model"))
+        manual = data.get("manual") is True
+        if manual and provider != "nebula":
+            raise ValueError("Manual selection is only available for institutional gateways.")
+        if not manual and (saved.get("catalog_expires", 0) <= time.time() or selected not in
+                           {row["id"] for row in saved.get("catalog", {}).get("models", [])}):
+            raise ValueError("Refresh models and choose an entry from this key's current catalog.")
+        g.vault.update_preferences(g.owner, provider, data.get("version"), {"model": selected})
+        return jsonify({"selected": selected})
 
     @bp.get("/api/workspaces")
     def workspaces():
@@ -512,7 +659,7 @@ def create_mentor_blueprint(root_provider):
         if not 1 <= len(message) <= 6000:
             raise ValueError("Enter a message of 1–6000 characters.")
         message = redact(message)
-        chosen, _ = provider_values(data)
+        chosen, selected_values = provider_values(data)
         ai = None if hosted_mode() else client(data)
         kind = "review" if data.get("kind") == "review" else "interview"
         try:
@@ -529,6 +676,9 @@ def create_mentor_blueprint(root_provider):
                 ai.close()
             raise
         job_id = workspace["active_job"]["id"]
+        if selected_values:
+            workspace = store().pin_provider(g.owner, workspace_id, job_id, chosen,
+                                              selected_values["model"], selected_values.get("version"))
         store().add_message(g.owner, workspace_id, "user", message, kind)
         if hosted_mode():
             try:
@@ -590,7 +740,7 @@ def create_mentor_blueprint(root_provider):
     @bp.post("/api/workspaces/<workspace_id>/analyze")
     def analyze(workspace_id):
         data = payload()
-        chosen, _ = provider_values(data)
+        chosen, selected_values = provider_values(data)
         ai = None if hosted_mode() else client(data)
         try:
             workspace = store().begin_analysis(g.owner, workspace_id, data.get("revision"))
@@ -600,11 +750,19 @@ def create_mentor_blueprint(root_provider):
             raise
         if hosted_mode():
             try:
+                if selected_values:
+                    workspace = store().pin_provider(g.owner, workspace_id,
+                        workspace["active_job"]["id"], chosen, selected_values["model"],
+                        selected_values.get("version"))
                 backend().dispatch_mentor(g.owner, workspace, "analysis", chosen)
             except Exception:
                 store().fail_job(g.owner, workspace_id, workspace["active_job"]["id"], "Could not queue analysis.")
                 return jsonify({"error": "Could not queue analysis. Please retry."}), 503
         else:
+            if selected_values:
+                workspace = store().pin_provider(g.owner, workspace_id,
+                    workspace["active_job"]["id"], chosen, selected_values["model"],
+                    selected_values.get("version"))
             threading.Thread(target=run_job, args=(g.owner, workspace, "analysis", ai, root()), daemon=True).start()
         return jsonify(public(workspace)), 202
 

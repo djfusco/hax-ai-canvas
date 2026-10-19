@@ -13,12 +13,14 @@ from cryptography.fernet import Fernet
 from hosted_config import settings
 
 
-def create_environment(database_url, origin, blob_token):
+def create_environment(database_url, origin, blob_token, auth_url=""):
     values = {
         "DATABASE_URL": database_url.strip(),
         "HAX_APP_ORIGIN": origin.strip().rstrip("/"),
         "BLOB_READ_WRITE_TOKEN": blob_token.strip(),
         "HAX_MENTOR_ENCRYPTION_KEY": Fernet.generate_key().decode(),
+        "NEON_AUTH_BASE_URL": auth_url.strip().rstrip("/"),
+        "HAX_AUTH_MODE": "neon",
     }
     for key in ("HAX_SESSION_SECRET", "HAX_UPLOAD_SIGNING_SECRET", "HAX_INTERNAL_SECRET",
                 "HAX_BETA_ACCESS_CODE", "CRON_SECRET"):
@@ -47,8 +49,9 @@ def main():
     database = getpass.getpass("PostgreSQL DATABASE_URL (hidden): ")
     origin = input("Canonical Vercel HTTPS origin (e.g. https://your-app.vercel.app): ")
     blob = getpass.getpass("Private BLOB_READ_WRITE_TOKEN (hidden): ")
+    auth_url = input("Neon Auth Base URL (NEON_AUTH_BASE_URL, from Neon Auth configuration): ")
     try:
-        values = create_environment(database, origin, blob)
+        values = create_environment(database, origin, blob, auth_url)
         save_environment(args.output, values)
     except (ValueError, OSError) as exc:
         print("Configuration failed (" + type(exc).__name__ + "). No secret values were printed.")

@@ -157,9 +157,10 @@ def execute_mentor(owner, workspace_id, job_id, kind, provider="guided", backend
             if provider not in ("nebula", "anthropic", "openai", "gemini"):
                 raise ValueError("Unsupported provider.")
             saved = service.vault.get(owner, provider)
-            if not saved:
+            if (not saved or not active.get("model") or active.get("provider") != provider
+                    or active.get("credential_version") != saved.get("version")):
                 raise ValueError("Provider credentials expired or were removed.")
-            ai = AIClient(provider, api_key=saved["api_key"], model=saved.get("model") or None,
+            ai = AIClient(provider, api_key=saved["api_key"], model=active["model"],
                           base_url=saved.get("base_url") or None, isolated_credentials=True)
         with service.materialize(workspace) as hydrated:
             hydrated = _redact(service, owner, hydrated)

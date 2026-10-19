@@ -18,13 +18,50 @@ authorization remains valid. This is logical object deletion, not a promise of
 immediate physical erasure of provider caches/backups. Prepared content,
 conversations and approved artifacts remain stored.
 
-This is an **invitation-gated beta**, not institutional SSO. Each browser gets a
-private signed, Secure/HttpOnly/SameSite identity. Entering the same invite code
-in another browser does not grant access to the first browser's workspaces.
-Clearing the cookie loses that browser's access. Provider keys are encrypted
-server-side and scoped to that identity. Obtain institutional review before
+This is an **invitation-gated beta with verified email accounts**, not institutional
+SSO. Enter an emailed sign-in code to resume your own workspaces and encrypted
+provider settings across devices. A typed email alone does not grant access.
+Sessions are validated server-side against Neon Auth using same-origin
+Secure/HttpOnly/SameSite cookies, not browser storage.
+Provider keys are encrypted server-side and scoped to the verified user ID.
+Obtain institutional review before
 using regulated/student records. Separate staging/production projects, stores,
 databases and secrets.
+
+### Accounts and model choice
+
+Hosted mode now defaults to verified email accounts through Neon managed Better
+Auth. In your Neon project/branch's **Auth / Better Auth** settings, enable email
+sign-in and Email OTP, configure a dedicated production SMTP sender, and add the
+exact production origin to trusted domains. Copy the **Auth Base URL** into
+`NEON_AUTH_BASE_URL`; the Neon integration may already supply it in Vercel.
+SMTP credentials belong in Neon's sender settings, not this app. Google OAuth
+is not enabled in this release.
+
+Save a provider key to fetch its model catalog, choose a model, then select
+**Use selected model**. Catalogs are encrypted with the credential record,
+isolated by user/key version and refreshable. Selection does not extend key
+retention. No course content or generation request is sent during discovery.
+Mentoring requires an explicit selected model; it does not silently choose a
+hard-coded default. Existing explicit model overrides remain supported.
+
+OpenAI, Anthropic and Gemini use their model-list APIs. Known non-text models
+are excluded; listing is not proof of inference permission, funding or request
+compatibility. Nebula gateways may not expose a catalog: the UI explains the
+limitation and permits a manual deployment/model ID. The key is never sent to
+a different upstream host. Queued jobs retain their selected provider/model;
+replacing or forgetting a key invalidates its catalog and fences queued work
+against silently using the replacement.
+
+On first email sign-in, optionally select **Claim this browser's old beta work**.
+The server requires the old signed browser identity as well as verified email.
+Ownership moves transactionally while stored file paths stay unchanged.
+Running jobs/uploads and ambiguous account merges are refused. Another account
+cannot claim the same legacy identity. Retire old browser-only deployments
+when migrating; do not keep them available against the production database.
+
+`HAX_AUTH_MODE=browser-beta` is an explicit compatibility/rollback option for
+the old browser-only beta, not real user accounts. The default is `neon`.
 
 ### Administrator setup
 
@@ -55,13 +92,15 @@ databases and secrets.
 | `HAX_BETA_ACCESS_CODE` | Private beta invitation code |
 | `HAX_MENTOR_ENCRYPTION_KEY` | Fernet key; preserve to decrypt saved keys |
 | `CRON_SECRET` | Vercel cron bearer authentication |
+| `NEON_AUTH_BASE_URL` | Neon branch Auth Base URL, ending in `/database/auth` |
+| `HAX_AUTH_MODE` | `neon` (default): require verified email accounts |
 
 Session/upload/internal/invitation/cron secrets must be **different**, random
 values of at least 32 printable characters. Optionally set `HAX_ALLOWED_AI_HOSTS`
 for administrator-reviewed institutional gateways.
 
 An optional administrator helper generates secrets/a Fernet key, prompts for
-storage credentials with hidden input, and creates `.env.local` with owner-only
+storage credentials with hidden input, asks for the Neon Auth Base URL, and creates `.env.local` with owner-only
 permissions. It never prints values or overwrites an existing file. Install root
 `requirements.txt` first, then run:
 
@@ -77,6 +116,12 @@ The preflight is offline by default. After configuring your own services,
 explicitly running `python3 scripts/check_hosted.py --live` initializes tables
 and PUT/GET/DELETEs a tiny private probe. It neither provisions paid services nor
 verifies queue delivery or Sandbox execution.
+
+The helper now asks for four inputs: pooled `DATABASE_URL` from Neon connection
+details, the stable production origin, `BLOB_READ_WRITE_TOKEN` from the private
+Blob store, and `NEON_AUTH_BASE_URL` from Neon Auth configuration. It generates
+the other secrets. If you already generated a private file, add the Auth URL
+without regenerating your encryption/signing secrets.
 
 Build/verification commands from the repository root:
 
@@ -95,7 +140,8 @@ filesystem-launch and direct-converter routes are not exposed.
 ### Deployed smoke test (required before inviting users)
 
 - Visit `/healthz`, then `/mentor`; enter the invite code and create a workspace.
-  A different/incognito browser must not see that workspace.
+  Verify the emailed code. The same account in another browser must resume its
+  work; a different verified account must not see it. Test logout/expiry too.
 - Upload a small synthetic IMSCC. Check multipart progress/cancellation, durable
   preparation after navigation/reload, and retained inventory/exclusion warnings.
 - Verify the raw `raw/...` object is removed only after prepared content is
@@ -117,8 +163,8 @@ live deployment success.
 
 The beta produces **reviewable static HAX-compatible content**, not an installed
 HAX CMS runtime or automatic public publication. Hosted Canvas API acquisition
-is disabled: upload an export or start from scratch. Institutional SSO/account
-recovery, comprehensive retention administration, accessibility/security review
+is disabled: upload an export or start from scratch. Institutional SSO/Google
+OAuth, comprehensive retention administration, accessibility/security review
 and provider restore/deletion testing remain production follow-ups. No cloud
 resources or deployments are created by installing this source.
 
