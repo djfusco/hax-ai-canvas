@@ -496,7 +496,7 @@ def review_draft(workspace: dict, message: str, client=None, *, assess=False, pr
         "Current draft supplied as bounded HTML excerpts with all item/source IDs retained. "
         "Omitted draft text was not reviewed; the stored snapshot is unchanged unless explicit edits are proposed."
     )
-    data = parse_json(_call_fitted(client, prompt, 7000))
+    data = parse_json(_call_fitted(client, prompt, 7000, schema=schema))
     reply = str(data.get("reply", "Review the revised draft before approval."))[:12000]
     if fit_warnings:
         reply += "\n\nContext coverage: " + " ".join(fit_warnings)

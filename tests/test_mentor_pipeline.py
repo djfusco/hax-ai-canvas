@@ -94,5 +94,26 @@ class MentorPipelineTests(unittest.TestCase):
             self.assertTrue(any("Baseline assessment completed: 30 of 30" in text for _, text in progress))
 
 
+class ReviewDraftTests(unittest.TestCase):
+    def setUp(self):
+        self.original = {**item("0"), "raw": {}}
+        self.draft = {
+            "summary": "Test draft", "warnings": [],
+            "items": [{"id": "0", "type": "assignments", "title": "Evidence comparison",
+                       "html": "<p>Test.</p>", "source_ids": ["course:0"]}],
+        }
+        self.state = {**workspace(), "id": "test-review", "source_type": "imscc",
+                      "draft": self.draft}
+
+    def test_review_draft_uses_structured_interface(self):
+        """review_draft must pass schema= to _call_fitted; without it PipelineClient.call() raises."""
+        client = PipelineClient()
+        with patch.object(service, "source_items", return_value=([self.original], [])):
+            reply, revised = service.review_draft(
+                self.state, "Please improve this assignment.", client)
+        self.assertGreater(len(client.calls), 0, "review_draft must use call_structured, not call()")
+        self.assertIsInstance(reply, str)
+
+
 if __name__ == "__main__":
     unittest.main()
