@@ -1027,7 +1027,7 @@ def create_mentor_blueprint(root_provider):
 
     @bp.post("/api/workspaces/<workspace_id>/chat")
     def chat(workspace_id):
-        from mentor_service import interview, review_draft
+        from mentor_service import interview, review_draft, MentorResponseError
         data = payload()
         workspace = store().get(g.owner, workspace_id)
         if workspace.get("active_job"):
@@ -1081,7 +1081,7 @@ def create_mentor_blueprint(root_provider):
             from mentor_assessment import AssessmentError
             from model_capabilities import ModelCapabilityError
             failure = (redact(str(exc))[:500]
-                       if isinstance(exc, (AIResponseError, AssessmentError, ModelCapabilityError))
+                       if isinstance(exc, (AIResponseError, AssessmentError, ModelCapabilityError, MentorResponseError))
                        else "Mentor response failed. Your feedback was saved; check provider settings and retry.")
             try:
                 store().fail_job(g.owner, workspace_id, job_id, "Mentor response failed.",
@@ -1130,7 +1130,7 @@ def create_mentor_blueprint(root_provider):
                 raise WorkspaceConflict("The selected provider key changed or expired. Retry with current settings.")
 
     def run_conversation(owner, workspace, kind, message, ai, data_root):
-        from mentor_service import interview, review_draft
+        from mentor_service import interview, review_draft, MentorResponseError
         from mentor_store import MentorStore
         database = MentorStore(data_root / "workspaces.sqlite")
         job_id = workspace["active_job"]["id"]
@@ -1153,7 +1153,7 @@ def create_mentor_blueprint(root_provider):
             from ai_client import AIResponseError
             from mentor_assessment import AssessmentError
             from model_capabilities import ModelCapabilityError
-            failure = (str(exc)[:500] if isinstance(exc, (AIResponseError, AssessmentError, ModelCapabilityError))
+            failure = (str(exc)[:500] if isinstance(exc, (AIResponseError, AssessmentError, ModelCapabilityError, MentorResponseError))
                        else "AI review failed. Check the selected model and retry. "
                        "No approval was granted and no scores were fabricated.")
             try:
@@ -1166,19 +1166,23 @@ def create_mentor_blueprint(root_provider):
 
     def run_job(owner, workspace, kind, ai, data_root, hax_sites=None, assess_ai=False):
         from mentor_store import MentorStore
-        from mentor_service import build_artifact, generate_draft
+        from mentor_service import build_artifact, generate_draft, MentorResponseError
         database = MentorStore(data_root / "workspaces.sqlite")
         job_id = workspace["active_job"]["id"]
+        current_phase = "preparing_analysis"
         def progress(phase, message):
+            nonlocal current_phase
             if assess_ai:
                 check_local_provider(owner, workspace, data_root)
             database.progress_job(owner, workspace["id"], job_id, phase, message[:500])
+            current_phase = phase
         try:
             if kind == "analysis":
                 draft = (generate_draft(workspace, ai, assess=True, progress=progress)
                          if assess_ai else generate_draft(workspace, ai))
                 if assess_ai:
                     draft = clean_local_output(owner, data_root, draft)
+                    progress("saving_draft", "Draft assessment completed. Saving the proposed draft and reports; approval is still required.")
                 database.finish_analysis(owner, workspace["id"], job_id, draft)
             else:
                 if hax_sites:
@@ -1200,15 +1204,26 @@ def create_mentor_blueprint(root_provider):
                                             safe_site_error(exc))
         except Exception as exc:
             try:
+                stages = {
+                    "preparing_analysis": "analysis preparation",
+                    "assessing_baseline": "baseline assessment",
+                    "drafting": "draft generation after baseline assessment",
+                    "validating_draft": "draft proposal validation",
+                    "assessing_draft": "proposed-draft assessment",
+                    "saving_draft": "saving the assessed draft",
+                }
                 message = (safe_site_error(exc) if kind == "build" and hax_sites else
-                           "AI assessment failed. Check model access and retry; "
+                           "AI processing failed during " + stages.get(current_phase, "analysis") + ". "
                            "no approval was granted and no scores were fabricated." if assess_ai else None)
                 if assess_ai:
                     from ai_client import AIResponseError
                     from mentor_assessment import AssessmentError
                     from model_capabilities import ModelCapabilityError
-                    if isinstance(exc, (AIResponseError, AssessmentError, ModelCapabilityError)):
-                        message = str(exc)[:500]
+                    if isinstance(exc, (AIResponseError, AssessmentError, ModelCapabilityError, MentorResponseError)):
+                        prefix = ("Draft proposal validation failed. "
+                                  if isinstance(exc, MentorResponseError) and current_phase == "validating_draft"
+                                  else "")
+                        message = (prefix + str(exc))[:500]
                 database.fail_job(owner, workspace["id"], job_id,
                                   "Processing failed. Check the input/provider and retry; no approval was granted.",
                                   public_message=message)

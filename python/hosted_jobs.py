@@ -145,7 +145,7 @@ def _redact(service, owner, value):
 
 def execute_mentor(owner, workspace_id, job_id, kind, provider="guided", backend=None):
     service = backend or HostedBackend()
-    from mentor_service import generate_draft, interview, review_draft, build_artifact
+    from mentor_service import generate_draft, interview, review_draft, build_artifact, MentorResponseError
     from ai_client import AIClient
     workspace = service.store.get(owner, workspace_id)
     active = workspace.get("active_job")
@@ -201,7 +201,7 @@ def execute_mentor(owner, workspace_id, job_id, kind, provider="guided", backend
         from mentor_assessment import AssessmentError
         from model_capabilities import ModelCapabilityError
         message = (_redact(service, owner, str(exc))[:500]
-                   if isinstance(exc, (AIResponseError, AssessmentError, ModelCapabilityError))
+                   if isinstance(exc, (AIResponseError, AssessmentError, ModelCapabilityError, MentorResponseError))
                    else None)
         try:
             service.store.fail_job(owner, workspace_id, job_id, "Hosted processing failed.",

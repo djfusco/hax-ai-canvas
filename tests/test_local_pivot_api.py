@@ -23,6 +23,7 @@ from test_local_import import cartridge_bytes
 
 class LocalPivotApiTests(unittest.TestCase):
     def setUp(self):
+        self.threads_before = set(threading.enumerate())
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.env = patch.dict(os.environ, {}, clear=True)
@@ -36,6 +37,10 @@ class LocalPivotApiTests(unittest.TestCase):
         self.base = "/mentor/api/workspaces/" + self.workspace["id"]
 
     def tearDown(self):
+        # An idle/failed job can be visible before the worker's finally block
+        # clears upload staging. Do not remove its database while it is writing.
+        for worker in set(threading.enumerate()) - self.threads_before:
+            worker.join(timeout=5)
         for manager in web.app.extensions.get("local_hax_sites", {}).values():
             manager.shutdown()
         for key, value in self.old.items():

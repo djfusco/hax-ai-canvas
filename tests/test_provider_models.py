@@ -242,6 +242,7 @@ class ModelApiTests(unittest.TestCase):
         self.service.store.add_message(owner, work["id"], "user", "Goals", "interview")
         self.service.vault.update_preferences(owner, "openai", saved["version"], {"model": "model-b"})
         with patch("ai_client.AIClient") as factory:
+            factory.return_value.call_structured = factory.return_value.call
             factory.return_value.call.return_value = '{"reply":"What are your goals?"}'
             outcome = execute_mentor(owner, work["id"], job, "interview", "openai", self.service)
             self.assertEqual(outcome["status"], "completed")
@@ -316,6 +317,7 @@ class ModelApiTests(unittest.TestCase):
             self.service.store.pin_provider(owner, work["id"], job, "openai", "gpt-4o",
                                              saved["version"], changed)
         with patch("ai_client.AIClient") as factory:
+            factory.return_value.call_structured = factory.return_value.call
             factory.return_value.call.return_value = '{"reply":"What evidence should learners produce?"}'
             outcome = execute_mentor(owner, work["id"], job, "interview", "openai", self.service)
             self.assertEqual(outcome["status"], "completed")

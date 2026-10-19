@@ -238,6 +238,7 @@ class MentorApiTests(unittest.TestCase):
         self.assertNotIn(key.encode(), (self.root / "credentials.sqlite").read_bytes())
         self.create()
         with patch("ai_client.AIClient") as factory:
+            factory.return_value.call_structured = factory.return_value.call
             factory.return_value.call.return_value = json.dumps({
                 "reply": "Which assessment must stay unchanged?"
             })
@@ -253,6 +254,7 @@ class MentorApiTests(unittest.TestCase):
         })
         self.create()
         with patch("ai_client.AIClient") as factory:
+            factory.return_value.call_structured = factory.return_value.call
             factory.return_value.call.side_effect = RuntimeError("sensitive upstream request detail")
             result = self.request(self.base + "/chat", data={
                 "message": "Discuss course constraints.", "provider": "openai",
@@ -276,6 +278,7 @@ class MentorApiTests(unittest.TestCase):
         revised = {**initial, "title": "Instructor-reviewed overview",
                    "html": "<p>Compare two evidence sources and explain uncertainty.</p>"}
         with patch("ai_client.AIClient") as factory:
+            factory.return_value.call_structured = factory.return_value.call
             factory.return_value.call.side_effect = [
                 json.dumps({"reply": "Which objectives must remain unchanged?"}),
                 json.dumps({"summary": "Targeted proposal", "items": [initial], "warnings": []}),
@@ -294,6 +297,39 @@ class MentorApiTests(unittest.TestCase):
         self.assertIn("Evidence diagram", self.workspace["draft"]["items"][0]["html"])
         self.assertEqual(self.workspace["reviewed_draft_revision"], self.workspace["draft_revision"])
         self.assertNotIn("raw", self.workspace["draft"]["items"][0])
+
+    def test_local_analysis_preserves_post_thirty_item_drafting_failure(self):
+        from test_mentor_pipeline import PipelineClient
+        from test_mentor_assessment import item
+        for response, expected, phase in (
+                ("PRIVATE_MALFORMED_JSON", "AI draft generation failed", "drafting"),
+                (json.dumps({"items": [{"id": "PRIVATE_UNKNOWN", "title": "X", "html": "<p>X</p>"}]}),
+                 "Draft proposal validation failed", "validating_draft")):
+            with self.subTest(phase=phase):
+                self.create()
+                self.chat()
+                self.workspace = self.request(self.base + "/approve-direction",
+                                              data={"revision": self.workspace["revision"]})
+                self.request("/mentor/api/credentials", data={
+                    "provider": "openai", "api_key": "synthetic-pipeline-key", "model": "fixture-text"})
+                client = PipelineClient(response)
+                with patch.dict(web.app.config, {"LOCAL_HAX_ENABLED": True}), \
+                        patch("ai_client.AIClient", return_value=client), \
+                        patch("mentor_service.source_items", return_value=(
+                            [item(str(index)) for index in range(30)], [])):
+                    self.request(self.base + "/analyze", data={
+                        "provider": "openai", "revision": self.workspace["revision"]}, expected=202)
+                    result = self.wait_idle()
+                job = result["jobs"][-1]
+                self.assertEqual(job["status"], "failed")
+                self.assertEqual(job["phase"], phase)
+                self.assertIn(expected, job["error"])
+                self.assertNotIn("PRIVATE_", job["error"])
+                self.assertNotIn("Check model access", job["error"])
+                self.assertEqual(len(client.calls), 31)
+                self.assertIsNone(result["draft"])
+                self.assertEqual(result["stage"], "direction_approved")
+                self.request(self.base + "/approve-build", data={"draft_revision": 0}, expected=409)
 
     def test_hosted_legacy_and_mentor_routes_fail_closed(self):
         with patch.dict(os.environ, {"VERCEL": "1"}):
@@ -316,6 +352,7 @@ class MentorApiTests(unittest.TestCase):
             "provider": "openai", "api_key": "unit-test-review-key", "model": "fixture-text",
         })
         with patch("ai_client.AIClient") as factory:
+            factory.return_value.call_structured = factory.return_value.call
             factory.return_value.call.side_effect = RuntimeError("provider failed")
             self.request(self.base + "/chat", data={
                 "kind": "review", "provider": "openai", "message": "Please review this draft."
@@ -378,6 +415,7 @@ class CredentialAndDraftTests(unittest.TestCase):
     def test_blank_ai_draft_has_no_invented_baseline_scores(self):
         from unittest.mock import Mock
         client = Mock()
+        client.call_structured = client.call
         client.call.return_value = json.dumps({
             "summary": "Proposed introductory course",
             "items": [{"id": "", "type": "pages", "title": "Week 1",
@@ -401,6 +439,7 @@ class CredentialAndDraftTests(unittest.TestCase):
             {"id": "", "title": "Test", "html": "<p>Text</p>", "source_ids": ["invented-source"]},
         ):
             client = Mock()
+            client.call_structured = client.call
             client.call.return_value = json.dumps({"items": [item]})
             with self.assertRaises(ValueError):
                 generate_draft(workspace, client)
