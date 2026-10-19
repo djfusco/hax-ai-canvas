@@ -707,6 +707,7 @@ function renderFlow() {
     !assessmentReady() ||
     workspace.reviewed_draft_revision !== workspace.draft_revision ||
     workspace.build_revision !== workspace.draft_revision;
+  renderWizard();
 }
 
 function requireMentorReady() {
@@ -1380,9 +1381,15 @@ async function renderWorkspace() {
     messageBox.replaceChildren();
     workspace.messages.forEach(message => {
       const box = document.createElement('div');
-      box.style.cssText = 'padding:0.8rem;margin:0.5rem 0;border-left:3px solid #1565c0;background:#f5f7fa;white-space:pre-wrap';
-      itemText(box, 'strong', `${message.role} · ${message.kind}`);
-      itemText(box, 'p', message.content);
+      const isUser = message.role === 'user';
+      box.className = 'chat-bubble ' + (isUser ? 'chat-bubble-user' : 'chat-bubble-mentor');
+      const label = document.createElement('div');
+      label.className = 'chat-bubble-label';
+      label.textContent = isUser ? 'You' : 'Mentor';
+      box.appendChild(label);
+      const text = document.createElement('div');
+      text.textContent = message.content;
+      box.appendChild(text);
       messageBox.appendChild(box);
     });
     if (followLatest) messageBox.scrollTop = messageBox.scrollHeight;
@@ -1736,8 +1743,133 @@ function cancelMentorJob() { action(async () => {
   workspace = await api(endpoint('/cancel-job'), 'POST', {job_id: workspace.active_job.id});
   await renderWorkspace();
 }); }
+
+// ── Review-chat shortcut form (Step 5) ───────────────────────────────────
+const _reviewShortcut = document.getElementById('review-chat-shortcut');
+if (_reviewShortcut) {
+  _reviewShortcut.onsubmit = event => {
+    event.preventDefault(); action(async () => {
+      requireMentorReady();
+      const msg = document.getElementById('review-shortcut-message')?.value;
+      if (!msg?.trim()) throw new Error('Type a message first.');
+      workspace = await mentorRequest(endpoint('/chat'), {message: msg, kind: 'review', provider: provider()});
+      const shortcutMsg = document.getElementById('review-shortcut-message');
+      if (shortcutMsg) shortcutMsg.value = '';
+      await renderWorkspace();
+    });
+  };
+}
+
 action(async () => {
   const session = await updateCredentials();
   if (session.authenticated) await refreshList();
   if (session.authenticated && provider() && provider() !== 'guided') await loadModels();
 });
+
+// ── Wizard layer ──────────────────────────────────────────────────────────
+
+let wizardStep = 1;
+
+function selectProviderCard(value) {
+  const sel = el('mentor-provider');
+  if (sel) { sel.value = value; sel.dispatchEvent(new Event('change')); }
+  if (typeof document.querySelectorAll === 'function') {
+    document.querySelectorAll('.provider-card').forEach(card => {
+      card.setAttribute('aria-pressed', String(card.dataset.provider === value));
+    });
+  }
+}
+
+function focusSourceFile() {
+  const f = el('source-file');
+  if (f) { f.focus(); f.scrollIntoView({block: 'center'}); }
+}
+
+function chipClick(n) {
+  if (busy || workspace?.active_job || uploadController) return;
+  const flow = getFlowState();
+  if (n <= flow.number) activateStep(n);
+}
+
+function wizardNext() {
+  const flow = getFlowState();
+  if (wizardStep < flow.number) {
+    activateStep(wizardStep + 1);
+  } else {
+    goToNextStep();
+  }
+}
+
+function wizardBack() {
+  if (wizardStep > 1) activateStep(wizardStep - 1);
+}
+
+function activateStep(n) {
+  wizardStep = n;
+  if (typeof document.querySelectorAll === 'function') {
+    document.querySelectorAll('.wizard-step').forEach(section => {
+      const stepNum = parseInt(section.dataset.step, 10);
+      if (stepNum === n) section.setAttribute('data-active', '');
+      else section.removeAttribute('data-active');
+    });
+  }
+  renderWizardChips();
+  if (typeof window.scrollTo === 'function') window.scrollTo({top: 0, behavior: 'smooth'});
+}
+
+function renderWizardChips() {
+  const flow = getFlowState();
+  const maxReached = flow.number;
+  if (typeof document.querySelectorAll === 'function') {
+    document.querySelectorAll('.step-chip').forEach(chip => {
+      const n = parseInt(chip.dataset.step, 10);
+      const state = n < wizardStep ? 'past'
+        : n === wizardStep ? 'active'
+        : n <= maxReached ? 'past'
+        : 'future';
+      chip.dataset.state = state;
+      chip.disabled = state === 'future';
+    });
+  }
+}
+
+function renderWizard() {
+  const stepNav = el('step-nav');
+  if (!mentorAuthenticated) {
+    if (stepNav) stepNav.hidden = true;
+    activateStep(1);
+    return;
+  }
+  if (stepNav) stepNav.hidden = false;
+  const flow = getFlowState();
+  const targetStep = flow.number;
+  if (wizardStep < targetStep && !busy && !workspace?.active_job && !uploadController) {
+    activateStep(targetStep);
+  }
+  renderWizardChips();
+  const step6label = el('step-6-chip-label');
+  if (step6label) step6label.textContent = localHax ? 'Build site' : 'Download';
+  const step2btn = el('step2-continue');
+  if (step2btn) {
+    const prov = provider();
+    step2btn.disabled = busy || !prov;
+  }
+  const step3btn = el('step3-continue');
+  if (step3btn) step3btn.disabled = busy || !workspace;
+  if (el('workspace-content')) el('workspace-content').hidden = !workspace;
+}
+
+// Sync provider card aria-pressed state after page load
+if (typeof document.addEventListener === 'function') {
+  document.addEventListener('DOMContentLoaded', () => {
+    const provSel = el('mentor-provider');
+    if (provSel) {
+      provSel.addEventListener('change', () => {
+        const v = provSel.value;
+        document.querySelectorAll('.provider-card').forEach(card => {
+          card.setAttribute('aria-pressed', String(card.dataset.provider === v));
+        });
+      });
+    }
+  });
+}
