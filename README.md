@@ -30,6 +30,18 @@ databases and secrets.
 
 ### Accounts and model choice
 
+The mentor page follows six numbered steps: workspace, AI setup, content,
+discussion, draft review, and download. A next-step card links to the relevant
+control and explains missing prerequisites. It never grants approval itself.
+AI setup is expanded, with no silently selected Guided mode: choose a provider
+and save its model, or explicitly choose the no-AI walkthrough.
+
+When no content is attached, upload a course/add supporting sources or explicitly
+choose to design a new course without a file. That UI choice does not delete
+any stored source. Optional inputs and processing/revision details are grouped
+separately. Polling preserves unsaved edits and conversation reading position,
+and running-job status clears when the job completes.
+
 Hosted mode now defaults to verified email accounts through Neon managed Better
 Auth. In your Neon project/branch's **Auth / Better Auth** settings, enable email
 sign-in and Email OTP, configure a dedicated production SMTP sender, and add the

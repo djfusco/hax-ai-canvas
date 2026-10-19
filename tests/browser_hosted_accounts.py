@@ -156,7 +156,8 @@ with sync_playwright() as playwright:
     assert "alice@example.edu" in page.locator("#account-label").inner_text()
     assert page.locator("#account-code").input_value() == ""
     assert not page.locator("#workspace-list").is_disabled()
-    page.locator("#provider-settings summary").click()
+    assert page.locator("#provider-settings").is_visible()
+    assert page.locator("#provider-settings h2").inner_text() == "2. Configure AI before chatting"
     page.locator("#mentor-provider").select_option("openai")
     page.wait_for_function("busy === false")
     page.locator("#mentor-key").fill("synthetic-provider-key")

@@ -111,6 +111,29 @@ code { font-family: 'SF Mono', Consolas, monospace; background: #f0f0f0; padding
 .banner-icon { font-size: 1.2rem; flex-shrink: 0; margin-top: 1px; }
 .banner[hidden] { display: none; }
 .banner-info    { background: #e3f2fd; border-left: 4px solid #1565c0; color: #0d47a1; }
+.mentor-guide { border: 2px solid #1565c0; background: #f5f9ff; scroll-margin-top: 90px; }
+.mentor-guide h2 { margin: 8px 0; font-size: 1.3rem; }
+.mentor-guide p { margin-bottom: 14px; }
+.mentor-steps { display: flex; flex-wrap: wrap; gap: 8px; list-style: none; padding: 0; margin: 0 0 20px; }
+.mentor-steps li { padding: 6px 10px; border: 1px solid #d0d5dd; border-radius: 16px; color: #596579; font-size: .82rem; background: #fff; }
+.mentor-steps li[data-state="past"] { border-color: #90caf9; color: #1565c0; }
+.mentor-steps li[aria-current="step"] { background: #1565c0; border-color: #1565c0; color: #fff; font-weight: 700; }
+.mentor-eyebrow { font-weight: 700; font-size: .82rem; text-transform: uppercase; letter-spacing: .04em; color: #1565c0; }
+.mentor-mode { border-top: 1px solid #cbdcf0; margin-top: 18px; padding-top: 12px; overflow-wrap: anywhere; }
+.mentor-section { scroll-margin-top: 90px; }
+.mentor-section h2 { margin-bottom: 12px; }
+.mentor-section h3 { margin: 22px 0 10px; }
+.mentor-section form { margin: 14px 0; }
+.mentor-section .btn { max-width: 100%; white-space: normal; text-align: center; }
+.mentor-section .field-input { margin-bottom: 10px; }
+.mentor-section details { margin: 20px 0; }
+.mentor-section summary, #processing-details > summary { cursor: pointer; font-weight: 600; }
+#mentor-messages { max-height: 420px; overflow: auto; margin: 16px 0; }
+#source-readiness, #discussion-readiness, #ai-setup-state { margin: 16px 0; }
+@media (max-width: 540px) {
+  .mentor-steps li { flex: 1 0 28%; text-align: center; }
+  .mentor-guide h2 { font-size: 1.15rem; }
+}
 .banner-success { background: #e8f5e9; border-left: 4px solid #2e7d32; color: #1b5e20; }
 .banner-warn    { background: #fff8e1; border-left: 4px solid #f9a825; color: #5d4037; }
 .banner-error   { background: #ffebee; border-left: 4px solid #c62828; color: #b71c1c; }

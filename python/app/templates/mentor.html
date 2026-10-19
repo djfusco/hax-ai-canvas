@@ -4,10 +4,26 @@
 <div class="page-wrap">
   <div class="page-hero">
     <h1>Faculty Course Mentor</h1>
-    <p class="hero-sub">Understand → Discuss → Approve direction → Draft → Review together → Approve build.</p>
+    <p class="hero-sub">Choose a course, set up your mentor, add content, then discuss and approve your changes. Nothing is published automatically.</p>
   </div>
   <div id="mentor-error" role="alert" class="banner banner-warn" hidden></div>
   <p id="mentor-status" role="status" aria-live="polite"></p>
+  <section class="card mentor-guide" id="mentor-guide" tabindex="-1" aria-labelledby="next-step-title" hidden>
+    <p id="guide-workspace" class="mentor-eyebrow"></p>
+    <ol class="mentor-steps" aria-label="Course preparation steps">
+      <li id="flow-step-1">1. Workspace</li>
+      <li id="flow-step-2">2. AI setup</li>
+      <li id="flow-step-3">3. Content</li>
+      <li id="flow-step-4">4. Discuss</li>
+      <li id="flow-step-5">5. Draft &amp; review</li>
+      <li id="flow-step-6">6. Download</li>
+    </ol>
+    <p class="mentor-eyebrow" id="next-step-number"></p>
+    <h2 id="next-step-title" aria-live="polite" aria-atomic="true"></h2>
+    <p id="next-step-description"></p>
+    <button class="btn btn-primary" id="next-step-button" type="button" onclick="goToNextStep()">Continue</button>
+    <p id="mentor-mode" class="mentor-mode" role="status" aria-live="polite"></p>
+  </section>
   <div class="card" id="mentor-login-card" hidden>
     <h2>Welcome to the invited beta</h2>
     <p>New beta users enter the administrator's invitation code here, then verify their email below. Returning account users can sign in directly.</p>
@@ -39,63 +55,73 @@
       <p id="account-label"></p>
       <button class="btn btn-ghost" type="button" onclick="signOutAccount()">Sign out / switch person</button>
     </div>
-    <h2>Your workspaces</h2>
+    <div id="workspace-choice" hidden>
+    <h2>1. Choose or create a workspace</h2>
+    <p>Each workspace holds one course and its review history. Start here, then configure how you want the mentor to help.</p>
     <p class="field-help">{% if is_hosted %}Saved in private hosted storage and scoped to your verified account. Sign in with the same account to resume on another device.{% else %}Saved on this computer and scoped to this browser's signed identity. Clearing cookies loses access to this local identity.{% endif %} Never paste API keys into the conversation.</p>
     <label class="field-label" for="workspace-list">Resume a course</label>
     <select id="workspace-list" class="field-input" onchange="openWorkspace(this.value)"><option value="">Choose a workspace</option></select>
     <form id="new-workspace" style="margin-top:1rem">
       <label class="field-label" for="new-title">New course/workspace title</label>
       <input class="field-input" id="new-title" maxlength="240" required placeholder="e.g. Introduction to Cybersecurity">
-      <button class="btn btn-primary" type="submit">Start from scratch / create workspace</button>
+      <button class="btn btn-primary" type="submit">Create workspace</button>
     </form>
+    </div>
   </div>
-  <details class="card" id="provider-settings">
-    <summary><strong>AI provider &amp; credential retention</strong></summary>
+  <section class="card mentor-section" id="provider-settings" tabindex="-1" hidden>
+    <h2>2. Configure AI before chatting</h2>
+    <p>Choose an AI provider, save your key, then choose and save a model. Or explicitly choose Guided mode for a walkthrough without AI.</p>
     <p class="field-help">Guided mode makes no AI calls and does not invent analysis scores. With AI enabled, course excerpts and your design brief are sent to that provider. Keys are encrypted server-side, never stored in browser storage or chat.</p>
-    <label class="field-label" for="mentor-provider">Provider for this action</label>
+    <label class="field-label" for="mentor-provider">How would you like to work?</label>
     <select id="mentor-provider" class="field-input">
-      <option value="guided">Guided mode — no AI calls</option>
+      <option value="" selected disabled>Choose an AI provider or Guided mode…</option>
       <option value="nebula">NebulaONE</option><option value="anthropic">Anthropic</option>
       <option value="openai">OpenAI</option><option value="gemini">Gemini</option>
+      <option value="guided">Continue without AI — Guided walkthrough</option>
     </select>
-    <form id="credential-form">
+    <p id="ai-setup-state" class="banner banner-info" role="status">Choose how to work. AI is not enabled until you save a provider key and model.</p>
+    <form id="credential-form" hidden>
       <label class="field-label" for="mentor-key">API key</label>
       <input class="field-input" id="mentor-key" type="password" autocomplete="off">
-      <label class="field-label" for="mentor-gateway">Nebula HTTPS gateway (Nebula only)</label>
+      <div id="gateway-settings" hidden>
+      <label class="field-label" for="mentor-gateway">Nebula HTTPS gateway</label>
       <input class="field-input" id="mentor-gateway" type="url" placeholder="https://your-gateway.azure-api.net/anthropic">
+      </div>
       <label class="step-check-item"><input type="checkbox" id="remember-key"> Remember for 30 days for this identity; otherwise expire after 12 hours</label>
-      <button class="btn btn-primary" type="submit">Save encrypted credentials</button>
-      <button class="btn btn-ghost" type="button" onclick="forgetKey()">Forget selected provider key</button>
+      <button class="btn btn-primary" id="save-provider-key" type="submit">Save key &amp; fetch models</button>
+      <button class="btn btn-ghost" id="forget-provider-key" type="button" onclick="forgetKey()">Forget selected provider key</button>
     </form>
-    <div id="model-settings">
+    <div id="model-settings" hidden>
       <label class="field-label" for="mentor-model">Model for this provider</label>
       <select class="field-input" id="mentor-model"><option value="">Save a key, then fetch models</option></select>
-      <button class="btn btn-ghost" type="button" onclick="refreshModels()">Refresh models from provider</button>
+      <button class="btn btn-ghost" id="refresh-models" type="button" onclick="refreshModels()">Refresh models from provider</button>
       <label class="step-check-item" id="manual-model-label" hidden><input id="manual-model-enabled" type="checkbox"> Enter an institutional gateway deployment/model ID manually</label>
       <input class="field-input" id="manual-model" maxlength="120" aria-label="Institutional model or deployment ID" hidden>
-      <button class="btn btn-primary" type="button" onclick="saveModel()">Use selected model</button>
+      <button class="btn btn-primary" id="save-model" type="button" onclick="saveModel()">Use selected model</button>
       <p id="model-status" role="status"></p>
     </div>
     <p id="credential-status" role="status"></p>
-  </details>
+  </section>
   <div id="workspace-content" hidden>
-    <div class="card">
+    <section class="card mentor-section" id="course-sources" tabindex="-1">
+      <p class="mentor-eyebrow">3. Add content, or start a new course</p>
       <h2 id="workspace-title"></h2>
       <p id="workspace-stage"></p>
-      <p class="field-help">Changing course inputs or the design brief invalidates earlier approvals. Reference and policy materials inform the mentor; they are not automatically published.</p>
-      <h3>1. Course source (optional for a new course)</h3>
+      <p id="source-readiness" class="banner banner-info" role="status"></p>
+      <button class="btn btn-outline" id="start-blank-course" type="button" onclick="startBlankCourse()">I'm designing a new course — continue without a file</button>
+      <h3>Import an existing Canvas course</h3>
       <form id="source-form">
         <label class="field-label" for="source-file">Canvas .imscc or prepared .haxcourse</label>
         <input class="field-input" id="source-file" type="file" accept=".imscc,.haxcourse">
-        <button class="btn btn-primary" type="submit">Import into this workspace</button>
+        <button class="btn btn-primary" type="submit">Upload &amp; prepare course</button>
       </form>
       <p id="hosted-upload-help" class="field-help" hidden>Large exports upload directly to private Vercel storage in bounded parts. You do not need Python or a local helper. The original cloud upload is deleted only after the prepared result is saved and validated; your computer's original is unchanged.</p>
-      <label id="upload-progress-label" for="hosted-upload-progress" hidden>Upload progress</label>
+      <label id="upload-progress-label" for="hosted-upload-progress" tabindex="-1" hidden>Upload progress</label>
       <progress id="hosted-upload-progress" max="100" value="0" hidden></progress>
       <button class="btn btn-ghost" id="abort-upload" type="button" onclick="abortHostedUpload()" hidden>Cancel transfer</button>
       <p id="upload-state" role="status" aria-live="polite"></p>
       <details>
-        <summary>Is your export 2 GB or media-heavy?</summary>
+        <summary>Optional: prepare a media-heavy export on your computer instead</summary>
         <p>Use the local preparation tool. It reads text/metadata without inflating bulk media and records what was excluded. Your original remains untouched. Upload the resulting compact .haxcourse package here.</p>
         <pre>python3 python/prepare_course.py "/path/course.imscc" --output "/path/course.haxcourse"</pre>
         <p>This is a review package, not a complete backup. Videos/images omitted locally are not analyzed or rebuilt unless provided separately in supported form.</p>
@@ -109,7 +135,9 @@
           <button class="btn btn-primary" type="submit">Acquire course for mentoring</button>
         </form>
       </details>
-      <h3>2. Additional files, URLs &amp; teaching knowledge</h3>
+      <details id="supplemental-sources">
+      <summary>Add optional supporting documents, links or teaching notes</summary>
+      <p class="field-help">Reference and policy materials inform the mentor; they are not automatically published.</p>
       <label class="field-label" for="material-role">Purpose of the source</label>
       <select id="material-role" class="field-input"><option value="reference">Reference / background</option><option value="policy">Instructor or institutional policy — not auto-published</option><option value="student">Student-facing source — eligible for proposed adaptation</option></select>
       <form id="material-file-form">
@@ -128,19 +156,21 @@
         <button class="btn btn-primary" type="submit">Add notes</button>
       </form>
       <ul id="material-list"></ul>
+      </details>
       <h3>What the mentor has so far</h3>
       <div id="course-inventory"></div>
-    </div>
-    <div class="card">
-      <h2>3. Discuss the course</h2>
+    </section>
+    <section class="card mentor-section" id="course-discussion" tabindex="-1">
+      <h2>4. Discuss goals, then approve the direction</h2>
       <p>The preliminary inventory is not a full AI analysis. Explain the audience, learning goals, constraints, what works and what should change.</p>
+      <p id="discussion-readiness" class="banner banner-info" role="status"></p>
       <div id="mentor-messages" aria-live="polite"></div>
       <form id="mentor-chat-form">
         <label class="field-label" for="chat-kind">Conversation checkpoint</label>
         <select id="chat-kind" class="field-input"><option value="interview">Initial interview / design direction</option><option value="review">Final draft review / requested revisions</option></select>
         <label class="field-label" for="mentor-message">Your message</label>
         <textarea class="field-input" id="mentor-message" rows="3" maxlength="6000" required></textarea>
-        <button class="btn btn-primary" type="submit">Discuss with mentor</button>
+        <button class="btn btn-primary" id="send-mentor-message" type="submit">Send message to mentor</button>
       </form>
       <h3>Editable design brief</h3>
       <p class="field-help">Interview feedback is added here. Refine it into goals and constraints before approval.</p>
@@ -148,22 +178,28 @@
       <button class="btn btn-ghost" onclick="saveBrief()">Save revised brief (invalidates draft)</button>
       <button class="btn btn-primary" id="approve-direction" onclick="approveDirection()">Approve this direction</button>
       <button class="btn btn-success" id="analyze-course" onclick="analyzeCourse()">Analyze &amp; generate draft</button>
-    </div>
-    <div class="card" id="draft-panel" hidden>
-      <h2>4. Preview and review the proposed course</h2>
+      <p class="field-help">Next: finish the conversation, save your design brief, approve its direction, then generate the draft. Changes to inputs or the brief invalidate earlier approvals.</p>
+    </section>
+    <section class="card mentor-section" id="draft-panel" tabindex="-1" hidden>
+      <h2>5. Review the draft before building</h2>
+      <p>Open the draft items below. Use the final-review conversation to request changes, then explicitly approve the exact version you want to build.</p>
       <p id="draft-summary"></p><p id="draft-coverage" class="field-help"></p>
       <ul id="draft-warnings"></ul>
       <div id="draft-items"></div>
-      <button class="btn btn-ghost" onclick="saveDraft()">Save edited snapshot (requires new approval)</button>
+      <button class="btn btn-ghost" id="save-draft" onclick="saveDraft()">Save edited snapshot (requires new approval)</button>
       <p>Use the final-review chat above to discuss or request revisions. The mentor cannot grant approval.</p>
       <button class="btn btn-primary" id="approve-build" onclick="approveBuild()">Approve this exact draft</button>
       <button class="btn btn-success" id="build-course" onclick="buildCourse()">Build approved content</button>
-      <div id="artifact-links"></div>
-    </div>
-    <div class="card"><h3>Processing history</h3><pre id="mentor-jobs" style="white-space:pre-wrap"></pre>
+      <h3>6. Download approved content</h3>
+      <p>Building prepares a private download and preview. It does not publish a public HAX site.</p>
+      <div id="artifact-links" tabindex="-1"></div>
+    </section>
+    <details class="card" id="processing-details" tabindex="-1"><summary>Processing details and revision history</summary>
+      <p id="workspace-revisions"></p>
+      <pre id="mentor-jobs" style="white-space:pre-wrap"></pre>
       <button class="btn btn-ghost" id="cancel-mentor-job" onclick="cancelMentorJob()" hidden>Cancel / recover interrupted job</button>
       <p class="field-help">Cancellation rejects late results but cannot undo an AI request already sent to a provider.</p>
-    </div>
+    </details>
   </div>
 </div>
 {% endblock %}
