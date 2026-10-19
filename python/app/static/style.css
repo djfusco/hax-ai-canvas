@@ -54,6 +54,10 @@ code { font-family: 'SF Mono', Consolas, monospace; background: #f0f0f0; padding
 }
 .nav-link:hover { background: rgba(255,255,255,.15); color: #fff; text-decoration: none; }
 .nav-link.active { background: rgba(255,255,255,.25); color: #fff; font-weight: 600; }
+@media (max-width: 800px) {
+  .header-inner { height: auto; min-height: 64px; flex-wrap: wrap; padding: 12px 0; gap: 10px; }
+  .main-nav { flex: 1 1 100%; min-width: 0; max-width: 100%; overflow-x: auto; padding-bottom: 4px; }
+}
 
 /* ── Main & Footer ───────────────────────────────────────────────────────── */
 .app-main { flex: 1; padding: 32px 24px 48px; }
@@ -132,6 +136,15 @@ code { font-family: 'SF Mono', Consolas, monospace; background: #f0f0f0; padding
 .mentor-upload-steps li[data-state="current"] { font-weight: 750; color: #1256a0; }
 .mentor-upload-steps li[data-state="past"] { color: #267338; }
 .mentor-section { scroll-margin-top: 90px; }
+.mentor-hax-site { margin: 18px 0; padding: 20px; border: 2px solid #81b88a; border-radius: 10px; background: #eef8ef; scroll-margin-top: 90px; }
+.mentor-hax-site p { margin: 10px 0; overflow-wrap: anywhere; }
+.mentor-hax-site .btn { margin: 4px 4px 4px 0; }
+.mentor-hax-site[hidden], .mentor-hax-site .btn[hidden], #abort-upload[hidden] { display: none; }
+.mentor-assessment { margin: 20px 0; padding: 18px; background: #f5f9ff; border: 1px solid #a7c3e6; border-radius: 10px; }
+.mentor-assessment p, .mentor-assessment blockquote { margin: 10px 0; overflow-wrap: anywhere; }
+.mentor-assessment ul { padding-left: 22px; }
+.mentor-assessment h5 { margin-top: 12px; font-size: .92rem; }
+.mentor-assessment blockquote { border-left: 3px solid #a7c3e6; padding-left: 12px; white-space: pre-wrap; }
 .mentor-section h2 { margin-bottom: 12px; }
 .mentor-section h3 { margin: 22px 0 10px; }
 .mentor-section form { margin: 14px 0; }

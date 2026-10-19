@@ -208,7 +208,7 @@ def _proposals(data: dict, known: dict[str, dict], material_ids: set[str]) -> li
     return result
 
 
-def generate_draft(workspace: dict, client=None) -> dict:
+def generate_draft(workspace: dict, client=None, *, assess=False, progress=None) -> dict:
     originals, warnings = source_items(workspace)
     known = {item["id"]: item for item in originals}
     if client is None:
@@ -225,8 +225,22 @@ def generate_draft(workspace: dict, client=None) -> dict:
             "warnings": warnings + ["Guided mode does not generate semantic recommendations."],
             "mode": "guided", "coverage": "Original content only; not LLM-assessed.",
         }
+    baseline = None
+    assessment_context = ""
+    if assess:
+        from mentor_assessment import assess_design
+        if originals:
+            baseline = assess_design(workspace, originals, client, scope="baseline", progress=progress)
+            assessment_context = "\n\nBASELINE ASSESSMENT PRIORITIES:\n" + json.dumps([
+                {"item_id": item["item_id"], "concerns": item["concerns"],
+                 "recommendations": item["recommendations"]}
+                for item in baseline["items"]
+            ], ensure_ascii=False)[:12000]
+        if progress:
+            progress("drafting", "Generating proposed student content from the approved direction and assessment.")
     prompt = (
         context(workspace, originals)
+        + assessment_context
         + "\n\nCreate a concrete draft following the approved design brief. For an existing course, "
           "propose targeted revisions using exact item IDs above; unspecified originals are retained. "
           "For a blank course, propose an initial outline with actual HTML content, not invented baseline scores. "
@@ -246,15 +260,25 @@ def generate_draft(workspace: dict, client=None) -> dict:
     model_warnings = data.get("warnings", [])
     if not isinstance(model_warnings, list):
         raise ValueError("Invalid draft warnings.")
-    return {
+    result = {
         "summary": str(data.get("summary", "Review proposed changes before building."))[:6000],
         "items": list(combined.values()),
         "warnings": warnings + [str(w)[:1000] for w in model_warnings[:20]],
         "mode": "ai", "coverage": "Bounded excerpts and selected proposals; unchanged items are not claimed as AI-reviewed.",
     }
+    if assess:
+        result["assessment_required"] = True
+        if baseline:
+            result["baseline_assessment"] = baseline
+        result["assessment"] = assess_design(workspace, result["items"], client,
+                                             scope="draft", progress=progress)
+        result["coverage"] = (
+            "Every draft item was AI-assessed using bounded text excerpts; coverage and evidence "
+            "are recorded in the instructor assessment. Media content was not semantically assessed.")
+    return result
 
 
-def review_draft(workspace: dict, message: str, client=None) -> tuple[str, dict | None]:
+def review_draft(workspace: dict, message: str, client=None, *, assess=False, progress=None) -> tuple[str, dict | None]:
     if client is None:
         return (
             "Guided mode: your feedback has been recorded. Edit the draft items below, or update the "
@@ -280,13 +304,20 @@ def review_draft(workspace: dict, message: str, client=None) -> tuple[str, dict 
     data = parse_json(client.call(SYSTEM, prompt, max_tokens=7000))
     reply = str(data.get("reply", "Review the revised draft before approval."))[:12000]
     changes = _proposals(data, known, {m["id"] for m in workspace.get("materials", [])})
-    if not changes:
-        return reply, None
-    revised = dict(draft)
-    combined = {key: {k: v for k, v in item.items() if k != "raw"}
-                for key, item in known.items()}
-    combined.update({item["id"]: item for item in changes})
-    revised["items"] = list(combined.values())
+    revised = dict(draft) if changes else None
+    if changes:
+        combined = {key: {k: v for k, v in item.items() if k != "raw"}
+                    for key, item in known.items()}
+        combined.update({item["id"]: item for item in changes})
+        revised["items"] = list(combined.values())
+    if assess:
+        from mentor_assessment import assess_design, assessment_current
+        candidate = revised or draft
+        if not assessment_current(candidate["items"], candidate.get("assessment")):
+            revised = dict(candidate)
+            revised["assessment_required"] = True
+            revised["assessment"] = assess_design(workspace, revised["items"], client,
+                                                   scope="draft", progress=progress)
     return reply, revised
 
 
@@ -314,10 +345,13 @@ def validate_manual_draft(draft: dict, incoming: dict) -> dict:
         items[value["id"]] = {**original, "title": title.strip(), "html": clean,
                               "changed": True, "reason": "Edited by the instructor.",
                               "original_html": original.get("original_html", original["html"])}
-    return {**draft, "items": list(items.values())}
+    result = {**draft, "items": list(items.values())}
+    if draft.get("assessment_required"):
+        result.pop("assessment", None)
+    return result
 
 
-def build_artifact(workspace: dict, destination: Path) -> dict:
+def build_artifact(workspace: dict, destination: Path, *, asset_budget=None) -> dict:
     """Export exactly the approved content, never execute uploaded/npm code."""
     draft = workspace.get("draft")
     if not draft or not draft.get("items"):
@@ -329,6 +363,17 @@ def build_artifact(workspace: dict, destination: Path) -> dict:
                          for identifier, location in locations.items()}
     manifest = {"id": workspace["id"], "title": workspace["title"], "items": []}
     assets_in_preview = set()
+    asset_bytes = 0
+    omitted_assets = 0
+    referenced_assets = set()
+    if asset_budget is not None:
+        from urllib.parse import unquote, urlsplit
+        for item in draft["items"]:
+            for tag in BeautifulSoup(sanitize_import_html(item["html"]), "html.parser").find_all(True):
+                for attribute in ("href", "src", "poster"):
+                    value = urlsplit(str(tag.get(attribute, "")))
+                    if not value.scheme and not value.netloc:
+                        referenced_assets.add(unquote(value.path).lstrip("/"))
     for position, item in enumerate(draft["items"]):
         location = locations[item["id"]]
         path = destination / location
@@ -349,10 +394,23 @@ def build_artifact(workspace: dict, destination: Path) -> dict:
             source = assets / name
             if (name and Path(name).name == name and source.is_file() and not source.is_symlink()
                     and source.suffix.lower() in ASSET_EXTENSIONS):
+                size = source.stat().st_size
+                if asset_budget is not None and "files/" + name not in referenced_assets:
+                    continue
+                if asset_budget is not None and asset_bytes + size > asset_budget:
+                    omitted_assets += 1
+                    continue
                 (destination / "files").mkdir(exist_ok=True)
                 shutil.copy2(source, destination / "files" / name)
                 assets_in_preview.add("files/" + name)
+                asset_bytes += size
     (destination / "site.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    preview_warnings = list(draft.get("warnings", []))
+    if omitted_assets:
+        preview_warnings.append(
+            f"Compact static preview omits {omitted_assets} large assets. "
+            "Open the local HAX site for supported course media.")
+        workspace = {**workspace, "draft": {**draft, "warnings": preview_warnings}}
     from mentor_preview import render_preview, PREVIEW_STYLE_HASH
     for position, item in enumerate(draft["items"]):
         (destination / preview_locations[item["id"]]).write_text(
@@ -363,7 +421,7 @@ def build_artifact(workspace: dict, destination: Path) -> dict:
     (destination / "approval.json").write_text(json.dumps({
         "workspace_id": workspace["id"], "input_revision": workspace["revision"],
         "draft_revision": workspace["draft_revision"], "mode": draft.get("mode"),
-        "warnings": draft.get("warnings", []),
+        "warnings": preview_warnings,
     }, indent=2), encoding="utf-8")
     package = destination.with_suffix(".zip")
     with zipfile.ZipFile(package, "x", zipfile.ZIP_DEFLATED) as archive:
@@ -372,4 +430,5 @@ def build_artifact(workspace: dict, destination: Path) -> dict:
                 archive.write(path, path.relative_to(destination))
     return {"path": str(package), "preview_dir": str(destination),
             "items": len(draft["items"]), "draft_revision": workspace["draft_revision"],
-            "kind": "approved-course-content", "preview_style_hash": PREVIEW_STYLE_HASH}
+            "kind": "approved-course-content", "preview_style_hash": PREVIEW_STYLE_HASH,
+            "omitted_preview_assets": omitted_assets}

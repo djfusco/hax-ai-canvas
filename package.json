@@ -9,10 +9,14 @@
     "check:hosted": "python3 scripts/check_hosted.py"
   },
   "dependencies": {
+    "@haxtheweb/create": "26.8.1",
     "@vercel/blob": "2.8.2"
   },
   "devDependencies": {
     "esbuild": "0.28.2"
+  },
+  "overrides": {
+    "js-yaml": "4.3.2"
   },
   "bin": {
     "hax-ai-canvas": "bin/index.js"

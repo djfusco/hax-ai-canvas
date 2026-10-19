@@ -1,4 +1,119 @@
 # hax-ai-canvas
+## Local instructor workflow
+**Node.js 22+ and Python 3.10+ are required.** No global HAX installation,
+Canvas token, cloud storage, `.env` file or environment-variable setup is needed.
+The launcher checks Python, creates its own virtual environment, installs
+dependencies and includes the official pinned HAX CLI.
+
+```bash
+npx hax-ai-canvas@latest
+```
+
+**Unpublished source:** these changes reach the public `npx` command only after
+an npm release. Test this checkout now with `npm install`, then
+`node bin/index.js`. For isolated testing, add `--data-dir "/path/test-data"`.
+The app opens `http://127.0.0.1:5050/mentor`. Keep the terminal open; Ctrl+C
+stops the app and its managed HAX servers. First-run downloads require internet.
+
+### From course idea to a real HAX site
+1. Create or resume a workspace. Multiple courses retain separate inputs,
+   conversations, drafts, assessments and approval history.
+2. Choose an AI provider, enter its key **in the browser**, fetch available
+   models, select one and choose **Use selected model**. OpenAI, Anthropic,
+   Gemini and institutional Nebula gateways are supported; gateways also need
+   their HTTPS URL entered in the UI. No provider environment variables.
+3. Import a Canvas `.imscc` export, or explicitly start a new course without
+   a file. Optionally add documents, public links and notes labelled reference,
+   instructor policy or student-facing source.
+4. Discuss learner context, learning goals, constraints and AI expectations.
+   Refine the brief, complete the interview and approve the direction.
+5. **Analyze & generate draft** assesses the existing instructional items,
+   generates proposed content, and assesses the resulting draft. New courses
+   have no fabricated original-course baseline.
+6. Inspect the actual HTML and instructor-only baseline/proposed reports.
+   Request revisions or edit pages. Edits invalidate the assessment; finish an
+   AI final review to refresh it, then **approve this exact draft**.
+7. **Build & open HAX site** scaffolds a real HAX runtime with the CLI, writes
+   approved pages and supported referenced assets, and starts a loopback server.
+   Open is enabled only after readiness checks. Start/restart/stop controls
+   reopen the same saved site later; rebuilds create a new version.
+
+**Guided mode is not AI assessment:** it is an explicitly chosen no-AI
+walkthrough retaining originals or a design-brief outline, not generated
+curriculum or framework scores. Models cannot approve or publish their work.
+
+### Evidence and honest assessment limits
+The local AI reports use revised Bloom's Taxonomy, the
+[AI Assessment Scale 2.1](https://aiassessmentscale.com/), constructive
+alignment, TILT purpose/task/criteria and authentic-assessment design lenses.
+They include attributed references, quotes from supplied evidence, strengths,
+concerns, recommendations and limitations. Higher Bloom/AIAS levels are **not
+inherently better**. Six numeric dimensions are application-defined AI
+heuristics, not validated research instruments, misconduct probabilities,
+student grades or a composite readiness score.
+
+Every supplied item in the admitted scope is assessed, using at most 12,000
+visible-text characters per item plus bounded brief/material excerpts.
+Truncation is disclosed. Review limits remain 500 items / 16 MiB instructional
+JSON, 2 MiB per item, and 30 optional materials. Media and unextracted text are
+not semantically assessed. Provider/schema failures produce no counterfeit
+neutral scores. Analysis/review can make multiple paid provider requests.
+
+### Large local files and final-site media
+Original archives may be up to **8 GiB**, subject to archive safety,
+instructional quotas and free disk. Browser selections copy to the local app
+in chunks of at most 8 MiB, **not to cloud storage**, with progress, cancel and
+saved-copy recovery. Keep the app running during preparation.
+For direct access without that local staging copy:
+
+```bash
+npx hax-ai-canvas --course "/path/course.imscc"
+```
+
+The original remains untouched. Supported media/documents are validated and
+streamed separately from AI text. Final HAX sites include supported assets
+referenced by approved pages; unsafe/missing/external resources are reported,
+not reconstructed. Active Office/PDF content, opaque PDF object streams,
+scripts and executable attachments are conservatively excluded.
+Prepared `.haxcourse` imports cannot recover previously excluded media.
+The secondary static preview/download has a 64 MiB local asset budget and
+discloses omissions, avoiding mandatory recompression of multi-gigabyte videos.
+The primary HAX site retains supported referenced media.
+
+A HAX course site is not a recreated Canvas LMS: grading, submissions, LTI
+and executable quizzes are not restored. HAX editor changes are separate from
+mentor snapshots. The site is served locally; themes may request external
+fonts. Its separate loopback editor is not an email-account/OS security boundary.
+
+### Local data and optional email accounts
+All course work, conversations, assessments, provider keys and sites stay in
+`~/.canvas-course-builder/mentor_data/`; generated sites are under
+`sites/<workspace>/<build>/`. Keys and upstream auth sessions are encrypted
+locally. Updates preserve user data.
+By default the existing signed browser-local identity resumes your work;
+clearing its cookie can lose access to that identity. Optional email setup is
+collapsed in the UI and never required to start. Enter the existing **public
+Neon Auth Base URL** there; an administrator must enable email OTP and trust
+the exact `http://127.0.0.1:5050` origin in Neon.
+Neon handles authentication/account data only, not course storage. The same
+verified account resumes multiple courses on this computer, not synchronized
+courses on other devices. Selected course excerpts still go to the AI provider.
+
+### Verification and dependency maintenance
+Run `python3 -m unittest discover -s tests -v`, `npm run test:upload` and
+`npm run build:hosted`. Actual-browser checks are in
+`tests/browser_local_mentor.py` and `tests/browser_local_end_to_end.py`;
+`scripts/verify_local_hax.py` exercises the real CLI/runtime.
+Synthetic provider fixtures exercise real SDK request shapes without paid
+calls; they do not establish live-model quality or real-course throughput.
+The pinned upstream HAX dependencies retain npm advisories. The source
+checkout patches compatible YAML resolution through an override, but npm
+ignores dependency-level overrides in consumer installs; do not assume a public
+`npx` install inherits that fix or that `npm audit` is clean.
+
+## Hosted and legacy documentation
+The sections below preserve optional hosted setup and the earlier direct
+converter. They are not prerequisites for the local workflow above.
 
 ## Vercel-hosted Faculty Mentor beta
 
@@ -234,19 +349,17 @@ The mentoring workspace is separate from the legacy direct converter:
 7. **Approve this exact draft**, then **build approved content**. Download the
    course content ZIP or view its protected static preview.
 
-The build contains static review pages, a HAX-compatible content manifest
-(`site.json`), bundled retained assets and an approval/version record. It is
-**not a full installed HAX CMS runtime or an automatic public deployment**.
-The existing direct converter still provides the earlier HAX CLI workflow,
-but does not enforce the new mentoring gates.
+The local launcher now adds the real HAX runtime build/serve flow described
+above. Hosted builds remain static content packages. The older direct converter
+is a separate tool and does not enforce the mentor approval gates.
 
 Select a configured AI provider for actual conversational mentoring and draft
 proposals. **Guided mode** is an offline walkthrough: it inventories inputs and
 retains original content/design-brief text; it does not pretend to provide
 LLM analysis, recommendations, baseline readiness scores or a generated full
-curriculum. The new mentor currently uses bounded source excerpts and targeted
-proposals, not a full-course retrieval/indexing or eight-dimension batch-scoring
-engine. Large text courses must be split into review scopes (maximum 500 items,
+curriculum. Local AI mode now assesses every item in the admitted review scope
+using bounded excerpts, with separate baseline/proposed reports. It is not
+unbounded full-course retrieval/indexing. Split large text courses (maximum 500 items,
 16 MiB instructional JSON per workspace; context excerpts are further bounded).
 
 Workspaces, conversation history, source provenance, approval revisions and
@@ -349,7 +462,7 @@ Pulls a course from Canvas, runs it through an AI evaluation and enhancement pip
 |---|---|
 | **Node.js 22+** | [nodejs.org](https://nodejs.org/en/download) |
 | **Python 3.10+** | [python.org/downloads](https://www.python.org/downloads/) |
-| **HAX CLI** | `npm install -g @haxtheweb/create` |
+| **HAX CLI** | Included by the current launcher; legacy standalone scripts may need their own CLI |
 | **Canvas course source** | A local `.imscc` course export, or a Canvas URL/API token |
 | **AI API key** | NebulaONE, Anthropic, OpenAI, or Gemini |
 

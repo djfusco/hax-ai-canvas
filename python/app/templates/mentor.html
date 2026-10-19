@@ -34,9 +34,19 @@
     </form>
   </div>
   <div class="card">
+    <details id="local-auth-setup" hidden>
+      <summary>Optional: email sign-in for local workspaces</summary>
+      <p>Configure your administrator's public Neon Auth Base URL to reopen account-scoped workspaces on this computer. Neon handles identity only. Courses, conversations, provider keys and generated sites stay local; signing in on another computer does not synchronize them.</p>
+      <form id="local-auth-form">
+        <label class="field-label" for="local-auth-url">Public Neon Auth Base URL (not an API key)</label>
+        <input class="field-input" id="local-auth-url" type="url" required>
+        <button class="btn btn-outline" type="submit">Configure email sign-in</button>
+      </form>
+      <p class="field-help">Without this configuration, workspaces use the explicitly browser-local fallback below. No hosted course storage is configured.</p>
+    </details>
     <div id="account-login-card" hidden>
       <h2>Sign in to your account</h2>
-      <p>Use an emailed code to resume courses across devices. New beta users must also enter the invitation code above.</p>
+      <p id="account-login-help">Use an emailed code to resume courses across devices. New beta users must also enter the invitation code above.</p>
       <form id="account-code-form" aria-describedby="account-code-status">
         <label class="field-label" for="account-email">Email address</label>
         <input class="field-input" id="account-email" type="email" autocomplete="email" maxlength="320" required>
@@ -58,7 +68,7 @@
     <div id="workspace-choice" hidden>
     <h2>1. Choose or create a workspace</h2>
     <p>Each workspace holds one course and its review history. Start here, then configure how you want the mentor to help.</p>
-    <p class="field-help">{% if is_hosted %}Saved in private hosted storage and scoped to your verified account. Sign in with the same account to resume on another device.{% else %}Saved on this computer and scoped to this browser's signed identity. Clearing cookies loses access to this local identity.{% endif %} Never paste API keys into the conversation.</p>
+    <p id="workspace-storage-help" class="field-help">{% if is_hosted %}Saved in private hosted storage and scoped to your verified account. Sign in with the same account to resume on another device.{% else %}Saved on this computer. Email sign-in, when configured, identifies your account only; it does not synchronize course data. Never paste API keys into the conversation.{% endif %}</p>
     <label class="field-label" for="workspace-list">Resume a course</label>
     <select id="workspace-list" class="field-input" onchange="openWorkspace(this.value)"><option value="">Choose a workspace</option></select>
     <form id="new-workspace" style="margin-top:1rem">
@@ -71,7 +81,7 @@
   <section class="card mentor-section" id="provider-settings" tabindex="-1" hidden>
     <h2>2. Configure AI before chatting</h2>
     <p>Choose an AI provider, save your key, then choose and save a model. Or explicitly choose Guided mode for a walkthrough without AI.</p>
-    <p class="field-help">Guided mode makes no AI calls and does not invent analysis scores. With AI enabled, course excerpts and your design brief are sent to that provider. Keys are encrypted server-side, never stored in browser storage or chat.</p>
+    <p id="provider-privacy-help" class="field-help">Guided mode makes no AI calls and does not invent analysis scores. With AI enabled, course excerpts and your design brief are sent to that provider. Keys are encrypted server-side, never stored in browser storage or chat.</p>
     <label class="field-label" for="mentor-provider">How would you like to work?</label>
     <select id="mentor-provider" class="field-input">
       <option value="" selected disabled>Choose an AI provider or Guided mode…</option>
@@ -80,6 +90,7 @@
       <option value="guided">Continue without AI — Guided walkthrough</option>
     </select>
     <p id="ai-setup-state" class="banner banner-info" role="status">Choose how to work. AI is not enabled until you save a provider key and model.</p>
+    <p id="assessment-cost-help" class="field-help" hidden>AI drafting and final review can make several provider requests to assess instructional items and the proposed draft. Your selected provider may charge for each request. Bounded excerpts are used; assessment coverage and truncation are disclosed in the instructor-only report. Guided mode makes no AI requests or assessment report.</p>
     <form id="credential-form" hidden>
       <label class="field-label" for="mentor-key">API key</label>
       <input class="field-input" id="mentor-key" type="password" autocomplete="off">
@@ -103,6 +114,7 @@
     <p id="credential-status" role="status"></p>
   </section>
   <div id="workspace-content" hidden>
+    <p id="local-job-error" class="banner banner-error" role="alert" aria-live="polite" hidden></p>
     <section class="card mentor-section" id="course-sources" tabindex="-1">
       <p class="mentor-eyebrow">3. Add content, or start a new course</p>
       <h2 id="workspace-title"></h2>
@@ -115,6 +127,12 @@
         <input class="field-input" id="source-file" type="file" accept=".imscc,.haxcourse">
         <button class="btn btn-primary" id="upload-course-button" type="submit">Upload &amp; prepare course</button>
       </form>
+      <p id="local-upload-help" class="field-help" hidden>Import up to 8 GiB directly to this computer in bounded chunks. This is a local disk copy, not a cloud upload. Your original is unchanged. Supported local assets are retained separately from the instructional review; review coverage warnings for exclusions and unavailable external resources.</p>
+      <div id="local-source-choice" hidden>
+        <p id="local-source-label"></p>
+        <button class="btn btn-outline" id="import-local-source" type="button" onclick="importLocalSource()">Prepare startup course file</button>
+        <p class="field-help">Use the file selected by the launcher without copying it through the browser. The original file is never modified.</p>
+      </div>
       <p id="hosted-upload-help" class="field-help" hidden>Large exports upload directly to private Vercel storage in bounded parts. You do not need Python or a local helper. The original cloud upload is deleted only after the prepared result is saved and validated; your computer's original is unchanged.</p>
       <section id="upload-feedback" class="mentor-upload" tabindex="-1" aria-labelledby="upload-feedback-title" hidden>
         <h4 id="upload-feedback-title"></h4>
@@ -134,7 +152,7 @@
       </section>
       <p id="upload-state" role="status" aria-live="polite"></p>
       <details>
-        <summary>Optional: prepare a media-heavy export on your computer instead</summary>
+        <summary id="compact-package-help">Optional: prepare a media-heavy export on your computer instead</summary>
         <p>Use the local preparation tool. It reads text/metadata without inflating bulk media and records what was excluded. Your original remains untouched. Upload the resulting compact .haxcourse package here.</p>
         <pre>python3 python/prepare_course.py "/path/course.imscc" --output "/path/course.haxcourse"</pre>
         <p>This is a review package, not a complete backup. Videos/images omitted locally are not analyzed or rebuilt unless provided separately in supported form.</p>
@@ -198,13 +216,38 @@
       <p>Open the draft items below. Use the final-review conversation to request changes, then explicitly approve the exact version you want to build.</p>
       <p id="draft-summary"></p><p id="draft-coverage" class="field-help"></p>
       <ul id="draft-warnings"></ul>
+      <section id="assessment-panel" class="mentor-assessment" aria-labelledby="assessment-title" hidden>
+        <h3 id="assessment-title">Instructor-only framework assessment</h3>
+        <p>This report supports your judgment; it is not a validated research measurement or an aggregate course grade. Bloom's taxonomy describes cognitive demand. AIAS describes AI use in task design: higher AIAS levels are not inherently better. The six numeric dimension rubrics are application-defined heuristics, not framework-validated scores.</p>
+        <p>Assessments, evidence and recommendations stay in your private mentor workspace and are not included in the student HAX site.</p>
+        <p id="assessment-readiness" class="banner banner-info" role="status" aria-live="polite"></p>
+        <details id="baseline-assessment" hidden>
+          <summary>Imported course baseline — before proposed changes</summary>
+          <div id="baseline-assessment-content"></div>
+        </details>
+        <details id="proposed-assessment" open hidden>
+          <summary>Proposed draft assessment — review before approval</summary>
+          <div id="proposed-assessment-content"></div>
+        </details>
+      </section>
       <div id="draft-items"></div>
       <button class="btn btn-ghost" id="save-draft" onclick="saveDraft()">Save edited snapshot (requires new approval)</button>
       <p>Use the final-review chat above to discuss or request revisions. The mentor cannot grant approval.</p>
       <button class="btn btn-primary" id="approve-build" onclick="approveBuild()">Approve this exact draft</button>
       <button class="btn btn-success" id="build-course" onclick="buildCourse()">Build approved content</button>
-      <h3>6. Download approved content</h3>
-      <p>Building prepares a private download and preview. It does not publish a public HAX site.</p>
+      <h3 id="completion-title">6. Download approved content</h3>
+      <p id="completion-help">Building prepares a private download and preview. It does not publish a public HAX site.</p>
+      <section id="hax-site-panel" class="mentor-hax-site" tabindex="-1" aria-labelledby="hax-site-title" hidden>
+        <h4 id="hax-site-title">Your local HAX site</h4>
+        <p id="hax-site-status" role="status" aria-live="polite"></p>
+        <p id="hax-site-error" role="alert" class="banner banner-warn" hidden></p>
+        <p>Output directory: <code id="hax-site-directory"></code></p>
+        <a id="open-hax-site" class="btn btn-primary" target="_blank" rel="noopener noreferrer" hidden>Open HAX site</a>
+        <button id="start-hax-site" class="btn btn-outline" type="button" onclick="startHaxSite()" hidden>Start HAX site</button>
+        <button id="stop-hax-site" class="btn btn-ghost" type="button" onclick="stopHaxSite()" hidden>Stop HAX site</button>
+        <button id="refresh-hax-site" class="btn btn-ghost" type="button" onclick="refreshHaxSite()">Check site status</button>
+        <p class="field-help">Only a verified, running local site can be opened. Starting or stopping the site does not change your approved draft. Rebuilds create a new output directory; edits made in HAX are separate from the mentor snapshot. Quizzes, grading, submissions and LTI are not restored.</p>
+      </section>
       <div id="artifact-links" tabindex="-1"></div>
     </section>
     <details class="card" id="processing-details" tabindex="-1"><summary>Processing details and revision history</summary>

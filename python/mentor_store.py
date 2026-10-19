@@ -149,6 +149,13 @@ class MentorStore:
     def _idle(state):
         if state["active_job"] is not None:
             raise WorkspaceConflict("A job is already running.")
+    @staticmethod
+    def _assessment_ready(state):
+        draft = state.get("draft") or {}
+        if draft.get("assessment_required"):
+            from mentor_assessment import assessment_current
+            if not assessment_current(draft.get("items", []), draft.get("assessment")):
+                raise WorkspaceConflict("Complete an AI final review to refresh this draft's assessment.")
 
     @staticmethod
     def _exact(state, revision, key="revision"):
@@ -218,6 +225,16 @@ class MentorStore:
             self._idle(state)
             edit(state)
             self._invalidate(state)
+        return self._change(owner, id, transition)
+
+    def site_error(self, owner, id, draft_revision, error):
+        if error is not None and (not isinstance(error, str) or not 1 <= len(error) <= 500):
+            raise ValueError("Invalid local site error.")
+        def transition(state):
+            self._exact(state, draft_revision, "draft_revision")
+            if not (state.get("artifact") or {}).get("hax_site") or state["stage"] != "built":
+                raise WorkspaceConflict("The saved site changed.")
+            state["artifact"]["hax_site"]["error"] = error
         return self._change(owner, id, transition)
 
     def set_source(self, owner, id, source, revision):
@@ -294,6 +311,8 @@ class MentorStore:
                 or state["reviewed_draft_revision"] != state["draft_revision"]
             ):
                 raise WorkspaceConflict("Approve the current draft first.")
+            if kind == "build":
+                self._assessment_ready(state)
             job = dict(id=uuid4().hex, kind=kind, revision=state["revision"],
                        draft_revision=state["draft_revision"], status="running",
                        created_at=_now(), finished_at=None)
@@ -313,6 +332,73 @@ class MentorStore:
 
     def begin_analysis(self, owner, id, revision):
         return self._begin(owner, id, revision, "analysis")
+    def reserve_local_upload(self, owner, id, revision, upload):
+        upload = _object(upload)
+        def transition(state):
+            self._exact(state, revision)
+            self._idle(state)
+            pending = state.get("local_upload")
+            if pending and pending["id"] != upload["id"]:
+                raise WorkspaceConflict("Cancel the saved local copy before importing another file.")
+            state["local_upload"] = upload
+        return self._change(owner, id, transition)
+
+    def update_local_upload(self, owner, id, upload):
+        upload = _object(upload)
+        def transition(state):
+            if not state.get("local_upload") or state["local_upload"]["id"] != upload["id"]:
+                raise WorkspaceConflict("The local copy reservation changed.")
+            state["local_upload"].update(upload)
+        return self._change(owner, id, transition)
+
+    def clear_local_upload(self, owner, id, upload_id):
+        def transition(state):
+            if state.get("local_upload", {}).get("id") == upload_id:
+                state.pop("local_upload", None)
+        return self._change(owner, id, transition)
+
+    def begin_prepare(self, owner, id, revision, upload):
+        upload = _object(upload)
+        def transition(state):
+            self._exact(state, revision)
+            self._idle(state)
+            if state.get("local_upload") and state["local_upload"]["id"] != upload["id"]:
+                raise WorkspaceConflict("Cancel the saved local copy before importing another file.")
+            job = dict(id=upload["id"], kind="prepare", revision=state["revision"],
+                       draft_revision=state["draft_revision"], status="running",
+                       phase="inspecting", message="Inspecting the local course archive.",
+                       filename=upload["filename"], size=upload["size"],
+                       created_at=_now(), finished_at=None)
+            state["active_job"] = job
+            state["jobs"].append(job)
+            state["stage"] = "preparing"
+        return self._change(owner, id, transition)
+
+    def progress_job(self, owner, id, job_id, phase, message):
+        if not isinstance(phase, str) or not re.fullmatch(r"[a-z_]{1,40}", phase):
+            raise ValueError("Invalid processing phase.")
+        if not isinstance(message, str) or len(message) > 500:
+            raise ValueError("Invalid processing message.")
+        def transition(state):
+            job = self._active(state, job_id)
+            job.update(phase=phase, message=message)
+            next(entry for entry in state["jobs"] if entry["id"] == job_id).update(
+                phase=phase, message=message)
+        return self._change(owner, id, transition)
+
+    def finish_prepare(self, owner, id, job_id, source):
+        source = _object(source)
+        if source.get("source_type") not in SOURCE_TYPES or not source.get("export_dir"):
+            raise ValueError("Invalid local prepared source.")
+        def transition(state):
+            job = self._active(state, job_id, "prepare")
+            state["source"] = source
+            for key in ("source_type", "course_id", "export_dir"):
+                state[key] = source.get(key)
+            state.pop("local_upload", None)
+            self._end(state, job, "completed")
+            self._invalidate(state)
+        return self._change(owner, id, transition)
 
     def pin_provider(self, owner, id, job_id, provider, model, credential_version):
         """Pin only nonsecret execution choices; never read mutable model preferences later."""
@@ -394,13 +480,18 @@ class MentorStore:
                          artifact=None, stage="draft")
         return self._change(owner, id, transition)
 
-    def fail_job(self, owner, id, job_id, error):
+    def fail_job(self, owner, id, job_id, error, *, public_message=None):
         _text(error, "job error")
 
         def transition(state):
             job = self._active(state, job_id)
             # Exception strings may include credentials, prompts or upstream bodies.
-            self._end(state, job, "failed", "Job failed. Retry after checking server diagnostics.")
+            message = "Job failed. Retry after checking server diagnostics."
+            if public_message is not None:
+                if not isinstance(public_message, str) or not 1 <= len(public_message) <= 500:
+                    raise ValueError("Invalid public processing error.")
+                message = public_message
+            self._end(state, job, "failed", message)
             state["stage"] = self._resting_stage(state)
         return self._change(owner, id, transition)
 
@@ -427,6 +518,7 @@ class MentorStore:
                 raise WorkspaceConflict("A current analyzed draft is required.")
             if state["reviewed_draft_revision"] != state["draft_revision"]:
                 raise WorkspaceConflict("Complete the final review of the current draft first.")
+            self._assessment_ready(state)
             state["build_revision"] = state["draft_revision"]
             state["stage"] = self._resting_stage(state)
         return self._change(owner, id, transition)
@@ -461,6 +553,8 @@ class MentorStore:
             for owner, encoded in rows:
                 state = self._decode(encoded)
                 if state["active_job"] is not None:
+                    if state["active_job"]["kind"] == "prepare":
+                        state.pop("local_upload", None)
                     self._end(state, state["active_job"], "failed",
                               "Job interrupted by application restart.")
                     state["stage"] = self._resting_stage(state)

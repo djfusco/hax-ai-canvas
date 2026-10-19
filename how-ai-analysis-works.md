@@ -1,6 +1,14 @@
 # How the AI Readiness Analysis Works
 
 A plain-language guide to the scores, frameworks, and narratives you see on the course dashboards.
+**Historical converter documentation:** this page describes the older pipeline,
+not the current local Faculty Mentor. Its custom “AI Integration Assessment
+Scale” is not the canonical AI Assessment Scale, and its neutral fallback
+numbers must not be interpreted as successful AI evaluation. The local mentor
+uses attributed revised Bloom/AIAS 2.1, constructive alignment, TILT and
+authentic-assessment lenses with quoted evidence, coverage limits and no
+fabricated fallback scores. See the README's local workflow. The historical
+composite below is an application-defined formula, not a validated measure.
 
 ---
 

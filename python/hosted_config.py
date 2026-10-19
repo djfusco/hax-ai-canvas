@@ -17,6 +17,8 @@ class HostedSetupError(ValueError):
 
 
 def hosted_mode():
+    if os.environ.get("HAX_EXECUTION_MODE") == "local":
+        return False
     return bool(os.environ.get("VERCEL")) or os.environ.get("HAX_HOSTED_ENABLED") == "1"
 
 

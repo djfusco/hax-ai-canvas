@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from datetime import datetime
 import hmac
 import json
 import os
@@ -56,6 +57,74 @@ def acquire_canvas_course(course_id: str, destination: Path) -> Path:
 
 def create_mentor_blueprint(root_provider):
     bp = Blueprint("mentor", __name__, url_prefix="/mentor")
+    runtime_lock = threading.RLock()
+
+    def local_hax_enabled():
+        return current_app.config.get("LOCAL_HAX_ENABLED",
+                                      os.environ.get("HAX_EXECUTION_MODE") == "local"
+                                      or bool(os.environ.get("HAX_HAX_CLI")))
+
+    def import_manager():
+        from local_imports import LocalImportManager
+        with runtime_lock:
+            managers = current_app.extensions.setdefault("local_imports", {})
+            key = str(root())
+            if key not in managers:
+                managers[key] = LocalImportManager(root() / "uploads")
+            return managers[key]
+
+    def require_current_assessment(workspace):
+        draft = workspace.get("draft") or {}
+        if not hosted_mode() and local_hax_enabled() and draft.get("mode") == "ai":
+            from mentor_assessment import assessment_current
+            if not assessment_current(draft.get("items", []), draft.get("assessment")):
+                raise WorkspaceConflict(
+                    "The AI assessment is missing or stale. Complete an AI final review "
+                    "of this draft before approving or building it.")
+
+    def site_manager():
+        from local_hax import LocalHaxSites
+        with runtime_lock:
+            managers = current_app.extensions.setdefault("local_hax_sites", {})
+            key = str(root())
+            if key not in managers:
+                managers[key] = LocalHaxSites(root() / "sites")
+            return managers[key]
+
+    def startup_source(*, public_only=False):
+        if hosted_mode() or not getattr(g, "authenticated", False):
+            return None
+        path_value = os.environ.get("HAX_STARTUP_COURSE", "")
+        if not path_value:
+            return None
+        with runtime_lock:
+            source = current_app.config.get("LOCAL_STARTUP_SOURCE")
+            if not source or source["path"] != path_value:
+                path = Path(path_value)
+                if not path.is_absolute() or not path.is_file() or path.is_symlink():
+                    return None
+                if path.suffix.lower() not in (".imscc", ".haxcourse"):
+                    return None
+                source = {"id": secrets.token_hex(32), "filename": path.name,
+                          "size": path.stat().st_size, "path": path_value, "owner": None}
+                current_app.config["LOCAL_STARTUP_SOURCE"] = source
+            if source["owner"] not in (None, g.owner):
+                return None
+            return ({k: source[k] for k in ("id", "filename", "size")}
+                    if public_only else dict(source))
+
+    def upload_public(record):
+        return {key: record[key] for key in
+                ("id", "filename", "size", "offset", "status", "workspace_id", "revision", "chunk_size")
+                if key in record}
+
+    def safe_site_error(exc):
+        value = str(exc)
+        if isinstance(exc, (ValueError, RuntimeError)) and value.startswith((
+                "Managed HAX", "Node.js", "HAX ", "The saved ", "This workspace ",
+                "This HAX ", "The local HAX ", "A new build", "Approve ")):
+            return value[:500]
+        return "Unable to start the local HAX site. Check local files, permissions and free disk space."
     def backend():
         if not hasattr(g, "hosted_backend"):
             from hosted_backend import HostedBackend
@@ -65,9 +134,22 @@ def create_mentor_blueprint(root_provider):
 
     def auth():
         if not hasattr(g, "neon_auth"):
-            factory = current_app.config.get("HOSTED_AUTH_FACTORY", NeonAuth)
-            g.neon_auth = factory(g.hosted_config.auth_url, g.hosted_config.origin)
+            factory = current_app.config.get(
+                "HOSTED_AUTH_FACTORY" if hosted_mode() else "LOCAL_AUTH_FACTORY", NeonAuth)
+            g.neon_auth = factory(g.auth_url, g.auth_origin)
         return g.neon_auth
+
+    def local_accounts():
+        from local_accounts import LocalAccounts
+        if not hasattr(g, "local_accounts"):
+            g.local_accounts = LocalAccounts(root())
+        return g.local_accounts
+
+    def auth_cookies():
+        if hosted_mode():
+            return session_cookies(request.cookies)
+        from local_accounts import LOCAL_SESSION_COOKIE
+        return local_accounts().cookies(request.cookies.get(LOCAL_SESSION_COOKIE), g.auth_url)
 
     def jsonify(value):
         if not hosted_mode():
@@ -116,10 +198,15 @@ def create_mentor_blueprint(root_provider):
         return clean(value)
 
     def public(workspace):
-        result = {k: v for k, v in workspace.items() if k not in ("owner", "export_dir", "source")}
+        result = {k: v for k, v in workspace.items()
+                  if k not in ("owner", "export_dir", "source", "local_upload")}
         if result.get("artifact"):
             result["artifact"] = {k: v for k, v in result["artifact"].items()
                                   if k not in ("path", "preview_dir", "blob_path")}
+        if not hosted_mode() and (result.get("draft") or {}).get("assessment_required"):
+            from mentor_assessment import assessment_current
+            result["draft"] = {**result["draft"], "assessment_current": assessment_current(
+                result["draft"]["items"], result["draft"].get("assessment"))}
         if (result.get("draft") is not None and
                 request.args.get("draft_revision") == str(result["draft_revision"])):
             result.pop("draft")
@@ -132,6 +219,20 @@ def create_mentor_blueprint(root_provider):
                                     ("id", "filename", "size", "kind", "status", "cleanup_status", "attempts",
                                      "created_at", "updated_at")}
                 result["upload"]["phase"] = (upload.get("sandbox") or {}).get("phase")
+        else:
+            latest = next((job for job in reversed(workspace["jobs"]) if job["kind"] == "prepare"), None)
+            pending = workspace.get("local_upload")
+            if pending and (not latest or latest["id"] != pending["id"]):
+                result["upload"] = {**pending, "status": "awaiting_upload"}
+            elif latest:
+                result["upload"] = {key: latest.get(key) for key in
+                                    ("id", "filename", "size", "status", "phase", "message",
+                                     "error", "created_at", "finished_at")}
+                result["upload"]["created_at"] = datetime.fromisoformat(latest["created_at"]).timestamp()
+                if latest["status"] == "completed":
+                    result["upload"]["status"] = "ready"
+                elif latest["status"] == "running":
+                    result["upload"]["status"] = "processing"
         return result
 
     def with_source(workspace):
@@ -182,6 +283,7 @@ def create_mentor_blueprint(root_provider):
             except HostedSetupError as exc:
                 return jsonify({"error": str(exc), "code": "HOSTED_SETUP_REQUIRED"}), 503
             g.hosted_config = config
+            g.auth_url, g.auth_origin = config.auth_url, config.origin
             if request.endpoint in ("mentor.upload_callback", "mentor.cleanup_cron"):
                 expected = config.internal_secret if request.endpoint == "mentor.upload_callback" else config.cron_secret
                 if not hmac.compare_digest(request.headers.get("Authorization", ""), "Bearer " + expected):
@@ -190,6 +292,9 @@ def create_mentor_blueprint(root_provider):
             key = config.session_secret.encode()
         else:
             key = private_key(root() / ".browser-key")
+            from local_accounts import auth_url
+            g.auth_url = auth_url(root())
+            g.auth_origin = request.host_url.rstrip("/")
         signer = URLSafeTimedSerializer(key.decode(), salt="faculty-mentor-browser")
         identity = None
         try:
@@ -204,13 +309,17 @@ def create_mentor_blueprint(root_provider):
         )
         g.mentor_token, g.mentor_signer = token, signer
         g.mentor_cookie = signer.dumps({"token": token, "admitted": g.admitted,
-                                        "account": bool(isinstance(identity, dict) and identity.get("account"))}) if hosted_mode() else signer.dumps(token)
+                                        "account": bool(isinstance(identity, dict) and identity.get("account"))}) if (
+                                            hosted_mode() or isinstance(identity, dict)) else signer.dumps(token)
         g.owner = hashlib.sha256(token.encode()).hexdigest()
         g.legacy_owner = g.owner
         g.legacy_claimable = g.admitted and isinstance(identity, dict) and not identity.get("account")
+        if not hosted_mode():
+            g.legacy_claimable = bool(identity) and not (
+                isinstance(identity, dict) and identity.get("account"))
         g.account = None
         g.neon_updates = []
-        g.account_mode = hosted_mode() and g.hosted_config.auth_mode == "neon"
+        g.account_mode = g.hosted_config.auth_mode == "neon" if hosted_mode() else bool(g.auth_url)
         g.csrf = hmac.new(key, (g.owner + ":csrf").encode(), hashlib.sha256).hexdigest()
         if request.method not in ("GET", "HEAD", "OPTIONS"):
             origin = request.headers.get("Origin")
@@ -224,15 +333,22 @@ def create_mentor_blueprint(root_provider):
             return jsonify({"error": "The mentoring request is too large."}), 413
         auth_endpoints = ("mentor.auth_send", "mentor.auth_verify", "mentor.auth_logout")
         if g.account_mode and request.endpoint not in auth_endpoints:
-            account, updates = auth().session(session_cookies(request.cookies))
-            g.neon_updates.extend(updates)
+            account, updates = auth().session(auth_cookies())
+            if hosted_mode():
+                g.neon_updates.extend(updates)
+            else:
+                from local_accounts import LOCAL_SESSION_COOKIE
+                token = request.cookies.get(LOCAL_SESSION_COOKIE)
+                local_accounts().refresh_session(token, g.auth_url, updates)
             if account:
-                g.owner = backend().accounts.resolve(g.hosted_config.auth_url, account, admit=g.admitted)
+                g.owner = (backend().accounts.resolve(g.auth_url, account, admit=g.admitted)
+                           if hosted_mode() else local_accounts().resolve(g.auth_url, account))
                 g.admitted = True
                 g.account = account
         g.authenticated = g.admitted and (not g.account_mode or g.account is not None)
-        if hosted_mode() and not g.authenticated:
-            if request.endpoint not in ("mentor.page", "mentor.session_info", "mentor.login", *auth_endpoints):
+        if not g.authenticated:
+            if request.endpoint not in ("mentor.page", "mentor.session_info", "mentor.login",
+                                        "mentor.local_auth_config", *auth_endpoints):
                 return jsonify({"error": "Sign in to your account first.", "code": "LOGIN_REQUIRED"}), 401
         elif hosted_mode():
             g.vault = backend().vault
@@ -244,6 +360,12 @@ def create_mentor_blueprint(root_provider):
         for name, value, age in getattr(g, "neon_updates", []):
             response.set_cookie(name, value, max_age=age, path="/mentor",
                                 httponly=True, secure=True, samesite="Strict")
+        if hasattr(g, "local_session_update"):
+            from local_accounts import LOCAL_SESSION_COOKIE
+            response.set_cookie(LOCAL_SESSION_COOKIE, g.local_session_update,
+                                max_age=12 * 3600 if g.local_session_update else 0,
+                                path="/mentor", httponly=True, secure=request.is_secure,
+                                samesite="Strict")
         if getattr(g, "mentor_cookie", None):
             response.set_cookie("mentor_browser", g.mentor_cookie, max_age=30 * 86400,
                                 httponly=True, secure=hosted_mode() or request.is_secure, samesite="Strict")
@@ -287,7 +409,20 @@ def create_mentor_blueprint(root_provider):
                         "can_claim_browser": bool(g.legacy_claimable),
                         "invite_required": not g.admitted, "hosted_ready": hosted_mode(),
                         "authenticated": g.authenticated, "login_required": not g.authenticated,
-                        "maximum_upload_bytes": 8 * 1024**3 if hosted_mode() else 256 * 1024**2})
+                        "local_mode": not hosted_mode(),
+                        "local_accounts": not hosted_mode() and g.account_mode,
+                        "local_auth_configurable": not hosted_mode() and not g.auth_url,
+                        "local_hax": not hosted_mode() and local_hax_enabled(),
+                        "local_source": startup_source(public_only=True),
+                        "maximum_upload_bytes": 8 * 1024**3})
+
+    @bp.post("/api/local-auth/config")
+    def local_auth_config():
+        if hosted_mode():
+            abort(404)
+        from local_accounts import configure_auth
+        configure_auth(root(), payload().get("auth_url", ""))
+        return jsonify({"configured": True})
 
     @bp.post("/api/login")
     def login():
@@ -307,18 +442,23 @@ def create_mentor_blueprint(root_provider):
         return jsonify({"authenticated": not g.account_mode, "account_required": g.account_mode})
 
     def account_input():
-        if not hosted_mode() or not g.account_mode:
+        if not g.account_mode:
             abort(404)
         data = payload()
         email = data.get("email", "")
         if (not isinstance(email, str) or len(email) > 320
                 or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email)):
             raise ValueError("Enter a valid email address.")
-        from hosted_auth import allow_login_attempt
-        limiter = current_app.config.get("HOSTED_LOGIN_LIMITER", allow_login_attempt)
-        peer = request.headers.get("x-vercel-forwarded-for") or request.remote_addr or "unknown"
-        if not limiter(g.hosted_config, "email-auth:" + peer) or not limiter(
-                g.hosted_config, "email:" + email.casefold()):
+        if hosted_mode():
+            from hosted_auth import allow_login_attempt
+            limiter = current_app.config.get("HOSTED_LOGIN_LIMITER", allow_login_attempt)
+            peer = request.headers.get("x-vercel-forwarded-for") or request.remote_addr or "unknown"
+            allowed = (limiter(g.hosted_config, "email-auth:" + peer)
+                       and limiter(g.hosted_config, "email:" + email.casefold()))
+        else:
+            allowed = (local_accounts().allow_attempt("peer:" + (request.remote_addr or "local"))
+                       and local_accounts().allow_attempt("email:" + email.casefold()))
+        if not allowed:
             raise AccountAuthError("Too many sign-in attempts. Wait five minutes.", 429)
         return data, email
 
@@ -347,25 +487,37 @@ def create_mentor_blueprint(root_provider):
         claim = data.get("claim_browser") is True
         if claim and not g.legacy_claimable:
             raise WorkspaceConflict("This browser has no claimable legacy identity.")
-        backend().accounts.resolve(g.hosted_config.auth_url, account, admit=g.admitted,
-                                   legacy_owner=g.legacy_owner if claim else None)
-        g.neon_updates.extend(updates)
-        g.neon_updates.extend(refreshed)
+        if hosted_mode():
+            backend().accounts.resolve(g.auth_url, account, admit=g.admitted,
+                                       legacy_owner=g.legacy_owner if claim else None)
+            g.neon_updates.extend(updates)
+            g.neon_updates.extend(refreshed)
+        else:
+            from local_accounts import LOCAL_SESSION_COOKIE
+            local_accounts().resolve(g.auth_url, account,
+                                     legacy_owner=g.legacy_owner if claim else None)
+            local_accounts().forget_session(request.cookies.get(LOCAL_SESSION_COOKIE))
+            g.local_session_update = local_accounts().save_session(g.auth_url, [*updates, *refreshed])
         g.mentor_cookie = g.mentor_signer.dumps(
             {"token": secrets.token_hex(32), "admitted": True, "account": True})
         return jsonify({"authenticated": True})
 
     @bp.post("/api/auth/logout")
     def auth_logout():
-        if not hosted_mode() or not g.account_mode:
+        if not g.account_mode:
             abort(404)
         failed = False
         try:
-            auth().call("logout", cookies=session_cookies(request.cookies), data={})
+            auth().call("logout", cookies=auth_cookies(), data={})
         except AccountAuthError:
             failed = True
-        for name in COOKIE_NAMES:
-            g.neon_updates.append((name, "", 0))
+        if hosted_mode():
+            for name in COOKIE_NAMES:
+                g.neon_updates.append((name, "", 0))
+        else:
+            from local_accounts import LOCAL_SESSION_COOKIE
+            local_accounts().forget_session(request.cookies.get(LOCAL_SESSION_COOKIE))
+            g.local_session_update = ""
         g.mentor_cookie = g.mentor_signer.dumps({"token": secrets.token_hex(32), "admitted": False})
         if failed:
             return jsonify({"signed_out": True, "error": "Signed out here; remote revocation failed. "
@@ -530,6 +682,206 @@ def create_mentor_blueprint(root_provider):
             shutil.rmtree(base, ignore_errors=True)
             raise
 
+    def local_only():
+        if hosted_mode():
+            abort(404)
+
+    def upload_workspace(record):
+        workspace = store().get(g.owner, record["workspace_id"])
+        if workspace["revision"] != record["revision"]:
+            raise WorkspaceConflict("The workspace changed. Start a new local import.")
+        return workspace
+
+    @bp.post("/api/workspaces/<workspace_id>/local-uploads")
+    def create_local_upload(workspace_id):
+        local_only()
+        data = payload()
+        workspace = store().get(g.owner, workspace_id)
+        if workspace["revision"] != data.get("revision") or workspace.get("active_job"):
+            raise WorkspaceConflict("Workspace changed or is processing. Refresh before importing.")
+        record = import_manager().create(g.owner, workspace_id, data["revision"],
+                                         data.get("filename"), data.get("size"))
+        try:
+            store().reserve_local_upload(g.owner, workspace_id, data["revision"],
+                                         {**upload_public(record), "created_at": time.time()})
+        except Exception:
+            import_manager().cancel(g.owner, record["id"])
+            raise
+        result = upload_public(record)
+        result["chunk_size"] = 8 * 1024**2
+        return jsonify(result), 201
+
+    @bp.route("/api/local-uploads/<upload_id>", methods=["GET", "PUT", "DELETE"])
+    def local_upload(upload_id):
+        local_only()
+        from local_imports import LocalImportNotFound, LocalImportConflict
+        manager = import_manager()
+        try:
+            record = manager.get(g.owner, upload_id)
+            if request.method == "GET":
+                return jsonify(upload_public(record))
+            if request.method == "DELETE":
+                workspace = store().get(g.owner, record["workspace_id"])
+                active = workspace.get("active_job")
+                if active and active["id"] == upload_id:
+                    store().fail_job(g.owner, workspace["id"], upload_id, "Canceled local import.")
+                record = manager.cancel(g.owner, upload_id)
+                store().clear_local_upload(g.owner, workspace["id"], upload_id)
+                return jsonify(upload_public(record))
+            workspace = upload_workspace(record)
+            if workspace.get("active_job"):
+                raise WorkspaceConflict("The workspace is processing.")
+            if request.mimetype != "application/octet-stream":
+                raise ValueError("Use a bounded binary chunk.")
+            try:
+                offset = int(request.args.get("offset", ""))
+            except ValueError:
+                raise ValueError("Invalid local copy offset.") from None
+            record = manager.append(g.owner, upload_id, offset, request.stream, request.content_length)
+            store().update_local_upload(g.owner, workspace["id"], upload_public(record))
+            return jsonify(upload_public(record))
+        except LocalImportNotFound:
+            abort(404)
+        except LocalImportConflict as exc:
+            raise WorkspaceConflict(str(exc)) from None
+
+    def start_preparation(workspace, record, path, manager=None):
+        workspace = store().begin_prepare(g.owner, workspace["id"], workspace["revision"], {
+            "id": record["id"], "filename": record["filename"], "size": record["size"]})
+        owner, data_root = g.owner, root()
+        saved_keys = [value["api_key"] for item in g.vault.status(owner)
+                      if (value := g.vault.get(owner, item["provider"]))]
+        def redact_local(value):
+            if isinstance(value, str):
+                for key in saved_keys:
+                    value = value.replace(key, "[credential removed]")
+                return value
+            if isinstance(value, list):
+                return [redact_local(item) for item in value]
+            if isinstance(value, dict):
+                return {key: redact_local(item) for key, item in value.items()}
+            return value
+        def prepare():
+            from local_imports import prepare_local_source
+            from mentor_store import MentorStore
+            from mentor_service import inventory
+            database = MentorStore(data_root / "workspaces.sqlite")
+            destination = data_root / "courses" / workspace["id"] / record["id"]
+            committed = False
+            def progress(phase, message):
+                database.progress_job(owner, workspace["id"], record["id"], phase,
+                                      redact_local(message)[:500])
+            try:
+                source = prepare_local_source(path, destination, progress=progress)
+                export = Path(source["export_dir"])
+                for folder in ("pages", "assignments", "quizzes", "discussions", "syllabus"):
+                    for document in (export / folder).glob("*.json"):
+                        if document.stat().st_size > 2 * 1024**2:
+                            raise ValueError("An instructional item exceeds the 2 MiB mentoring limit.")
+                        value = redact_local(json.loads(document.read_text(encoding="utf-8")))
+                        document.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+                source = redact_local(source)
+                inventory({**workspace, **source})
+                database.finish_prepare(owner, workspace["id"], record["id"], source)
+                committed = True
+            except Exception as exc:
+                from imscc_import import IMSCCImportError
+                from local_imports import LocalImportError
+                message = ("Local preparation failed: " + redact_local(str(exc))[:400]
+                           if isinstance(exc, (IMSCCImportError, LocalImportError, ValueError))
+                           else "Local preparation failed. Check archive safety, local permissions and free disk space.")
+                try:
+                    database.fail_job(owner, workspace["id"], record["id"],
+                                      "Local preparation failed.", public_message=message)
+                except WorkspaceConflict:
+                    pass
+            finally:
+                if not committed:
+                    shutil.rmtree(destination, ignore_errors=True)
+                if manager:
+                    manager.cancel(owner, record["id"])
+                database.clear_local_upload(owner, workspace["id"], record["id"])
+        threading.Thread(target=prepare, daemon=True).start()
+        return jsonify(public(workspace)), 202
+
+    @bp.post("/api/local-uploads/<upload_id>/complete")
+    def complete_local_upload(upload_id):
+        local_only()
+        from local_imports import LocalImportConflict, LocalImportNotFound
+        manager = import_manager()
+        try:
+            record = manager.get(g.owner, upload_id)
+            workspace = upload_workspace(record)
+            if workspace.get("active_job"):
+                if workspace["active_job"]["id"] == upload_id:
+                    return jsonify(public(workspace)), 202
+                raise WorkspaceConflict("Another job is running.")
+            record = manager.complete(g.owner, upload_id)
+            return start_preparation(workspace, record, record["path"], manager)
+        except LocalImportNotFound:
+            abort(404)
+        except LocalImportConflict as exc:
+            raise WorkspaceConflict(str(exc)) from None
+
+    @bp.post("/api/workspaces/<workspace_id>/local-source")
+    def import_startup_source(workspace_id):
+        local_only()
+        data = payload()
+        workspace = store().get(g.owner, workspace_id)
+        if data.get("revision") != workspace["revision"]:
+            raise WorkspaceConflict("The workspace changed. Refresh first.")
+        with runtime_lock:
+            source = startup_source()
+            if source is None or not hmac.compare_digest(str(data.get("source_id", "")), source["id"]):
+                abort(404)
+            current_app.config["LOCAL_STARTUP_SOURCE"]["owner"] = g.owner
+        source["id"] = uuid.uuid4().hex
+        return start_preparation(workspace, source, source["path"])
+
+    def current_site(workspace_id):
+        local_only()
+        workspace = store().get(g.owner, workspace_id)
+        site = (workspace.get("artifact") or {}).get("hax_site")
+        if not site or workspace["stage"] != "built":
+            return workspace, None
+        directory = Path(site["directory"]).resolve()
+        allowed = (root() / "sites" / workspace_id).resolve()
+        if not directory.is_relative_to(allowed) or directory == allowed:
+            raise ValueError("Invalid managed site location.")
+        return workspace, directory
+
+    @bp.get("/api/workspaces/<workspace_id>/hax")
+    def hax_status(workspace_id):
+        workspace, directory = current_site(workspace_id)
+        if directory is None:
+            return jsonify({"running": False, "url": None, "phase": "not_built",
+                            "error": None, "directory": None})
+        status = site_manager().status(g.owner, workspace_id)
+        saved_error = workspace["artifact"]["hax_site"].get("error")
+        if saved_error and not status["running"] and status["phase"] != "starting":
+            status.update(phase="failed", error=status.get("error") or saved_error)
+        status["directory"] = str(directory)
+        return jsonify(status)
+
+    @bp.post("/api/workspaces/<workspace_id>/hax/start")
+    def start_hax(workspace_id):
+        workspace, directory = current_site(workspace_id)
+        if directory is None:
+            raise WorkspaceConflict("Build the approved HAX site first.")
+        try:
+            status = site_manager().start(g.owner, workspace_id, directory.name, directory)
+            store().site_error(g.owner, workspace_id, workspace["draft_revision"], None)
+            return jsonify(status), 202
+        except (ValueError, RuntimeError, OSError) as exc:
+            message = safe_site_error(exc)
+            store().site_error(g.owner, workspace_id, workspace["draft_revision"], message)
+            return jsonify({"error": message}), 503
+
+    @bp.post("/api/workspaces/<workspace_id>/hax/stop")
+    def stop_hax(workspace_id):
+        workspace, directory = current_site(workspace_id)
+        return jsonify(site_manager().stop(g.owner, workspace_id))
+
     @bp.post("/api/workspaces/<workspace_id>/uploads")
     def create_upload(workspace_id):
         if not hosted_mode():
@@ -688,6 +1040,11 @@ def create_mentor_blueprint(root_provider):
                 store().fail_job(g.owner, workspace_id, job_id, "Could not queue mentor discussion.")
                 return jsonify({"error": "Could not queue the discussion. Your feedback is saved; retry."}), 503
             return jsonify(public(store().get(g.owner, workspace_id))), 202
+        if local_hax_enabled() and ai is not None:
+            threading.Thread(target=run_conversation,
+                             args=(g.owner, workspace, kind, message, ai, root()),
+                             daemon=True).start()
+            return jsonify(public(store().get(g.owner, workspace_id))), 202
         try:
             if kind == "review":
                 reply, revised = review_draft(workspace, message, ai)
@@ -716,22 +1073,103 @@ def create_mentor_blueprint(root_provider):
             raise ValueError("Complete a mentor interview for this input revision before approving the direction.")
         return jsonify(public(store().approve_direction(g.owner, workspace_id, payload().get("revision"))))
 
-    def run_job(owner, workspace, kind, ai, data_root):
+    def clean_local_output(owner, data_root, value):
+        from mentor_credentials import CredentialVault
+        vault = CredentialVault(data_root)
+        keys = [saved["api_key"] for item in vault.status(owner)
+                if (saved := vault.get(owner, item["provider"]))]
+        def clean(item):
+            if isinstance(item, str):
+                for key in keys:
+                    item = item.replace(key, "[credential removed]")
+                return item
+            if isinstance(item, list):
+                return [clean(child) for child in item]
+            if isinstance(item, dict):
+                return {key: clean(child) for key, child in item.items()}
+            return item
+        return clean(value)
+
+    def check_local_provider(owner, workspace, data_root):
+        from mentor_credentials import CredentialVault
+        job = workspace.get("active_job") or {}
+        if job.get("provider"):
+            saved = CredentialVault(data_root).get(owner, job["provider"])
+            if not saved or saved.get("version") != job.get("credential_version"):
+                raise WorkspaceConflict("The selected provider key changed or expired. Retry with current settings.")
+
+    def run_conversation(owner, workspace, kind, message, ai, data_root):
+        from mentor_service import interview, review_draft
+        from mentor_store import MentorStore
+        database = MentorStore(data_root / "workspaces.sqlite")
+        job_id = workspace["active_job"]["id"]
+        def progress(phase, text):
+            check_local_provider(owner, workspace, data_root)
+            database.progress_job(owner, workspace["id"], job_id, phase, text[:500])
+        try:
+            progress("reviewing" if kind == "review" else "interviewing", "Preparing the AI discussion.")
+            if kind == "review":
+                reply, revised = review_draft(workspace, message, ai, assess=True, progress=progress)
+                if revised:
+                    revised = clean_local_output(owner, data_root, revised)
+                database.finish_review(owner, workspace["id"], job_id, revised)
+            else:
+                reply = interview(workspace, message, ai)
+                database.finish_interview(owner, workspace["id"], job_id)
+            database.add_message(owner, workspace["id"], "assistant",
+                                 clean_local_output(owner, data_root, reply), kind)
+        except Exception:
+            try:
+                database.fail_job(owner, workspace["id"], job_id, "AI discussion failed.",
+                                  public_message="AI review failed. Check the selected model and retry. "
+                                  "No approval was granted and no scores were fabricated.")
+            except WorkspaceConflict:
+                pass
+        finally:
+            ai.close()
+
+    def run_job(owner, workspace, kind, ai, data_root, hax_sites=None, assess_ai=False):
         from mentor_store import MentorStore
         from mentor_service import build_artifact, generate_draft
         database = MentorStore(data_root / "workspaces.sqlite")
         job_id = workspace["active_job"]["id"]
+        def progress(phase, message):
+            if assess_ai:
+                check_local_provider(owner, workspace, data_root)
+            database.progress_job(owner, workspace["id"], job_id, phase, message[:500])
         try:
             if kind == "analysis":
-                draft = generate_draft(workspace, ai)
+                draft = (generate_draft(workspace, ai, assess=True, progress=progress)
+                         if assess_ai else generate_draft(workspace, ai))
+                if assess_ai:
+                    draft = clean_local_output(owner, data_root, draft)
                 database.finish_analysis(owner, workspace["id"], job_id, draft)
             else:
-                artifact = build_artifact(workspace, data_root / "artifacts" / workspace["id"] / job_id)
+                if hax_sites:
+                    from local_hax import build_local_hax_site
+                    hax_site = build_local_hax_site(
+                        workspace, data_root / "sites" / workspace["id"] / job_id,
+                        progress=progress)
+                destination = data_root / "artifacts" / workspace["id"] / job_id
+                artifact = (build_artifact(workspace, destination, asset_budget=64 * 1024**2)
+                            if hax_sites else build_artifact(workspace, destination))
+                if hax_sites:
+                    artifact["hax_site"] = hax_site
                 database.finish_build(owner, workspace["id"], job_id, artifact)
-        except Exception:
+                if hax_sites:
+                    try:
+                        hax_sites.start(owner, workspace["id"], job_id, Path(hax_site["directory"]))
+                    except (ValueError, RuntimeError, OSError) as exc:
+                        database.site_error(owner, workspace["id"], workspace["draft_revision"],
+                                            safe_site_error(exc))
+        except Exception as exc:
             try:
+                message = (safe_site_error(exc) if kind == "build" and hax_sites else
+                           "AI assessment failed. Check model access and retry; "
+                           "no approval was granted and no scores were fabricated." if assess_ai else None)
                 database.fail_job(owner, workspace["id"], job_id,
-                                  "Processing failed. Check the input/provider and retry; no approval was granted.")
+                                  "Processing failed. Check the input/provider and retry; no approval was granted.",
+                                  public_message=message)
             except WorkspaceConflict:
                 pass  # Canceled/recovered jobs cannot commit late results.
         finally:
@@ -764,7 +1202,9 @@ def create_mentor_blueprint(root_provider):
                 workspace = store().pin_provider(g.owner, workspace_id,
                     workspace["active_job"]["id"], chosen, selected_values["model"],
                     selected_values.get("version"))
-            threading.Thread(target=run_job, args=(g.owner, workspace, "analysis", ai, root()), daemon=True).start()
+            threading.Thread(target=run_job,
+                             args=(g.owner, workspace, "analysis", ai, root(), None,
+                                   local_hax_enabled() and ai is not None), daemon=True).start()
         return jsonify(public(workspace)), 202
 
     @bp.put("/api/workspaces/<workspace_id>/draft")
@@ -780,6 +1220,7 @@ def create_mentor_blueprint(root_provider):
     @bp.post("/api/workspaces/<workspace_id>/approve-build")
     def approve_build(workspace_id):
         workspace = store().get(g.owner, workspace_id)
+        require_current_assessment(workspace)
         return jsonify(public(store().approve_build(g.owner, workspace_id,
                                                      payload().get("draft_revision"))))
 
@@ -797,6 +1238,7 @@ def create_mentor_blueprint(root_provider):
 
     @bp.post("/api/workspaces/<workspace_id>/build")
     def build(workspace_id):
+        require_current_assessment(store().get(g.owner, workspace_id))
         workspace = store().begin_build(g.owner, workspace_id, payload().get("draft_revision"))
         if hosted_mode():
             try:
@@ -805,7 +1247,11 @@ def create_mentor_blueprint(root_provider):
                 store().fail_job(g.owner, workspace_id, workspace["active_job"]["id"], "Could not queue build.")
                 return jsonify({"error": "Could not queue the build. Please retry."}), 503
         else:
-            threading.Thread(target=run_job, args=(g.owner, workspace, "build", None, root()), daemon=True).start()
+            sites = site_manager() if local_hax_enabled() else None
+            if sites:
+                sites.stop(g.owner, workspace_id)
+            threading.Thread(target=run_job, args=(g.owner, workspace, "build", None, root(), sites),
+                             daemon=True).start()
         return jsonify(public(workspace)), 202
 
     @bp.get("/api/workspaces/<workspace_id>/download")

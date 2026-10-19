@@ -4,6 +4,13 @@ let workspace = null;
 let busy = false;
 let pollTimer = null;
 let hosted = false;
+let localMode = false;
+let localHax = false;
+let localSource = null;
+let haxPollTimer = null;
+let haxStatus = null;
+let haxRequest = 0;
+let haxBusy = false;
 let uploadController = null;
 let uploadFeedback = null;
 let uploadHeartbeat = null;
@@ -19,6 +26,7 @@ let configuredProviders = new Set();
 let sentCodeEmail = '';
 let mentorAuthenticated = false;
 let renderedMessagesKey = '';
+let renderedAssessmentKey = '';
 const selectedModels = new Map();
 const blankCourses = new Set();
 const inventories = new Map();
@@ -58,6 +66,109 @@ function courseInputs() {
   return {ready, info, error: workspace && inventoryErrors.get(workspace.id)};
 }
 
+function assessmentRequired() {
+  return localMode && workspace?.draft?.assessment_required === true;
+}
+function assessmentReady() {
+  const report = workspace?.draft?.assessment;
+  return !assessmentRequired() || (workspace.draft.assessment_current === true &&
+    report?.version === 1 && report.mode === 'ai' &&
+    Array.isArray(report.items) && Array.isArray(report.frameworks));
+}
+function renderAssessmentState() {
+  const draft = workspace?.draft;
+  el('assessment-panel').hidden = !localMode || !draft;
+  el('assessment-cost-help').hidden = !localMode;
+  if (!localMode || !draft) return;
+  const stale = draftEditsPending();
+  const report = draft.assessment;
+  const text = stale
+    ? assessmentRequired()
+      ? 'Your unsaved edits do not match this assessment. Save the draft, then complete a fresh AI final review before approval.'
+      : 'Your draft has unsaved edits. Save the snapshot, then complete a fresh final review before approval. Guided mode does not generate an AI assessment.'
+    : !assessmentReady() ? 'A current AI assessment is missing. Complete the final-review conversation to assess every proposed item before approving this exact draft. No neutral or invented scores are substituted.'
+    : report ? 'Review the proposed assessment and its coverage below. The server verifies that the report matches the exact draft at approval and build time.'
+    : provider() === 'guided'
+      ? 'Guided walkthrough: no AI assessment report or framework scores are generated. To receive an AI assessment, configure a provider and model, then generate and review an AI draft.'
+      : 'No AI assessment report is attached to this draft. Configure a provider and model, then generate and review an AI draft to receive an assessment.';
+  setLiveText('assessment-readiness', text);
+}
+
+function assessmentReferenceURL(value) {
+  try {
+    const url = new URL(value);
+    return ['https:', 'http:'].includes(url.protocol) && !url.username && !url.password ? url.href : null;
+  } catch (_) { return null; }
+}
+function renderAssessmentReport(parent, report) {
+  parent.replaceChildren();
+  if (!report || report.mode !== 'ai') return;
+  itemText(parent, 'p', report.summary || 'No assessment summary was provided.');
+  const coverage = report.coverage || {};
+  itemText(parent, 'p', `Coverage: ${coverage.items_evaluated ?? 'not reported'} of ${coverage.items_total ?? 'not reported'} instructional items assessed using bounded excerpts.`);
+  if (Array.isArray(coverage.truncated_items) && coverage.truncated_items.length)
+    itemText(parent, 'p', 'Truncated item excerpts: ' + coverage.truncated_items.join(', ') +
+      '. The assessment cannot establish what omitted content contains.');
+  const references = document.createElement('ul');
+  for (const framework of report.frameworks || []) {
+    const row = itemText(references, 'li', '');
+    const label = `${framework.title || framework.id || 'Framework'}${framework.version ? ' · ' + framework.version : ''}`;
+    const url = assessmentReferenceURL(framework.url);
+    if (url) {
+      const link = itemText(row, 'a', label);
+      link.href = url; link.target = '_blank'; link.rel = 'noopener noreferrer';
+    } else row.textContent = label + ' (reference URL unavailable)';
+  }
+  parent.appendChild(references);
+  const list = (node, title, values) => {
+    if (!Array.isArray(values) || !values.length) return;
+    itemText(node, 'h5', title);
+    const items = document.createElement('ul');
+    values.forEach(value => itemText(items, 'li', String(value)));
+    node.appendChild(items);
+  };
+  list(parent, 'Report warnings', report.warnings);
+  const dimensions = {ai_leverage: 'AI leverage', delegation_risk: 'Delegation risk',
+    authenticity: 'Authenticity', pedagogical_quality: 'Pedagogical quality',
+    transparency: 'Transparency', alignment: 'Alignment'};
+  for (const item of report.items || []) {
+    const details = document.createElement('details');
+    itemText(details, 'summary', `${item.title || item.item_id} · ${item.item_id}`);
+    if (item.content_sha256) itemText(details, 'p', 'Assessed content SHA-256: ' + item.content_sha256);
+    itemText(details, 'p', `Bloom's taxonomy: ${item.blooms?.label || 'Not assessed'}${item.blooms?.level != null ? ' · level ' + item.blooms.level : ''}. ${item.blooms?.rationale || ''}`);
+    itemText(details, 'p', `AIAS task design: observed ${item.aias?.observed_level ?? 'not assessed'}; recommended ${item.aias?.recommended_level ?? 'not assessed'}${item.aias?.label ? ' · ' + item.aias.label : ''}. ${item.aias?.rationale || ''}`);
+    for (const [id, label] of Object.entries(dimensions)) {
+      const dimension = item.dimensions?.[id];
+      itemText(details, 'p', `${label} (application-defined heuristic): ${Number.isFinite(dimension?.score) ? dimension.score : 'not assessed'}. ${dimension?.rationale || ''}`);
+    }
+    list(details, 'Strengths', item.strengths);
+    list(details, 'Concerns', item.concerns);
+    list(details, 'Recommendations', item.recommendations);
+    if (Array.isArray(item.evidence) && item.evidence.length) {
+      itemText(details, 'h5', 'Evidence from assessed excerpts');
+      for (const evidence of item.evidence) {
+        itemText(details, 'p', 'Source: ' + (evidence.source_id || 'Not reported'));
+        itemText(details, 'blockquote', evidence.quote || 'No quotation supplied.');
+      }
+    }
+    list(details, 'Item limitations', item.limitations);
+    parent.appendChild(details);
+  }
+}
+function renderAssessments() {
+  renderAssessmentState();
+  if (!localMode || !workspace?.draft) return;
+  const draft = workspace.draft;
+  const key = workspace.id + ':' + workspace.draft_revision +
+    ':' + JSON.stringify([draft.baseline_assessment, draft.assessment]);
+  if (key === renderedAssessmentKey) return;
+  renderedAssessmentKey = key;
+  el('baseline-assessment').hidden = !draft.baseline_assessment;
+  el('proposed-assessment').hidden = !draft.assessment;
+  renderAssessmentReport(el('baseline-assessment-content'), draft.baseline_assessment);
+  renderAssessmentReport(el('proposed-assessment-content'), draft.assessment);
+}
+
 function getFlowState() {
   const step = (number, title, description, target, button) => ({number, title, description, target, button});
   if (!workspace) return step(1, 'Choose or create a course workspace',
@@ -74,16 +185,25 @@ function getFlowState() {
   }
   if (draftEditsPending()) return step(5, 'Save your draft edits before approval',
     'Your edited items are not saved yet. Save the snapshot, then complete a fresh final review before approving it.', 'save-draft', 'Go to save draft edits');
+  if (assessmentRequired() && !assessmentReady())
+    return step(5, 'Refresh the AI assessment before approval',
+      'Complete a fresh final-review conversation for this exact draft. Missing or stale assessments are never replaced with invented scores.',
+      'mentor-message', 'Go to final review');
   if (renderedBriefWorkspace === workspace.id && el('design-brief').value !== workspace.brief)
     return step(4, 'Save your changed design brief',
       'Your edits are not saved. Saving the brief invalidates earlier direction and draft approvals.', 'design-brief', 'Review and save the brief');
+  if (localHax && workspace.artifact?.hax_site && workspace.stage === 'built')
+    return step(6, 'Your approved HAX site is built',
+      'Open the verified running site below, or start it again. Your site and its output directory stay on this computer.',
+      'hax-site-panel', 'Go to HAX site');
   if (workspace.artifact && workspace.stage === 'built')
     return step(6, 'Your approved content is ready',
       'Download the private content package or open its preview. This does not publish a public HAX site.', 'artifact-links', 'Go to download');
   if (workspace.draft && workspace.build_revision === workspace.draft_revision &&
       workspace.reviewed_draft_revision === workspace.draft_revision)
-    return step(6, 'Build your approved content',
-      'The exact draft is approved. Use Build approved content below to prepare your download.', 'build-course', 'Go to build');
+    return step(6, localHax ? 'Build & open HAX site' : 'Build your approved content',
+      localHax ? 'The exact draft is approved. Build a new local HAX site; its server starts after a successful build. Nothing is published.'
+        : 'The exact draft is approved. Use Build approved content below to prepare your download.', 'build-course', 'Go to build');
   if (workspace.draft && workspace.reviewed_draft_revision === workspace.draft_revision)
     return step(5, 'Approve the exact draft you reviewed',
       'Review the items once more, save any edits, then explicitly approve this exact version. Changes require another review.', 'approve-build', 'Go to draft approval');
@@ -137,17 +257,24 @@ function formatUploadBytes(bytes) {
   if (bytes < 1000000000) return `${(bytes / 1000000).toFixed(1)} MB`;
   return `${(bytes / 1000000000).toFixed(2)} GB`;
 }
+function localUploadID() {
+  return (uploadFeedback?.workspaceId === workspace?.id && uploadFeedback.uploadId) ||
+    workspace?.upload?.upload_id || workspace?.upload?.id;
+}
 
 function uploadPresentation() {
   if (!workspace) return null;
   const local = uploadFeedback?.workspaceId === workspace.id ? uploadFeedback : null;
-  const saved = workspace.upload && (!local || (local.uploadId && local.uploadId === workspace.upload.id))
+  const saved = workspace.upload && (!local || (localMode && local.phase === 'saved') ||
+    (local.uploadId && local.uploadId === workspace.upload.id))
     ? workspace.upload : null;
   if (!local && !saved) return null;
   let phase = local?.phase || 'saved';
   if (!uploadController && saved && ['ready', 'failed', 'canceled'].includes(saved.status))
     phase = saved.status;
   if (phase === 'saved') phase = saved?.status || 'unknown';
+  if (localMode) phase = ({uploading: 'awaiting_upload', complete: 'uploaded',
+    cancelled: 'canceled', running: 'processing', completed: 'ready'})[phase] || phase;
   const views = {
     authorizing: ['Starting your private upload', 'Requesting upload access. No file bytes have been sent yet.', 1],
     transferring: ['Uploading your file', 'Transferring file bytes directly to private storage.', 2],
@@ -164,6 +291,18 @@ function uploadPresentation() {
     unknown: ['Check your saved upload progress', 'The latest server status could not be confirmed. Check progress before retrying.', 3],
     not_started: ['No new upload is running', 'No active upload job was found. Your existing content is unchanged; you can retry the selected file.', 1],
   };
+  if (localMode) Object.assign(views, {
+    authorizing: ['Starting your local import', 'Reserving a managed local copy. No file bytes have been sent yet.', 1],
+    transferring: ['Copying your file to the local app', 'Copying bounded chunks to this computer, not to cloud storage.', 2],
+    verifying: ['Local copy complete — starting preparation', 'Confirming the local copy and queuing archive inspection. No AI analysis is running.', 3],
+    awaiting_upload: ['Local copy interrupted', 'No transfer is running in this tab. Cancel the saved copy before selecting the file again.', 2],
+    uploaded: ['Local file received — preparation queued', 'The copy is complete. Local preparation will begin shortly.', 3],
+    processing: ['Preparing your course locally', 'Inspecting instructional content and retaining supported assets locally. No AI analysis is running.', 3],
+    prepared: ['Validating prepared local content', 'Checking the prepared inventory before attaching it to this workspace.', 3],
+    failed: ['The local file could not be prepared',
+      saved?.error || saved?.message || 'No new source was attached. Review the local preparation error below before retrying.', 3],
+    canceled: ['Local import canceled', 'Temporary local copy cleanup is managed by the app. Your original file is unchanged.', 2],
+  });
   let [title, description, step] = views[phase] || views.unknown;
   if (phase === 'processing') {
     const phases = {
@@ -174,10 +313,18 @@ function uploadPresentation() {
       parse: ['Reading course content', 'Inspecting the archive and preparing supported instructional content.'],
     };
     if (phases[saved?.phase]) [title, description] = phases[saved.phase];
+    if (localMode) {
+      title = 'Preparing your course locally';
+      description = saved?.message || workspace.active_job?.message ||
+        'Inspecting the archive, preparing instructional content and retaining supported assets on this computer.';
+      const currentPhase = saved?.phase || workspace.active_job?.phase;
+      if (currentPhase) title += ' · ' + currentPhase.replace(/_/g, ' ');
+    }
   }
   if (phase === 'transferring' && local?.percentage >= 100) {
     title = 'All file bytes transferred — finishing upload';
-    description = 'Private storage is finalizing the file. Keep this tab open until upload confirmation finishes.';
+    description = localMode ? 'The local app is confirming the final chunk. Keep this tab open.'
+      : 'Private storage is finalizing the file. Keep this tab open until upload confirmation finishes.';
   }
   if (['authorizing', 'verifying', 'refreshing'].includes(phase) && Date.now() - local?.changedAt > 15000)
     description += ' Still waiting for server confirmation; do not submit a duplicate upload.';
@@ -190,7 +337,8 @@ function uploadPresentation() {
     filename: local?.filename || saved?.filename || 'Selected file', size: local?.size || saved?.size,
     startedAt: local?.startedAt || (saved?.created_at ? saved.created_at * 1000 : null),
     percentage: phase === 'transferring' ? local?.percentage ?? null : phase === 'verifying' || phase === 'ready' ? 100 : null,
-    loaded: local?.loaded, inBrowser, needsCheck: !!local?.mustCheck || !!issue,
+    loaded: local?.loaded, inBrowser, needsCheck: !!local?.mustCheck || !!issue ||
+      (localMode && phase === 'awaiting_upload'),
     active: !!uploadController || ['awaiting_upload', 'uploaded', 'processing', 'prepared'].includes(phase),
     tone: issue ? 'error' : phase === 'ready' ? 'success' : ['error', 'failed', 'canceled', 'unknown'].includes(phase) ? 'error' : 'info'};
 }
@@ -214,7 +362,9 @@ function renderUploadFeedback() {
   el('upload-progress-label').hidden = bar.hidden;
   el('upload-progress-label').textContent = view.step === 2 ? 'File transfer progress' :
     view.phase === 'ready' ? 'Preparation complete' : view.phase === 'verifying'
-      ? 'File bytes transferred — waiting for confirmation' : view.step === 1 ? 'Waiting for upload access' : 'Preparation progress — no percentage available yet';
+      ? 'File bytes transferred — waiting for confirmation' : view.step === 1
+        ? localMode ? 'Starting local import' : 'Waiting for upload access'
+        : 'Preparation progress — no percentage available yet';
   if (view.percentage === null) bar.removeAttribute('value');
   else bar.value = view.percentage;
   el('upload-feedback-bytes').textContent = view.phase === 'transferring'
@@ -225,16 +375,23 @@ function renderUploadFeedback() {
   el('upload-feedback-help').textContent = view.inBrowser
     ? 'Keep this tab open. No AI analysis is performed during upload or preparation.'
     : view.phase === 'awaiting_upload' ? 'No transfer is active in this tab. Review the saved attempt and use job recovery before retrying.'
-    : view.active ? 'The file is stored; preparation continues on the server. You can return to this workspace later. No AI analysis is running.'
+    : view.active ? localMode
+      ? 'Preparation continues in the local app. Keep the app running; you can return to this workspace later. No AI analysis is running.'
+      : 'The file is stored; preparation continues on the server. You can return to this workspace later. No AI analysis is running.'
     : 'Your original file stays on your computer. Check saved progress before submitting another attempt if the result is uncertain.';
-  el('abort-upload').hidden = !uploadController || !['authorizing', 'transferring'].includes(view.phase);
+  el('abort-upload').hidden = localMode
+    ? !(uploadController || (localUploadID() && ['awaiting_upload', 'error', 'unknown'].includes(view.phase)))
+    : !uploadController || !['authorizing', 'transferring'].includes(view.phase);
   el('abort-upload').textContent = view.phase === 'authorizing' ? 'Stop waiting for upload access' : 'Cancel transfer';
   el('check-upload-progress').disabled = uploadChecking;
   el('check-upload-progress').textContent = uploadChecking ? 'Checking saved progress…' : 'Check saved progress';
   el('upload-recovery').hidden = !workspace.active_job;
   const labels = {authorizing: 'Starting upload…', transferring: 'Uploading file…',
     verifying: 'Confirming upload…', refreshing: 'Checking progress…'};
-  el('upload-course-button').textContent = view.kind === 'course' && uploadController ? labels[view.phase] || 'Upload in progress…' : 'Upload & prepare course';
+  el('upload-course-button').textContent = view.kind === 'course' && uploadController
+    ? localMode ? ({authorizing: 'Starting local import…', transferring: 'Copying file locally…', verifying: 'Starting preparation…'}[view.phase] || 'Import in progress…')
+      : labels[view.phase] || 'Upload in progress…'
+    : localMode ? 'Import & prepare locally' : 'Upload & prepare course';
   el('upload-material-button').textContent = view.kind === 'material' && uploadController ? labels[view.phase] || 'Upload in progress…' : 'Add document';
   if (view.active) uploadHeartbeat = setTimeout(renderUploadFeedback, 1000);
 }
@@ -277,6 +434,21 @@ async function checkSavedUploadProgress() {
   uploadChecking = true;
   renderUploadFeedback();
   try {
+    const uploadId = localMode ? localUploadID() : context.uploadId || workspace.upload?.id;
+    const transferNeedsCheck = !workspace.upload || !['ready', 'failed', 'canceled'].includes(workspace.upload.status) ||
+      (context.uploadId && context.uploadId !== workspace.upload.id);
+    if (localMode && uploadId && !uploadController && workspace.active_job?.kind !== 'prepare' && transferNeedsCheck) {
+      const record = await uploadControlRequest(context, '/mentor/api/local-uploads/' + encodeURIComponent(uploadId),
+        'GET', undefined, false);
+      if (workspace?.id !== id) return;
+      context.uploadId = uploadId;
+      context.filename = record.filename;
+      context.size = record.size;
+      context.loaded = record.offset;
+      context.phase = record.status;
+      context.mustCheck = false;
+      uploadFeedback = context;
+    }
     const next = await uploadControlRequest(context,
       '/mentor/api/workspaces/' + id + '?draft_revision=' + (workspace.draft_revision || 0),
       'GET', undefined, false);
@@ -286,10 +458,15 @@ async function checkSavedUploadProgress() {
     if (uploadFeedback?.workspaceId === id) {
       uploadFeedback.mustCheck = false;
       if (!uploadController) {
-        if (uploadFeedback.uploadId) uploadFeedback.phase = 'saved';
+        if (uploadFeedback.uploadId && !localMode) uploadFeedback.phase = 'saved';
+        else if (uploadFeedback.uploadId && next.upload &&
+            (next.active_job?.kind === 'prepare' ||
+              (next.upload.upload_id || next.upload.id) === uploadFeedback.uploadId)) uploadFeedback.phase = 'saved';
         else if (next.active_job?.kind === 'prepare') uploadFeedback = null;
-        else uploadFeedback.phase = 'not_started';
+        else if (!localMode || !uploadFeedback.uploadId) uploadFeedback.phase = 'not_started';
       }
+      if (localMode && uploadFeedback?.workspaceId === id)
+        uploadFeedback.mustCheck = uploadPresentation()?.phase === 'awaiting_upload';
     }
     await renderWorkspace();
   } catch (error) {
@@ -312,7 +489,15 @@ function updateProcessingStatus() {
   else if (workspace?.active_job) {
     const labels = {prepare: 'Preparing your uploaded content', interview: 'Preparing the mentor reply',
       analysis: 'Generating your draft', review: 'Reviewing your draft', build: 'Building your download'};
-    text = (labels[workspace.active_job.kind] || 'Processing your course') + '… Progress is saved.';
+    const assessmentPhases = {assessment_baseline: 'Assessing the imported instructional baseline with your selected AI',
+      assessing_baseline: 'Assessing the imported instructional baseline with your selected AI',
+      assessment_draft: 'Assessing every proposed draft item with your selected AI',
+      assessing_draft: 'Assessing every proposed draft item with your selected AI',
+      drafting: 'Generating your proposed draft with your selected AI'};
+    text = (localMode && workspace.active_job.message ? workspace.active_job.message
+      : localMode && assessmentPhases[workspace.active_job.phase] ? assessmentPhases[workspace.active_job.phase]
+      : localHax && workspace.active_job.kind === 'build' ? 'Building your local HAX site'
+      : labels[workspace.active_job.kind] || 'Processing your course') + '… Progress is saved.';
   } else text = busy ? 'Working…' : '';
   setLiveText('mentor-status', text);
   status.hidden = !text;
@@ -323,6 +508,7 @@ function setLiveText(id, text) {
 }
 function renderFlow() {
   updateProcessingStatus();
+  renderAssessmentState();
   renderUploadFeedback();
   el('mentor-guide').hidden = !mentorAuthenticated;
   if (!mentorAuthenticated) return;
@@ -349,6 +535,7 @@ function renderFlow() {
     else node.removeAttribute('aria-current');
   }
   const waiting = busy || !!workspace?.active_job || !!uploadController;
+  const localNeedsRecovery = localMode && uploadPresentation()?.needsCheck;
   el('mentor-provider').disabled = waiting;
   el('mentor-model').disabled = waiting;
   el('manual-model-enabled').disabled = waiting;
@@ -358,6 +545,7 @@ function renderFlow() {
   });
   el('workspace-list').disabled = busy;
   el('new-workspace').querySelector('button').disabled = busy;
+  el('import-local-source').disabled = waiting || !workspace || localNeedsRecovery;
   if (!workspace) return;
   const inputs = courseInputs();
   setLiveText('source-readiness', inputs.info?.course_items
@@ -381,7 +569,8 @@ function renderFlow() {
   el('send-mentor-message').disabled = waiting || !mode.ready || (!workspace.draft && !inputs.ready);
   el('send-mentor-message').title = el('send-mentor-message').disabled ? reason : 'Send your message using the displayed mentor mode.';
   ['source-form', 'mentor-canvas-form', 'material-file-form', 'material-url-form', 'material-text-form'].forEach(id => {
-    el(id).querySelector('button').disabled = waiting || !!(uploadFeedback?.workspaceId === workspace.id && uploadFeedback.mustCheck);
+    el(id).querySelector('button').disabled = waiting || localNeedsRecovery ||
+      !!(uploadFeedback?.workspaceId === workspace.id && uploadFeedback.mustCheck);
   });
   const interviewed = (workspace.jobs || []).some(job => job.kind === 'interview' &&
     job.status === 'completed' && job.revision === workspace.revision);
@@ -391,8 +580,10 @@ function renderFlow() {
     el('design-brief').value !== workspace.brief ||
     workspace.direction_revision !== workspace.revision;
   el('approve-build').disabled = waiting || !workspace.draft || draftEditsPending() ||
+    !assessmentReady() ||
     workspace.reviewed_draft_revision !== workspace.draft_revision;
   el('build-course').disabled = waiting || !workspace.draft || draftEditsPending() ||
+    !assessmentReady() ||
     workspace.reviewed_draft_revision !== workspace.draft_revision ||
     workspace.build_revision !== workspace.draft_revision;
 }
@@ -434,6 +625,12 @@ async function api(url, method = 'GET', body, {signal} = {}) {
   }
   return data;
 }
+el('local-auth-form').onsubmit = event => {
+  event.preventDefault(); action(async () => {
+    await api('/mentor/api/local-auth/config', 'POST', {auth_url: el('local-auth-url').value.trim()});
+    window.location.reload();
+  });
+};
 el('mentor-login-form').onsubmit = event => {
   event.preventDefault(); action(async () => {
     await api('/mentor/api/login', 'POST', {code: el('mentor-invite-code').value});
@@ -616,6 +813,134 @@ el('manual-model-enabled').onchange = () => {
   renderFlow();
 };
 
+function copyLocalChunk(context, file, offset, end) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const abort = () => xhr.abort();
+    const finish = callback => {
+      context.controller.signal.removeEventListener('abort', abort);
+      callback();
+    };
+    xhr.open('PUT', '/mentor/api/local-uploads/' + encodeURIComponent(context.uploadId) + '?offset=' + offset);
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+    xhr.setRequestHeader('X-Mentor-CSRF', mentorCSRF);
+    xhr.timeout = 120000;
+    xhr.upload.onprogress = event => {
+      if (uploadFeedback !== context) return;
+      context.loaded = Math.min(end, offset + event.loaded);
+      context.percentage = file.size ? context.loaded / file.size * 100 : 0;
+      context.lastProgressAt = Date.now();
+      renderUploadFeedback();
+    };
+    xhr.onload = () => finish(() => {
+      let data;
+      try { data = JSON.parse(xhr.responseText); }
+      catch (_) { reject(new Error('The local app returned an invalid copy response. Check saved progress.')); return; }
+      if (xhr.status < 200 || xhr.status >= 300) {
+        reject(new Error(data.error || 'The local copy failed. Check saved progress.'));
+      } else if (data.offset !== end) {
+        reject(new Error('The local copy offset could not be confirmed. Check saved progress before retrying.'));
+      } else resolve(data);
+    });
+    xhr.onerror = () => finish(() => reject(new Error('The local app connection was interrupted. Check saved progress.')));
+    xhr.ontimeout = () => finish(() => reject(new Error('The local copy timed out. Check saved progress.')));
+    xhr.onabort = () => finish(() => reject(new DOMException('Local copy canceled', 'AbortError')));
+    context.controller.signal.addEventListener('abort', abort, {once: true});
+    if (context.controller.signal.aborted) {
+      finish(() => reject(new DOMException('Local copy canceled', 'AbortError')));
+      return;
+    }
+    xhr.send(file.slice(offset, end));
+  });
+}
+
+async function uploadLocal(file) {
+  if (!Number.isSafeInteger(file.size) || file.size <= 0 || file.size > 8 * 1024 ** 3)
+    throw new Error('Choose a nonempty Canvas export or prepared package no larger than 8 GiB.');
+  const workspaceId = workspace.id;
+  const revision = workspace.revision;
+  uploadController = new AbortController();
+  const context = uploadFeedback = {workspaceId, kind: 'course', filename: file.name, size: file.size,
+    controller: uploadController, phase: 'authorizing', percentage: null, loaded: 0,
+    startedAt: Date.now(), changedAt: Date.now(), lastProgressAt: Date.now(), mustCheck: false};
+  uploadStatusIssue = null;
+  renderFlow();
+  try {
+    const record = await uploadControlRequest(context,
+      '/mentor/api/workspaces/' + workspaceId + '/local-uploads', 'POST',
+      {revision, filename: file.name, size: file.size}, false);
+    context.uploadId = record.id;
+    if (!record.id || record.offset !== 0 || !Number.isSafeInteger(record.chunk_size) || record.chunk_size <= 0)
+      throw new Error('The local app returned an invalid import reservation. Check saved progress.');
+    const chunkSize = Math.min(record.chunk_size, 8 * 1024 ** 2);
+    context.phase = 'transferring';
+    context.changedAt = Date.now();
+    renderFlow();
+    for (let offset = 0; offset < file.size;) {
+      if (context.controller.signal.aborted) throw new DOMException('Local copy canceled', 'AbortError');
+      const end = Math.min(file.size, offset + chunkSize);
+      await copyLocalChunk(context, file, offset, end);
+      offset = end;
+      context.loaded = end;
+      context.percentage = end / file.size * 100;
+    }
+    if (context.controller.signal.aborted) throw new DOMException('Local copy canceled', 'AbortError');
+    context.phase = 'verifying';
+    context.changedAt = Date.now();
+    renderFlow();
+    // Allow completion to settle even if cancellation is requested; DELETE then fences its result.
+    const next = await uploadControlRequest(context, '/mentor/api/local-uploads/' +
+      encodeURIComponent(context.uploadId) + '/complete', 'POST', {}, false);
+    if (context.controller.signal.aborted) throw new DOMException('Local copy canceled', 'AbortError');
+    if (workspace?.id === workspaceId) {
+      acceptWorkspace(next);
+      context.phase = 'saved';
+      await renderWorkspace();
+    }
+  } catch (error) {
+    context.phase = 'error';
+    context.mustCheck = true;
+    context.error = error.message;
+    if (context.controller.signal.aborted && context.uploadId) {
+      try {
+        await uploadControlRequest(context, '/mentor/api/local-uploads/' + encodeURIComponent(context.uploadId),
+          'DELETE', undefined, false);
+        context.phase = 'canceled';
+        context.mustCheck = false;
+        context.error = '';
+        if (workspace?.id === workspaceId) { await fetchWorkspace(); await renderWorkspace(); }
+      } catch (_) {
+        context.error = 'Copy stopped in this browser. Check saved progress to confirm local cancellation.';
+      }
+    }
+    if (context.phase !== 'canceled') {
+      const failure = new Error(context.error);
+      failure.uploadHandled = true;
+      throw failure;
+    }
+  } finally {
+    if (uploadController === context.controller) uploadController = null;
+    renderFlow();
+  }
+}
+
+function importLocalSource() { action(async () => {
+  if (!localMode || !localSource?.id || !workspace) return;
+  const id = workspace.id;
+  uploadFeedback = {workspaceId: id, filename: localSource.filename, size: localSource.size,
+    kind: 'course', phase: 'processing', startedAt: Date.now()};
+  renderFlow();
+  try {
+    workspace = await api(endpoint('/local-source'), 'POST', {revision: workspace.revision, source_id: localSource.id});
+    blankCourses.delete(id);
+    uploadFeedback = null;
+    await renderWorkspace();
+  } catch (error) {
+    uploadFeedback = null;
+    throw error;
+  }
+}); }
+
 async function uploadHosted(file, kind, role = 'reference') {
   const workspaceId = workspace.id;
   const base = '/mentor/api/workspaces/' + workspaceId;
@@ -703,6 +1028,12 @@ async function uploadHosted(file, kind, role = 'reference') {
 }
 function abortHostedUpload() {
   if (uploadController) uploadController.abort();
+  else if (localMode && localUploadID()) action(async () => {
+    await api('/mentor/api/local-uploads/' + encodeURIComponent(localUploadID()), 'DELETE');
+    uploadFeedback = null;
+    await fetchWorkspace();
+    await renderWorkspace();
+  });
 }
 
 async function action(callback) {
@@ -746,12 +1077,114 @@ function itemText(parent, tag, text) {
   return node;
 }
 
+function renderLocalJobError() {
+  const latest = (workspace?.jobs || []).filter(job => ['prepare', 'build'].includes(job.kind)).at(-1);
+  const failed = localMode && !workspace?.active_job && latest?.status === 'failed';
+  el('local-job-error').hidden = !failed;
+  if (!failed) {
+    el('local-job-error').textContent = '';
+    return;
+  }
+  const label = latest.kind === 'prepare' ? 'Local course preparation failed.' : 'Local HAX build failed.';
+  const guidance = latest.kind === 'prepare'
+    ? ' Your original file is unchanged. Resolve the issue before importing again.'
+    : ' Your approved draft is preserved. Resolve the issue before building again.';
+  setLiveText('local-job-error', label + ' ' + (latest.error || 'Check local processing details and retry.') + guidance);
+}
+
+function verifiedHaxURL(status) {
+  if (!status?.running || !status.url) return null;
+  try {
+    const url = new URL(status.url);
+    if (url.protocol !== 'http:' || !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) ||
+        url.username || url.password) return null;
+    return url.href;
+  } catch (_) { return null; }
+}
+
+function renderHaxStatus() {
+  const site = workspace?.artifact?.hax_site;
+  const shown = localHax && !!site;
+  el('hax-site-panel').hidden = !shown;
+  if (!shown) return;
+  const current = haxStatus?.workspaceId === workspace.id && haxStatus.directory === site.directory
+    ? haxStatus : null;
+  const url = verifiedHaxURL(current);
+  const starting = !!current && ['starting', 'preparing', 'prepare_runtime', 'verify', 'verifying', 'launching'].includes(current.phase);
+  el('hax-site-directory').textContent = site.directory || current?.directory || 'Not available';
+  setLiveText('hax-site-status', haxBusy ? 'Updating local site lifecycle…'
+    : url ? 'Your local HAX site is running and ready.'
+    : current?.phase ? 'Local site: ' + current.phase.replace(/_/g, ' ')
+    : 'Checking saved local site status…');
+  el('hax-site-error').hidden = !current?.error;
+  el('hax-site-error').textContent = current?.error || '';
+  el('open-hax-site').hidden = !url;
+  if (url) el('open-hax-site').href = url;
+  else el('open-hax-site').removeAttribute('href');
+  el('start-hax-site').hidden = !current;
+  el('start-hax-site').textContent = current?.running ? 'Restart HAX site' : 'Start HAX site';
+  el('start-hax-site').disabled = haxBusy || starting || !!workspace.active_job;
+  el('stop-hax-site').hidden = !current || (!current.running && !starting);
+  el('stop-hax-site').disabled = haxBusy;
+  el('refresh-hax-site').disabled = haxBusy;
+}
+
+async function refreshHaxSite() {
+  clearTimeout(haxPollTimer);
+  if (haxBusy) return;
+  const site = workspace?.artifact?.hax_site;
+  if (!localHax || !site) { renderHaxStatus(); return; }
+  const id = workspace.id;
+  const directory = site.directory;
+  const request = ++haxRequest;
+  try {
+    const status = await api('/mentor/api/workspaces/' + id + '/hax');
+    if (request !== haxRequest || workspace?.id !== id || workspace.artifact?.hax_site?.directory !== directory) return;
+    haxStatus = {...status, workspaceId: id, directory};
+  } catch (error) {
+    if (request !== haxRequest || workspace?.id !== id || workspace.artifact?.hax_site?.directory !== directory) return;
+    haxStatus = {workspaceId: id, directory, running: false, phase: 'status unavailable', error: error.message};
+  }
+  renderHaxStatus();
+  haxPollTimer = setTimeout(refreshHaxSite, 2000);
+}
+
+async function changeHaxSite(command) {
+  const site = workspace?.artifact?.hax_site;
+  if (!localHax || !site || haxBusy || workspace.active_job) return;
+  const id = workspace.id;
+  const directory = site.directory;
+  ++haxRequest;
+  clearTimeout(haxPollTimer);
+  haxBusy = true;
+  haxStatus = {workspaceId: id, directory, running: false, phase: command === 'stop' ? 'stopping' : 'starting'};
+  renderHaxStatus();
+  try {
+    const base = '/mentor/api/workspaces/' + id + '/hax/';
+    if (command === 'restart') await api(base + 'stop', 'POST', {});
+    const status = await api(base + (command === 'stop' ? 'stop' : 'start'), 'POST', {});
+    if (workspace?.id !== id || workspace.artifact?.hax_site?.directory !== directory) return;
+    haxStatus = {...status, workspaceId: id, directory};
+  } catch (error) {
+    if (workspace?.id === id && workspace.artifact?.hax_site?.directory === directory)
+      haxStatus = {workspaceId: id, directory, running: false, phase: 'failed', error: error.message};
+  } finally {
+    haxBusy = false;
+    renderHaxStatus();
+    if (workspace?.id === id && workspace.artifact?.hax_site?.directory === directory)
+      haxPollTimer = setTimeout(refreshHaxSite, 1000);
+  }
+}
+function startHaxSite() { return changeHaxSite(haxStatus?.workspaceId === workspace?.id && haxStatus.running ? 'restart' : 'start'); }
+function stopHaxSite() { return changeHaxSite('stop'); }
+
 async function renderWorkspace() {
   if (!workspace) return;
   const renderId = workspace.id;
   const renderRevision = workspace.revision;
   clearTimeout(pollTimer);
   el('workspace-content').hidden = false;
+  renderLocalJobError();
   el('workspace-title').textContent = workspace.title;
   const stages = {brief: 'Prepare your inputs and discuss your goals.', uploading: 'Uploading course content.',
     preparing: 'Preparing your course content.', interviewing: 'The mentor is preparing a reply.',
@@ -760,13 +1193,16 @@ async function renderWorkspace() {
     build_approved: 'Draft approved. Ready to build.', building: 'Building your download.',
     built: 'Approved content is ready to download.'};
   el('workspace-stage').textContent = stages[workspace.stage] || 'Your workspace is saved.';
+  if (localHax && workspace.stage === 'building') el('workspace-stage').textContent = 'Building and starting your local HAX site.';
+  if (localHax && workspace.stage === 'built') el('workspace-stage').textContent = 'Approved content is built. Open or start the local HAX site below.';
   el('workspace-revisions').textContent =
     `Stage: ${workspace.stage} · input revision ${workspace.revision} · draft revision ${workspace.draft_revision}`;
   if (workspace.upload) {
     const upload = workspace.upload;
     el('upload-state').textContent =
       `Source: ${upload.filename} · ${upload.status}${upload.phase ? ' / ' + upload.phase : ''} · ` +
-      (upload.cleanup_status === 'deleted' ? 'Original cloud upload deletion accepted.'
+      (localMode ? 'Course content and supported assets stay on this computer. Your original file is unchanged.'
+        : upload.cleanup_status === 'deleted' ? 'Original cloud upload deletion accepted.'
         : upload.cleanup_status === 'error' ? 'Raw-file cleanup pending retry.'
         : 'Raw upload is temporary and will be cleaned up after processing or expiry.');
   }
@@ -866,6 +1302,7 @@ async function renderWorkspace() {
       workspace.build_revision !== workspace.draft_revision;
   }
   renderedDraftKey = draftKey;
+  renderAssessments();
   el('artifact-links').replaceChildren();
   if (workspace.artifact && workspace.stage === 'built') {
     const link = itemText(el('artifact-links'), 'a', 'Download approved course content');
@@ -874,7 +1311,17 @@ async function renderWorkspace() {
     preview.href = endpoint('/preview/index.html'); preview.target = '_blank';
     preview.rel = 'noopener noreferrer'; preview.className = 'btn btn-primary';
     el('artifact-links').replaceChildren(preview, link);
+    if (localHax) {
+      preview.className = 'btn btn-ghost';
+      preview.textContent = 'Static preview (secondary; opens in a new tab)';
+      if (workspace.artifact.omitted_preview_assets > 0)
+        itemText(el('artifact-links'), 'p',
+          `Compact static preview omits ${workspace.artifact.omitted_preview_assets} large assets; open the HAX site for supported local media.`);
+    }
   }
+  renderHaxStatus();
+  if (localHax && workspace.artifact?.hax_site) refreshHaxSite();
+  else { clearTimeout(haxPollTimer); ++haxRequest; }
   el('mentor-jobs').textContent = (workspace.jobs || []).map(j =>
     `${j.kind}: ${j.status}${j.error ? ' — ' + j.error : ''}`).join('\n') || 'No processing jobs yet.';
   el('cancel-mentor-job').hidden = !workspace.active_job;
@@ -930,6 +1377,9 @@ async function updateCredentials() {
   const data = await api('/mentor/api/session');
   mentorCSRF = data.csrf;
   hosted = data.hosted_ready;
+  localMode = data.local_mode === true;
+  localHax = localMode && data.local_hax === true;
+  localSource = localMode ? data.local_source || null : null;
   mentorAuthenticated = data.authenticated;
   configuredProviders = new Set(data.credentials.map(item => item.provider));
   for (const chosen of selectedModels.keys()) if (!configuredProviders.has(chosen)) selectedModels.delete(chosen);
@@ -944,6 +1394,26 @@ async function updateCredentials() {
   el('new-workspace').querySelector('button').disabled = data.login_required;
   el('provider-settings').hidden = data.login_required;
   el('hosted-upload-help').hidden = !hosted;
+  el('local-upload-help').hidden = !localMode;
+  el('local-auth-setup').hidden = !localMode || !data.local_auth_configurable;
+  el('local-source-choice').hidden = !localSource;
+  el('local-source-label').textContent = localSource
+    ? `Startup course: ${localSource.filename} · ${formatUploadBytes(localSource.size)}` : '';
+  if (localMode) {
+    el('provider-privacy-help').textContent = 'Guided mode makes no AI calls and does not invent analysis scores. With AI enabled, course excerpts and your design brief are sent to the selected provider. Provider keys are encrypted and saved only on this computer, never in browser storage or chat. Neon handles identity only.';
+    el('compact-package-help').textContent = 'Optional: create a compact instructional review package first (excluded assets cannot be recovered from it)';
+    el('account-login-help').textContent = 'Use the existing Neon email service to verify your identity only. All course work, conversations, provider keys and generated sites remain on this computer. Sign in here with the same account to resume; another computer will not have these files.';
+    el('workspace-storage-help').textContent = data.local_accounts
+      ? 'Account-scoped local workspaces: sign in with the same verified email account on this computer to resume multiple courses. Neon stores identity only; it does not store or synchronize your courses, conversations, keys or sites. Never paste keys into chat.'
+      : 'Browser-local fallback (not a verified email account): course work and keys stay on this computer and access is tied to this browser identity. Clearing cookies can lose access. Configure email sign-in above for account-scoped local workspaces; it does not synchronize course data.';
+    el('upload-course-button').textContent = 'Import & prepare locally';
+  }
+  el('flow-step-6').textContent = localHax ? '6. HAX site' : '6. Download';
+  el('build-course').textContent = localHax ? 'Build & open HAX site' : 'Build approved content';
+  el('completion-title').textContent = localHax ? '6. Build & open HAX site' : '6. Download approved content';
+  el('completion-help').textContent = localHax
+    ? 'Build the exact approved snapshot into a real local HAX site and start its server. Nothing is published. Static preview and download remain secondary options.'
+    : 'Building prepares a private download and preview. It does not publish a public HAX site.';
   el('credential-status').textContent = data.credentials.map(c =>
     `${c.provider}: saved until ${new Date(c.expires_at * 1000).toLocaleString()}`).join(' · ')
     || 'No saved credentials. Guided mode is available.';
@@ -987,6 +1457,10 @@ el('source-form').onsubmit = event => {
     const file = el('source-file').files[0];
     if (!file) throw new Error('Choose a course export or prepared package.');
     blankCourses.delete(workspace.id);
+    if (localMode) {
+      await uploadLocal(file);
+      return;
+    }
     if (hosted) {
       await uploadHosted(file, 'course');
       return;
@@ -1069,6 +1543,7 @@ function saveDraft() { action(async () => {
   await renderWorkspace();
 }); }
 function approveBuild() { action(async () => {
+  if (!assessmentReady()) throw new Error('Complete a current AI final-review assessment before approving this draft.');
   if (workspace.draft.items.some((item, i) =>
     el('draft-title-' + i).value !== item.title || el('draft-html-' + i).value !== item.html))
     throw new Error('Save snapshot edits before approval.');
@@ -1076,6 +1551,7 @@ function approveBuild() { action(async () => {
   await renderWorkspace();
 }); }
 function buildCourse() { action(async () => {
+  if (!assessmentReady()) throw new Error('Complete a current AI final-review assessment before building this draft.');
   workspace = await api(endpoint('/build'), 'POST', {draft_revision: workspace.draft_revision}); await renderWorkspace();
 }); }
 function cancelMentorJob() { action(async () => {

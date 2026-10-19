@@ -6,10 +6,12 @@ A friendly local web interface for non-technical instructors.
 from __future__ import annotations
 
 import io
+import atexit
 import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -58,8 +60,31 @@ MAX_IMSCC_UPLOAD = 256 * 1024 * 1024
 app.config["MAX_CONTENT_LENGTH"] = MAX_IMSCC_UPLOAD + 1024 * 1024
 from mentor_routes import create_mentor_blueprint
 app.register_blueprint(create_mentor_blueprint(
-    lambda: Path(app.config.get("MENTOR_DATA_ROOT", PROJECT_ROOT / "mentor_data"))
+    lambda: Path(app.config.get("MENTOR_DATA_ROOT",
+                               Path(os.environ["HAX_DATA_DIR"]) / "mentor_data"
+                               if os.environ.get("HAX_DATA_DIR") else PROJECT_ROOT / "mentor_data"))
 ))
+def shutdown_local_services():
+    for manager in list(app.extensions.get("local_hax_sites", {}).values()):
+        manager.shutdown()
+    if "local_hax" in sys.modules:
+        sys.modules["local_hax"].shutdown_local_builds()
+
+
+atexit.register(shutdown_local_services)
+
+
+@app.before_request
+def require_local_host():
+    from hosted_config import hosted_mode
+    if not hosted_mode():
+        try:
+            from urllib.parse import urlsplit
+            host = urlsplit("http://" + request.host).hostname
+            if host not in ("127.0.0.1", "localhost", "::1"):
+                return jsonify({"error": "This application accepts loopback hostnames only."}), 403
+        except ValueError:
+            return jsonify({"error": "Invalid local hostname."}), 403
 
 
 @app.before_request
@@ -162,6 +187,8 @@ _site_procs: dict[str, dict] = {}
 @app.route("/")
 def index():
     """Welcome + requirements screen."""
+    if os.environ.get("HAX_EXECUTION_MODE") == "local":
+        return redirect("/mentor")
     result = run_all_checks(source_type="imscc")
     return render_template("index.html",
                            checks=result["checks"],
@@ -842,23 +869,45 @@ def api_test_connection():
 # ── main ──────────────────────────────────────────────────────────────────────
 
 def open_browser():
-    webbrowser.open("http://127.0.0.1:5050")
+    if os.environ.get("HAX_NO_BROWSER") != "1":
+        webbrowser.open("http://127.0.0.1:" + os.environ.get("HAX_PORT", "5050") + "/mentor")
 
 
 if __name__ == "__main__":
+    from hosted_config import hosted_mode
+    if not hosted_mode():
+        os.environ["HAX_EXECUTION_MODE"] = "local"
+    def terminate(signum, frame):
+        shutdown_local_services()
+        raise SystemExit(0)
+    signal.signal(signal.SIGTERM, terminate)
+    signal.signal(signal.SIGINT, terminate)
+    port = int(os.environ.get("HAX_PORT", "5050"))
     print("\n" + "="*60)
     print("  Canvas Course Builder")
-    print("  Opening in your browser at http://127.0.0.1:5050")
+    print(f"  Opening in your browser at http://127.0.0.1:{port}/mentor")
     print("  Press Ctrl+C to stop the app.")
     print("="*60 + "\n")
 
-    # Open browser after a short delay (gives Flask time to start)
-    Timer(1.5, open_browser).start()
-
-    app.run(
-        host="127.0.0.1",
-        port=5050,
-        debug=False,
-        threaded=True,
-        use_reloader=False,
-    )
+    from contextlib import nullcontext
+    from werkzeug.serving import make_server
+    from local_startup import application_lease
+    data_root = Path(os.environ.get("HAX_DATA_DIR", PROJECT_ROOT)) / "mentor_data"
+    try:
+        with application_lease(data_root) if not hosted_mode() else nullcontext():
+            # Bind before recovery: an occupied port must not invalidate live jobs.
+            server = make_server("127.0.0.1", port, app, threaded=True)
+            try:
+                if not hosted_mode():
+                    from mentor_store import MentorStore
+                    MentorStore(data_root / "workspaces.sqlite").recover_interrupted_jobs()
+                    from local_imports import LocalImportManager
+                    LocalImportManager(data_root / "uploads").cleanup(include_completed=True)
+                Timer(0.3, open_browser).start()
+                server.serve_forever()
+            finally:
+                shutdown_local_services()
+                server.server_close()
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(1)
