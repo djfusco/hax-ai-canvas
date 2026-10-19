@@ -550,3 +550,16 @@ code { font-family: 'SF Mono', Consolas, monospace; background: #f0f0f0; padding
 /* ── Spinner animation ───────────────────────────────────────────────────── */
 @keyframes spin { to { transform: rotate(360deg); } }
 .spin { display: inline-block; animation: spin 1s linear infinite; }
+
+/* ── Nav advanced dropdown ───────────────────────────────────────────────── */
+.nav-advanced { position: relative; list-style: none; }
+.nav-advanced > summary { cursor: pointer; list-style: none; }
+.nav-advanced > summary::-webkit-details-marker { display: none; }
+.nav-dropdown {
+  position: absolute; right: 0; top: 110%;
+  background: #1565c0; border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.25);
+  padding: 6px; min-width: 160px; z-index: 200;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.nav-dropdown .nav-link { white-space: nowrap; border-radius: 6px; }
