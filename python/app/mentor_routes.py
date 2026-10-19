@@ -129,7 +129,8 @@ def create_mentor_blueprint(root_provider):
             if latest:
                 upload = backend().uploads.get(g.owner, latest["id"])
                 result["upload"] = {k: upload.get(k) for k in
-                                    ("id", "filename", "size", "status", "cleanup_status", "attempts")}
+                                    ("id", "filename", "size", "kind", "status", "cleanup_status", "attempts",
+                                     "created_at", "updated_at")}
                 result["upload"]["phase"] = (upload.get("sandbox") or {}).get("phase")
         return result
 

@@ -5,6 +5,10 @@ let busy = false;
 let pollTimer = null;
 let hosted = false;
 let uploadController = null;
+let uploadFeedback = null;
+let uploadHeartbeat = null;
+let uploadChecking = false;
+let uploadStatusIssue = null;
 let renderedBriefWorkspace = null;
 let renderedBrief = '';
 let renderedDraftKey = null;
@@ -58,6 +62,9 @@ function getFlowState() {
   const step = (number, title, description, target, button) => ({number, title, description, target, button});
   if (!workspace) return step(1, 'Choose or create a course workspace',
     'Give your course a name, or resume an existing workspace. Your work is saved separately for each course.', 'new-title', 'Choose a workspace');
+  const upload = uploadPresentation();
+  if (upload && (uploadController || workspace.active_job?.kind === 'prepare' || upload.needsCheck))
+    return step(3, upload.title, upload.description, 'upload-feedback', 'View upload status');
   if (workspace.active_job || uploadController) {
     const kind = workspace.active_job?.kind;
     const number = uploadController || kind === 'prepare' ? 3 : kind === 'build' ? 6 : kind === 'interview' ? 4 : 5;
@@ -123,10 +130,185 @@ function startBlankCourse() {
   goToNextStep();
 }
 
+function formatUploadBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes < 0) return '';
+  if (bytes < 1000) return `${Math.round(bytes)} B`;
+  if (bytes < 1000000) return `${(bytes / 1000).toFixed(1)} KB`;
+  if (bytes < 1000000000) return `${(bytes / 1000000).toFixed(1)} MB`;
+  return `${(bytes / 1000000000).toFixed(2)} GB`;
+}
+
+function uploadPresentation() {
+  if (!workspace) return null;
+  const local = uploadFeedback?.workspaceId === workspace.id ? uploadFeedback : null;
+  const saved = workspace.upload && (!local || (local.uploadId && local.uploadId === workspace.upload.id))
+    ? workspace.upload : null;
+  if (!local && !saved) return null;
+  let phase = local?.phase || 'saved';
+  if (!uploadController && saved && ['ready', 'failed', 'canceled'].includes(saved.status))
+    phase = saved.status;
+  if (phase === 'saved') phase = saved?.status || 'unknown';
+  const views = {
+    authorizing: ['Starting your private upload', 'Requesting upload access. No file bytes have been sent yet.', 1],
+    transferring: ['Uploading your file', 'Transferring file bytes directly to private storage.', 2],
+    verifying: ['Upload finished — confirming your file', 'Checking the stored file and starting the preparation job. Transfer is not the same as preparation.', 3],
+    refreshing: ['Checking saved preparation progress', 'The file was sent. Loading the server’s saved status before continuing.', 3],
+    awaiting_upload: ['Waiting for upload confirmation', 'No transfer is running in this tab. This saved attempt is awaiting upload confirmation; use job recovery before uploading again.', 2],
+    uploaded: ['File received — preparation queued', 'The browser upload is complete. Waiting for the durable preparation job to begin.', 3],
+    processing: ['Preparing your course content', 'The file is uploaded. Reading supported content and building its inventory; this may take several minutes.', 3],
+    prepared: ['Saving and validating prepared content', 'Verifying the saved result before attaching it to your workspace. Raw-file cleanup follows verified attachment.', 3],
+    ready: ['Your file has been prepared', 'Review the inventory and coverage warnings below, then continue with the course discussion.', 3],
+    failed: ['The file could not be prepared', 'No new source was attached by this attempt. Review processing details before retrying.', 3],
+    canceled: ['Upload or preparation canceled', 'Temporary cloud data is scheduled for cleanup. Your computer’s original file is unchanged.', 2],
+    error: ['Upload needs your attention', local?.error || 'Check saved progress before trying another upload.', 2],
+    unknown: ['Check your saved upload progress', 'The latest server status could not be confirmed. Check progress before retrying.', 3],
+    not_started: ['No new upload is running', 'No active upload job was found. Your existing content is unchanged; you can retry the selected file.', 1],
+  };
+  let [title, description, step] = views[phase] || views.unknown;
+  if (phase === 'processing') {
+    const phases = {
+      setup: ['Starting the secure processing environment', 'Your file is uploaded. Preparing the isolated environment and its parsers before reading the archive.'],
+      download: ['Loading the archive for preparation', 'The browser upload is complete. The secure processing environment is reading the private stored file.'],
+      locking: ['Securing the preparation environment', 'The file is uploaded. Locking network access before parsing course content.'],
+      prepare: ['Reading course content', 'Inspecting the archive and preparing supported instructional content. Excluded media is recorded in the coverage warnings.'],
+      parse: ['Reading course content', 'Inspecting the archive and preparing supported instructional content.'],
+    };
+    if (phases[saved?.phase]) [title, description] = phases[saved.phase];
+  }
+  if (phase === 'transferring' && local?.percentage >= 100) {
+    title = 'All file bytes transferred — finishing upload';
+    description = 'Private storage is finalizing the file. Keep this tab open until upload confirmation finishes.';
+  }
+  if (['authorizing', 'verifying', 'refreshing'].includes(phase) && Date.now() - local?.changedAt > 15000)
+    description += ' Still waiting for server confirmation; do not submit a duplicate upload.';
+  if (phase === 'transferring' && Date.now() - local?.lastProgressAt > 30000)
+    description += ' Waiting for the next transfer update; check your connection if this continues.';
+  const issue = uploadStatusIssue?.workspaceId === workspace.id ? uploadStatusIssue.message : '';
+  if (issue) description = issue + ' Last known status: ' + title + '. Use Check saved progress.';
+  const inBrowser = ['authorizing', 'transferring', 'verifying'].includes(phase);
+  return {phase, title, description, step, kind: local?.kind || saved?.kind || 'course',
+    filename: local?.filename || saved?.filename || 'Selected file', size: local?.size || saved?.size,
+    startedAt: local?.startedAt || (saved?.created_at ? saved.created_at * 1000 : null),
+    percentage: phase === 'transferring' ? local?.percentage ?? null : phase === 'verifying' || phase === 'ready' ? 100 : null,
+    loaded: local?.loaded, inBrowser, needsCheck: !!local?.mustCheck || !!issue,
+    active: !!uploadController || ['awaiting_upload', 'uploaded', 'processing', 'prepared'].includes(phase),
+    tone: issue ? 'error' : phase === 'ready' ? 'success' : ['error', 'failed', 'canceled', 'unknown'].includes(phase) ? 'error' : 'info'};
+}
+
+function renderUploadFeedback() {
+  clearTimeout(uploadHeartbeat);
+  const panel = el('upload-feedback');
+  const view = uploadPresentation();
+  panel.hidden = !view || !mentorAuthenticated;
+  if (!view || !mentorAuthenticated) return;
+  const form = el(view.kind === 'material' ? 'material-file-form' : 'source-form');
+  if (panel.previousElementSibling !== form) form.after(panel);
+  panel.dataset.tone = view.tone;
+  el('upload-feedback-title').textContent = view.title;
+  el('upload-feedback-file').textContent = `${view.filename} · ${formatUploadBytes(view.size)}`;
+  setLiveText('upload-feedback-status', view.description);
+  for (let number = 1; number <= 3; number++)
+    el('upload-step-' + number).dataset.state = view.phase === 'ready' || number < view.step ? 'past' : number === view.step ? 'current' : 'upcoming';
+  const bar = el('hosted-upload-progress');
+  bar.hidden = ['error', 'failed', 'canceled', 'unknown', 'not_started'].includes(view.phase);
+  el('upload-progress-label').hidden = bar.hidden;
+  el('upload-progress-label').textContent = view.step === 2 ? 'File transfer progress' :
+    view.phase === 'ready' ? 'Preparation complete' : view.phase === 'verifying'
+      ? 'File bytes transferred — waiting for confirmation' : view.step === 1 ? 'Waiting for upload access' : 'Preparation progress — no percentage available yet';
+  if (view.percentage === null) bar.removeAttribute('value');
+  else bar.value = view.percentage;
+  el('upload-feedback-bytes').textContent = view.phase === 'transferring'
+    ? `${formatUploadBytes(view.loaded || 0)} of ${formatUploadBytes(view.size)} transferred` +
+      (view.percentage === null ? '' : ` (${Math.round(view.percentage)}%)`) : '';
+  const elapsed = view.active && view.startedAt ? Math.max(0, Math.floor((Date.now() - view.startedAt) / 1000)) : null;
+  el('upload-feedback-elapsed').textContent = elapsed === null ? '' : `Elapsed since this attempt started: ${Math.floor(elapsed / 60)}m ${elapsed % 60}s`;
+  el('upload-feedback-help').textContent = view.inBrowser
+    ? 'Keep this tab open. No AI analysis is performed during upload or preparation.'
+    : view.phase === 'awaiting_upload' ? 'No transfer is active in this tab. Review the saved attempt and use job recovery before retrying.'
+    : view.active ? 'The file is stored; preparation continues on the server. You can return to this workspace later. No AI analysis is running.'
+    : 'Your original file stays on your computer. Check saved progress before submitting another attempt if the result is uncertain.';
+  el('abort-upload').hidden = !uploadController || !['authorizing', 'transferring'].includes(view.phase);
+  el('abort-upload').textContent = view.phase === 'authorizing' ? 'Stop waiting for upload access' : 'Cancel transfer';
+  el('check-upload-progress').disabled = uploadChecking;
+  el('check-upload-progress').textContent = uploadChecking ? 'Checking saved progress…' : 'Check saved progress';
+  el('upload-recovery').hidden = !workspace.active_job;
+  const labels = {authorizing: 'Starting upload…', transferring: 'Uploading file…',
+    verifying: 'Confirming upload…', refreshing: 'Checking progress…'};
+  el('upload-course-button').textContent = view.kind === 'course' && uploadController ? labels[view.phase] || 'Upload in progress…' : 'Upload & prepare course';
+  el('upload-material-button').textContent = view.kind === 'material' && uploadController ? labels[view.phase] || 'Upload in progress…' : 'Add document';
+  if (view.active) uploadHeartbeat = setTimeout(renderUploadFeedback, 1000);
+}
+
+function showUploadRecovery() {
+  el('processing-details').open = true;
+  el('processing-details').scrollIntoView({block: 'center'});
+  el('cancel-mentor-job').focus();
+}
+
+async function uploadControlRequest(context, url, method = 'GET', body, cancelable = true) {
+  const controller = new AbortController();
+  let timedOut = false;
+  const cancel = () => controller.abort();
+  if (cancelable) {
+    context.controller.signal.addEventListener('abort', cancel, {once: true});
+    if (context.controller.signal.aborted) cancel();
+  }
+  const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, 45000);
+  try {
+    return await api(url, method, body, {signal: controller.signal});
+  } catch (error) {
+    if (cancelable && context.controller.signal.aborted) throw error;
+    const failure = new Error(timedOut
+      ? 'The server has not responded in 45 seconds. Check saved progress before trying another upload.'
+      : error.httpStatus ? error.message : 'The upload service could not confirm this request. Check saved progress before retrying.');
+    failure.name = 'UploadControlError';
+    throw failure;
+  } finally {
+    clearTimeout(timeout);
+    if (cancelable) context.controller.signal.removeEventListener('abort', cancel);
+  }
+}
+
+async function checkSavedUploadProgress() {
+  if (!workspace || uploadChecking) return;
+  const id = workspace.id;
+  const context = uploadFeedback?.workspaceId === id ? uploadFeedback : {
+    workspaceId: id, controller: new AbortController(), phase: 'saved'};
+  uploadChecking = true;
+  renderUploadFeedback();
+  try {
+    const next = await uploadControlRequest(context,
+      '/mentor/api/workspaces/' + id + '?draft_revision=' + (workspace.draft_revision || 0),
+      'GET', undefined, false);
+    if (workspace?.id !== id) return;
+    acceptWorkspace(next);
+    uploadStatusIssue = null;
+    if (uploadFeedback?.workspaceId === id) {
+      uploadFeedback.mustCheck = false;
+      if (!uploadController) {
+        if (uploadFeedback.uploadId) uploadFeedback.phase = 'saved';
+        else if (next.active_job?.kind === 'prepare') uploadFeedback = null;
+        else uploadFeedback.phase = 'not_started';
+      }
+    }
+    await renderWorkspace();
+  } catch (error) {
+    if (workspace?.id === id) {
+      context.error = error.message;
+      context.phase = 'error';
+      context.mustCheck = true;
+      if (!uploadFeedback || uploadFeedback.workspaceId === id) uploadFeedback = context;
+    }
+  } finally {
+    uploadChecking = false;
+    renderFlow();
+  }
+}
+
 function updateProcessingStatus() {
   const status = el('mentor-status');
   let text = '';
-  if (uploadController) text = `Uploading ${Math.round(el('hosted-upload-progress').value || 0)}% directly to private storage…`;
+  if (uploadController) text = uploadPresentation()?.title || 'Starting upload…';
   else if (workspace?.active_job) {
     const labels = {prepare: 'Preparing your uploaded content', interview: 'Preparing the mentor reply',
       analysis: 'Generating your draft', review: 'Reviewing your draft', build: 'Building your download'};
@@ -141,6 +323,7 @@ function setLiveText(id, text) {
 }
 function renderFlow() {
   updateProcessingStatus();
+  renderUploadFeedback();
   el('mentor-guide').hidden = !mentorAuthenticated;
   if (!mentorAuthenticated) return;
   const mode = mentorMode();
@@ -198,7 +381,7 @@ function renderFlow() {
   el('send-mentor-message').disabled = waiting || !mode.ready || (!workspace.draft && !inputs.ready);
   el('send-mentor-message').title = el('send-mentor-message').disabled ? reason : 'Send your message using the displayed mentor mode.';
   ['source-form', 'mentor-canvas-form', 'material-file-form', 'material-url-form', 'material-text-form'].forEach(id => {
-    el(id).querySelector('button').disabled = waiting;
+    el(id).querySelector('button').disabled = waiting || !!(uploadFeedback?.workspaceId === workspace.id && uploadFeedback.mustCheck);
   });
   const interviewed = (workspace.jobs || []).some(job => job.kind === 'interview' &&
     job.status === 'completed' && job.revision === workspace.revision);
@@ -231,10 +414,12 @@ async function fetchWorkspace() {
   if (next.revision < workspace.revision ||
       (next.revision === workspace.revision && next.draft_revision < workspace.draft_revision)) return;
   acceptWorkspace(next);
+  if (uploadStatusIssue?.workspaceId === id) uploadStatusIssue = null;
 }
 
-async function api(url, method = 'GET', body) {
+async function api(url, method = 'GET', body, {signal} = {}) {
   const options = {method, headers: {'X-Mentor-CSRF': mentorCSRF}};
+  if (signal) options.signal = signal;
   if (body instanceof FormData) options.body = body;
   else if (body !== undefined) {
     options.headers['Content-Type'] = 'application/json';
@@ -242,7 +427,11 @@ async function api(url, method = 'GET', body) {
   }
   const response = await fetch(url, options);
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error || 'The action failed.');
+  if (!response.ok) {
+    const error = new Error(data.error || 'The action failed.');
+    error.httpStatus = response.status;
+    throw error;
+  }
   return data;
 }
 el('mentor-login-form').onsubmit = event => {
@@ -428,41 +617,88 @@ el('manual-model-enabled').onchange = () => {
 };
 
 async function uploadHosted(file, kind, role = 'reference') {
-  if (!window.HaxHostedUpload) throw new Error('Hosted upload support is missing. Run the hosted build before deployment.');
-  const intent = await api(endpoint('/uploads'), 'POST', {
-    revision: workspace.revision, filename: file.name, size: file.size, kind, role,
-  });
+  const workspaceId = workspace.id;
+  const base = '/mentor/api/workspaces/' + workspaceId;
   uploadController = new AbortController();
-  el('hosted-upload-progress').hidden = false;
-  el('upload-progress-label').hidden = false;
-  el('abort-upload').hidden = false;
-  el('hosted-upload-progress').value = 0;
-  workspace = await api(endpoint(''));
-  await renderWorkspace();
+  const context = uploadFeedback = {workspaceId, kind, filename: file.name, size: file.size,
+    controller: uploadController, phase: 'authorizing', percentage: null, loaded: 0,
+    startedAt: Date.now(), changedAt: Date.now(), lastProgressAt: Date.now(), mustCheck: false};
+  let authorizationStarted = false;
+  uploadStatusIssue = null;
+  renderFlow();
   try {
+    if (!window.HaxHostedUpload)
+      throw new Error('Hosted upload support is missing. Run the hosted build before deployment.');
+    authorizationStarted = true;
+    const intent = await uploadControlRequest(context, base + '/uploads', 'POST', {
+      revision: workspace.revision, filename: file.name, size: file.size, kind, role,
+    });
+    context.uploadId = intent.upload_id;
+    if (context.controller.signal.aborted) throw new DOMException('Upload stopped', 'AbortError');
+    context.phase = 'transferring';
+    context.changedAt = Date.now();
+    renderFlow();
+    // Start the SDK immediately, without another workspace/inventory GET.
     await window.HaxHostedUpload.upload(file, intent, {
-      signal: uploadController.signal,
+      signal: context.controller.signal,
       onProgress: progress => {
-        el('hosted-upload-progress').value = progress.percentage || 0;
-        el('mentor-status').textContent =
-          `Uploading ${Math.round(progress.percentage || 0)}% directly to private storage…`;
+        if (uploadFeedback !== context) return;
+        const percent = Number.isFinite(progress.percentage) ? Math.max(0, Math.min(100, progress.percentage)) : null;
+        const loaded = Number.isFinite(progress.loaded) ? Math.max(0, Math.min(file.size, progress.loaded))
+          : percent === null ? context.loaded : file.size * percent / 100;
+        if (loaded !== context.loaded || percent !== context.percentage) context.lastProgressAt = Date.now();
+        context.percentage = percent;
+        context.loaded = loaded;
+        renderUploadFeedback();
       },
     });
+    context.phase = 'verifying';
+    context.percentage = 100;
+    context.loaded = file.size;
+    context.changedAt = Date.now();
+    renderFlow();
     // Browser data is not proof: the server HEADs the registered private path.
-    await api('/mentor/api/uploads/' + intent.upload_id + '/complete', 'POST', {});
-    workspace = await api(endpoint(''));
-    await renderWorkspace();
-  } catch (error) {
-    if (uploadController.signal.aborted) {
-      try { await api(endpoint('/cancel-job'), 'POST', {job_id: intent.upload_id}); } catch (_) {}
-      throw new Error('Transfer canceled. Temporary upload data is scheduled for cleanup.');
+    await uploadControlRequest(context, '/mentor/api/uploads/' + intent.upload_id + '/complete', 'POST', {});
+    context.phase = 'refreshing';
+    context.changedAt = Date.now();
+    renderFlow();
+    const next = await uploadControlRequest(context,
+      base + '?draft_revision=' + (workspace.draft_revision || 0));
+    if (workspace?.id === workspaceId) {
+      acceptWorkspace(next);
+      context.phase = 'saved';
+      await renderWorkspace();
     }
-    throw error;
+  } catch (error) {
+    context.phase = 'error';
+    context.mustCheck = authorizationStarted;
+    let message;
+    if (context.controller.signal.aborted) {
+      message = context.uploadId
+        ? 'Transfer stopped in this browser. Check saved progress to confirm cancellation.'
+        : 'Stopped waiting for upload access. Check saved progress for an interrupted reservation before retrying.';
+      if (context.uploadId) {
+        try {
+          const next = await uploadControlRequest(context, base + '/cancel-job',
+            'POST', {job_id: context.uploadId}, false);
+          if (workspace?.id === workspaceId) acceptWorkspace(next);
+          context.mustCheck = false;
+          context.phase = 'saved';
+          message = next.upload?.status === 'ready' ? 'The file had already finished processing before cancellation.'
+            : 'Transfer canceled. Temporary upload data is scheduled for cleanup.';
+        } catch (_) {}
+      }
+    } else {
+      message = error.name === 'UploadControlError' || !authorizationStarted ? error.message
+        : 'The file transfer did not finish. Check your connection and saved progress before retrying.';
+    }
+    context.error = message;
+    const failure = new Error(message);
+    failure.uploadHandled = true;
+    throw failure;
   } finally {
-    uploadController = null;
-    el('abort-upload').hidden = true;
-    el('hosted-upload-progress').hidden = true;
-    el('upload-progress-label').hidden = true;
+    if (uploadController === context.controller) uploadController = null;
+    renderFlow();
   }
 }
 function abortHostedUpload() {
@@ -478,7 +714,7 @@ async function action(callback) {
   catch (error) {
     el('mentor-error').textContent = error.message;
     el('mentor-error').hidden = false;
-    if (workspace) {
+    if (workspace && !error.uploadHandled) {
       try { await fetchWorkspace(); await renderWorkspace(); } catch (_) {}
     }
   } finally {
@@ -643,38 +879,50 @@ async function renderWorkspace() {
     `${j.kind}: ${j.status}${j.error ? ' — ' + j.error : ''}`).join('\n') || 'No processing jobs yet.';
   el('cancel-mentor-job').hidden = !workspace.active_job;
   renderFlow();
-  try {
-    const info = await api('/mentor/api/workspaces/' + renderId + '/inventory');
-    if (workspace?.id !== renderId || workspace.revision !== renderRevision) return;
-    inventories.set(renderId, {revision: renderRevision, info});
-    inventoryErrors.delete(renderId);
-    const box = el('course-inventory');
-    const warningsOpen = box.querySelector('details')?.open || false;
-    box.replaceChildren();
-    itemText(box, 'p', `${info.course_items} published instructional items · ${info.materials.length} supplemental sources`);
-    if (info.course_items) itemText(box, 'p', Object.entries(info.counts).filter(([, count]) => count)
-      .map(([kind, count]) => `${count} ${kind}`).join(' · '));
-    const coverage = document.createElement('details');
-    coverage.open = warningsOpen;
-    itemText(coverage, 'summary', (info.warnings || []).length
-      ? `Review ${info.warnings.length} import warnings and coverage limits` : 'Coverage and limitations');
-    const warnings = document.createElement('ul');
-    (info.warnings || []).slice(0, 30).forEach(w => itemText(warnings, 'li', w));
-    (info.limitations || []).forEach(w => itemText(warnings, 'li', w));
-    if ((info.warnings || []).length > 30)
-      itemText(warnings, 'li', `${info.warnings.length - 30} further import warnings are recorded with the source.`);
-    coverage.appendChild(warnings);
-    box.appendChild(coverage);
-  } catch (error) {
-    if (workspace?.id !== renderId) return;
-    inventories.delete(renderId);
-    inventoryErrors.set(renderId, true);
-    el('course-inventory').textContent = error.message;
+  if (workspace.active_job?.kind === 'prepare') {
+    el('course-inventory').textContent = 'The new file’s inventory will appear here after preparation finishes. Existing course content is not replaced until the result is verified.';
+  } else {
+    try {
+      const info = await api('/mentor/api/workspaces/' + renderId + '/inventory');
+      if (workspace?.id !== renderId || workspace.revision !== renderRevision) return;
+      inventories.set(renderId, {revision: renderRevision, info});
+      inventoryErrors.delete(renderId);
+      const box = el('course-inventory');
+      const warningsOpen = box.querySelector('details')?.open || false;
+      box.replaceChildren();
+      itemText(box, 'p', `${info.course_items} published instructional items · ${info.materials.length} supplemental sources`);
+      if (info.course_items) itemText(box, 'p', Object.entries(info.counts).filter(([, count]) => count)
+        .map(([kind, count]) => `${count} ${kind}`).join(' · '));
+      const coverage = document.createElement('details');
+      coverage.open = warningsOpen;
+      itemText(coverage, 'summary', (info.warnings || []).length
+        ? `Review ${info.warnings.length} import warnings and coverage limits` : 'Coverage and limitations');
+      const warnings = document.createElement('ul');
+      (info.warnings || []).slice(0, 30).forEach(w => itemText(warnings, 'li', w));
+      (info.limitations || []).forEach(w => itemText(warnings, 'li', w));
+      if ((info.warnings || []).length > 30)
+        itemText(warnings, 'li', `${info.warnings.length - 30} further import warnings are recorded with the source.`);
+      coverage.appendChild(warnings);
+      box.appendChild(coverage);
+    } catch (error) {
+      if (workspace?.id !== renderId || workspace.revision !== renderRevision) return;
+      inventories.delete(renderId);
+      inventoryErrors.set(renderId, true);
+      el('course-inventory').textContent = error.message;
+    }
   }
   renderFlow();
   if (workspace.active_job) pollTimer = setTimeout(async () => {
     try { await fetchWorkspace(); await renderWorkspace(); }
-    catch (error) { el('mentor-status').textContent = error.message; }
+    catch (error) {
+      if (workspace?.id !== renderId) return;
+      el('mentor-status').hidden = false;
+      el('mentor-status').textContent = 'Progress could not be refreshed. Reopen this workspace to retry; a saved job may still be running.';
+      if (workspace.active_job?.kind === 'prepare') {
+        uploadStatusIssue = {workspaceId: renderId, message: 'The latest server progress could not be checked.'};
+        renderUploadFeedback();
+      }
+    }
   }, 1000);
 }
 

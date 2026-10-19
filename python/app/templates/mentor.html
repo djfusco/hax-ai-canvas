@@ -113,12 +113,25 @@
       <form id="source-form">
         <label class="field-label" for="source-file">Canvas .imscc or prepared .haxcourse</label>
         <input class="field-input" id="source-file" type="file" accept=".imscc,.haxcourse">
-        <button class="btn btn-primary" type="submit">Upload &amp; prepare course</button>
+        <button class="btn btn-primary" id="upload-course-button" type="submit">Upload &amp; prepare course</button>
       </form>
       <p id="hosted-upload-help" class="field-help" hidden>Large exports upload directly to private Vercel storage in bounded parts. You do not need Python or a local helper. The original cloud upload is deleted only after the prepared result is saved and validated; your computer's original is unchanged.</p>
-      <label id="upload-progress-label" for="hosted-upload-progress" tabindex="-1" hidden>Upload progress</label>
-      <progress id="hosted-upload-progress" max="100" value="0" hidden></progress>
-      <button class="btn btn-ghost" id="abort-upload" type="button" onclick="abortHostedUpload()" hidden>Cancel transfer</button>
+      <section id="upload-feedback" class="mentor-upload" tabindex="-1" aria-labelledby="upload-feedback-title" hidden>
+        <h4 id="upload-feedback-title"></h4>
+        <p id="upload-feedback-file"></p>
+        <ol class="mentor-upload-steps" aria-label="File import stages">
+          <li id="upload-step-1">1. Start</li><li id="upload-step-2">2. Transfer</li><li id="upload-step-3">3. Prepare</li>
+        </ol>
+        <p id="upload-feedback-status" role="status" aria-live="polite" aria-atomic="true"></p>
+        <label id="upload-progress-label" for="hosted-upload-progress" tabindex="-1" hidden>Upload progress</label>
+        <progress id="hosted-upload-progress" max="100" hidden></progress>
+        <p id="upload-feedback-bytes"></p>
+        <p id="upload-feedback-elapsed" aria-live="off"></p>
+        <p id="upload-feedback-help" class="field-help"></p>
+        <button class="btn btn-ghost" id="abort-upload" type="button" onclick="abortHostedUpload()" hidden>Cancel transfer</button>
+        <button class="btn btn-outline" id="check-upload-progress" type="button" onclick="checkSavedUploadProgress()">Check saved progress</button>
+        <button class="btn btn-ghost" id="upload-recovery" type="button" onclick="showUploadRecovery()" hidden>View job / recovery options</button>
+      </section>
       <p id="upload-state" role="status" aria-live="polite"></p>
       <details>
         <summary>Optional: prepare a media-heavy export on your computer instead</summary>
@@ -143,7 +156,7 @@
       <form id="material-file-form">
         <label class="field-label" for="material-file">Supplemental document (10 MiB maximum)</label>
         <input class="field-input" id="material-file" type="file" accept=".txt,.md,.csv,.html,.pdf,.docx,.pptx">
-        <button class="btn btn-primary" type="submit">Add document</button>
+        <button class="btn btn-primary" id="upload-material-button" type="submit">Add document</button>
       </form>
       <form id="material-url-form">
         <label class="field-label" for="material-url">Public resource URL</label>
