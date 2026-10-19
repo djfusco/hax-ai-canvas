@@ -5,11 +5,13 @@ REST paths, proxy header and cookie prefix verified against
 No auth responses, cookies, OTPs or user emails are logged.
 """
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 import hashlib
-from http.cookies import SimpleCookie
+from http.cookies import CookieError, SimpleCookie
 import json
 import re
 import secrets
+import time
 from urllib.parse import urlsplit
 
 from hosted_data import _Postgres
@@ -41,7 +43,66 @@ def validate_auth_url(value):
 
 def session_cookies(cookies):
     return "; ".join(name + "=" + cookies[name] for name in COOKIE_NAMES
-                     if name in cookies and re.fullmatch(r"[A-Za-z0-9_.%~-]{1,4096}", cookies[name]))
+                     if name in cookies and valid_session_value(cookies[name]))
+
+
+def valid_session_value(value):
+    return (isinstance(value, str) and 0 < len(value) <= 4096
+            and all(0x21 <= ord(c) <= 0x7e and c not in '";,\\' for c in value))
+
+
+def parse_session_updates(headers, *, now=None):
+    """Only accept exact session-cookie names, not browser flag pseudo-cookies.
+
+    Python 3.12 SimpleCookie discards the entire header on `Partitioned`.
+    Parse the first cookie pair separately; our same-origin response controls
+    Domain/Path/Secure/HttpOnly/SameSite, so upstream browser flags are not
+    forwarded. Preserve Max-Age/Expires semantics without exposing values.
+    """
+    current = time.time() if now is None else now
+    accepted = []
+    for header in headers:
+        if not isinstance(header, str) or len(header) > 16384 or "\r" in header or "\n" in header:
+            continue
+        parts = header.split(";")
+        parsed = SimpleCookie()
+        try:
+            parsed.load(parts[0].strip())
+        except CookieError:
+            continue
+        if len(parsed) != 1:
+            continue
+        name, morsel = next(iter(parsed.items()))
+        if name not in COOKIE_NAMES or (morsel.value and not valid_session_value(morsel.value)):
+            continue
+        age, expiry = None, None
+        for attribute in parts[1:]:
+            key, separator, value = attribute.strip().partition("=")
+            if key.lower() == "max-age" and separator and re.fullmatch(r"-?[0-9]{1,12}", value):
+                age = max(0, min(int(value), 30 * 86400))
+            elif key.lower() == "expires" and separator:
+                try:
+                    date = parsedate_to_datetime(value)
+                    expiry = date.replace(tzinfo=date.tzinfo or timezone.utc).timestamp()
+                except (ValueError, TypeError, OverflowError):
+                    pass
+        if age is None and expiry is not None:
+            age = max(0, min(int(expiry - current), 30 * 86400))
+        if not morsel.value:
+            age = 0
+        accepted.append((name, morsel.value, age))
+    return accepted
+
+
+def new_session_cookies(updates):
+    """Apply response updates in order; the last deletion must win."""
+    cookies = {}
+    for name, value, age in updates:
+        if age == 0 or not value:
+            cookies.pop(name, None)
+        else:
+            cookies[name] = value
+    return session_cookies(cookies)
 
 
 def verified_identity(data):
@@ -96,14 +157,7 @@ class NeonAuth:
                     result = json.loads(content)
                     if result is not None and not isinstance(result, dict):
                         raise ValueError()
-                    accepted = []
-                    for header in response.headers.get_list("set-cookie"):
-                        parsed = SimpleCookie()
-                        parsed.load(header)
-                        for name, morsel in parsed.items():
-                            if name in COOKIE_NAMES:
-                                age = int(morsel["max-age"]) if morsel["max-age"] else None
-                                accepted.append((name, morsel.value, None if age is None else min(age, 30 * 86400)))
+                    accepted = parse_session_updates(response.headers.get_list("set-cookie"))
                     return result, accepted
         except AccountAuthError:
             raise

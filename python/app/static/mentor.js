@@ -11,6 +11,7 @@ let renderedDraftKey = null;
 let modelVersion = null;
 let modelRequest = 0;
 let configuredProviders = new Set();
+let sentCodeEmail = '';
 const el = id => document.getElementById(id);
 const provider = () => el('mentor-provider').value;
 const endpoint = suffix => '/mentor/api/workspaces/' + workspace.id + suffix;
@@ -43,20 +44,89 @@ el('mentor-login-form').onsubmit = event => {
 };
 
 el('account-code-form').onsubmit = event => {
-  event.preventDefault(); action(async () => {
-    await api('/mentor/api/auth/send-code', 'POST', {email: el('account-email').value.trim()});
-    el('account-code-status').textContent = 'Check your email for a sign-in code.';
+  event.preventDefault();
+  if (busy) {
+    if (!el('account-send-code').disabled) {
+      const status = el('account-code-status');
+      status.hidden = false;
+      status.className = 'banner banner-info';
+      status.textContent = `Email address received: ${el('account-email').value.trim()}. Another request is still finishing; please try sending your code again in a moment.`;
+    }
+    return;
+  }
+  action(async () => {
+    const email = el('account-email').value.trim();
+    const button = el('account-send-code');
+    const status = el('account-code-status');
+    sentCodeEmail = '';
+    el('account-code').value = '';
+    el('account-verify-form').hidden = true;
+    el('account-verify-status').hidden = true;
+    button.disabled = true;
+    button.textContent = 'Sending code…';
+    el('account-email').readOnly = true;
+    el('account-code-form').setAttribute('aria-busy', 'true');
+    status.hidden = false;
+    status.className = 'banner banner-info';
+    status.textContent = `Email address received: ${email}. Sending your sign-in code…`;
+    try {
+      await api('/mentor/api/auth/send-code', 'POST', {email});
+      sentCodeEmail = email;
+      status.className = 'banner banner-success';
+      status.textContent = `A sign-in code is on its way to ${email}. Check your email inbox and spam folder, then enter the latest six-digit code below.`;
+      el('account-verify-form').hidden = false;
+      el('account-code').focus();
+    } catch (error) {
+      status.className = 'banner banner-error';
+      status.textContent = `We could not send a code to ${email}. ${error.message}`;
+      throw error;
+    } finally {
+      button.disabled = false;
+      button.textContent = sentCodeEmail ? 'Email another code' : 'Try sending again';
+      el('account-email').readOnly = false;
+      el('account-code-form').setAttribute('aria-busy', 'false');
+    }
   });
+};
+el('account-email').oninput = () => {
+  if (sentCodeEmail && el('account-email').value.trim() !== sentCodeEmail) {
+    sentCodeEmail = '';
+    el('account-code').value = '';
+    el('account-verify-form').hidden = true;
+    el('account-code-status').className = 'banner banner-info';
+    el('account-code-status').textContent = 'Email address changed. Send a new sign-in code for this address.';
+    el('account-send-code').textContent = 'Email a sign-in code';
+  }
 };
 el('account-verify-form').onsubmit = event => {
   event.preventDefault(); action(async () => {
-    await api('/mentor/api/auth/verify-code', 'POST', {
-      email: el('account-email').value.trim(), code: el('account-code').value,
-      claim_browser: el('claim-browser-work').checked,
-    });
-    el('account-code').value = '';
-    workspace = null;
-    await updateCredentials(); await refreshList();
+    const email = el('account-email').value.trim();
+    if (!sentCodeEmail || email !== sentCodeEmail)
+      throw new Error('Send a new sign-in code for this email address first.');
+    const button = el('account-verify-code');
+    const status = el('account-verify-status');
+    button.disabled = true;
+    button.textContent = 'Verifying code…';
+    status.hidden = false;
+    status.className = 'banner banner-info';
+    status.textContent = 'Verifying your code and signing you in…';
+    try {
+      await api('/mentor/api/auth/verify-code', 'POST', {
+        email, code: el('account-code').value, claim_browser: el('claim-browser-work').checked,
+      });
+      el('account-code').value = '';
+      workspace = null;
+      await updateCredentials(); await refreshList();
+      status.className = 'banner banner-success';
+      status.textContent = 'You are signed in.';
+    } catch (error) {
+      status.className = 'banner banner-error';
+      status.textContent = `We could not complete sign-in. ${error.message} If you already submitted this code, request a new one.`;
+      throw error;
+    } finally {
+      button.disabled = false;
+      button.textContent = 'Verify and sign in';
+    }
   });
 };
 function signOutAccount() { action(async () => {

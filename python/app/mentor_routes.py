@@ -25,7 +25,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from werkzeug.utils import secure_filename
 from mentor_store import WorkspaceConflict, WorkspaceNotFound
 from hosted_config import hosted_mode, settings, HostedSetupError, sign_upload, verify_upload
-from hosted_accounts import AccountAuthError, NeonAuth, session_cookies, COOKIE_NAMES
+from hosted_accounts import AccountAuthError, NeonAuth, session_cookies, new_session_cookies, COOKIE_NAMES
 
 
 def acquire_canvas_course(course_id: str, destination: Path) -> Path:
@@ -334,13 +334,13 @@ def create_mentor_blueprint(root_provider):
         if not isinstance(code, str) or not re.fullmatch(r"[0-9]{6}", code):
             raise ValueError("Enter the six-digit code from your email.")
         _, updates = auth().call("verify", data={"email": email, "otp": code})
-        if not any(name in COOKIE_NAMES and value for name, value, _ in updates):
+        cookies = new_session_cookies(updates)
+        if not cookies:
             raise AccountAuthError("The authentication service did not establish a session.", 503)
         # Better Auth sign-in responses can be {token,user}, not {session,user}.
         # Resolve identity from the newly issued opaque cookie, never from a
         # browser assertion or an assumed SDK-normalized response shape.
-        account, refreshed = auth().session(session_cookies(
-            {name: value for name, value, age in updates if age != 0}))
+        account, refreshed = auth().session(cookies)
         if account is None:
             raise AccountAuthError("The new email session could not be verified.", 401)
         claim = data.get("claim_browser") is True

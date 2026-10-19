@@ -21,18 +21,19 @@
     <div id="account-login-card" hidden>
       <h2>Sign in to your account</h2>
       <p>Use an emailed code to resume courses across devices. New beta users must also enter the invitation code above.</p>
-      <form id="account-code-form">
+      <form id="account-code-form" aria-describedby="account-code-status">
         <label class="field-label" for="account-email">Email address</label>
         <input class="field-input" id="account-email" type="email" autocomplete="email" maxlength="320" required>
-        <button class="btn btn-primary" type="submit">Email a sign-in code</button>
+        <button class="btn btn-primary" id="account-send-code" type="submit">Email a sign-in code</button>
+        <p id="account-code-status" class="banner banner-info" role="status" aria-live="polite" aria-atomic="true" hidden></p>
       </form>
-      <form id="account-verify-form">
+      <form id="account-verify-form" hidden>
         <label class="field-label" for="account-code">Six-digit email code</label>
         <input class="field-input" id="account-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>
         <label class="step-check-item"><input id="claim-browser-work" type="checkbox"> Claim this browser's old beta work (only if it is mine and no jobs are running)</label>
-        <button class="btn btn-primary" type="submit">Verify and sign in</button>
+        <button class="btn btn-primary" id="account-verify-code" type="submit">Verify and sign in</button>
+        <p id="account-verify-status" class="banner banner-info" role="status" aria-live="polite" aria-atomic="true" hidden></p>
       </form>
-      <p id="account-code-status" role="status"></p>
     </div>
     <div id="account-profile" hidden>
       <p id="account-label"></p>

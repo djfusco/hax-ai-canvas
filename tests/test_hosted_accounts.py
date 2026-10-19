@@ -14,7 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "python"), str(ROOT / "python/app"), str(ROOT / "tests")]
 import app as web
 from hosted_accounts import (NeonAuth, PostgresAccounts, COOKIE_NAMES,
-                             AccountAuthError, validate_auth_url, session_cookies)
+                             AccountAuthError, validate_auth_url, session_cookies,
+                             parse_session_updates, new_session_cookies)
 from hosted_config import settings, HostedSetupError
 from mentor_store import WorkspaceConflict, WorkspaceNotFound
 from test_hosted_integration import fixture_environment, FakeHostedBackend
@@ -58,7 +59,7 @@ class AccountTests(unittest.TestCase):
                 return httpx.Response(200, json={"token": "never-return-upstream-token",
                                                 "user": identity(data["email"])["user"]}, headers={
                     "set-cookie": COOKIE_NAMES[0] + "=token-" + name +
-                    "; Path=/; Domain=upstream.neon.tech; Max-Age=3600; Secure; HttpOnly"})
+                    "; Path=/; Domain=upstream.neon.tech; Max-Age=3600; Secure; HttpOnly; SameSite=None; Partitioned"})
             if request.url.path.endswith("sign-out"):
                 name = request.headers.get("cookie", "").split("token-")[-1]
                 self.revoked.add(name)
@@ -121,6 +122,7 @@ class AccountTests(unittest.TestCase):
         for flag in ("Secure", "HttpOnly", "SameSite=Strict", "Path=/mentor"):
             self.assertIn(flag, cookie)
         self.assertNotIn("Domain=", cookie)
+        self.assertNotIn("Partitioned", cookie)
 
     def test_same_account_across_browsers_different_accounts_are_isolated(self):
         self.sign_in()
@@ -141,6 +143,17 @@ class AccountTests(unittest.TestCase):
 
     def test_new_account_cannot_skip_invitation(self):
         self.post("auth/verify-code", {"email": "bob@example.edu", "code": "123456"}, expected=403)
+        self.assertFalse(self.session()["authenticated"])
+
+    def test_token_response_without_a_cookie_never_authenticates(self):
+        seen = []
+        def upstream(request):
+            seen.append(request.url.path)
+            return httpx.Response(200, json={"token": "never-return-upstream-token", "user": identity()["user"]})
+        web.app.config["HOSTED_AUTH_FACTORY"] = lambda url, origin: NeonAuth(
+            url, origin, httpx.MockTransport(upstream))
+        self.post("auth/verify-code", {"email": "alice@example.edu", "code": "123456"}, expected=503)
+        self.assertEqual(len(seen), 1)
         self.assertFalse(self.session()["authenticated"])
 
     def test_logout_and_upstream_revocation_remove_access(self):
@@ -258,3 +271,49 @@ class AccountTests(unittest.TestCase):
             with self.assertRaises(AccountAuthError) as error:
                 auth.call("send", data={"email": "alice@example.edu", "type": "sign-in"})
             self.assertNotIn("secret-upstream-detail", str(error.exception))
+
+
+class SessionCookieParsingTests(unittest.TestCase):
+    def test_modern_flags_do_not_hide_allowlisted_session_cookie(self):
+        for name in COOKIE_NAMES:
+            for flags in ("Partitioned", "partitioned", "Priority=High; Partitioned; FutureFlag"):
+                updates = parse_session_updates([
+                    name + "=synthetic-token; Path=/; Secure; HttpOnly; Max-Age=3600; " + flags])
+                self.assertEqual(updates, [(name, "synthetic-token", 3600)])
+                self.assertEqual(new_session_cookies(updates), name + "=synthetic-token")
+
+    def test_cookie_names_are_exact_and_unrelated_headers_are_not_forwarded(self):
+        headers = ["analytics_session_token_ref=unrelated; Partitioned",
+                   "__Secure-neon-auth.local.session_data=untrusted-cache; Partitioned",
+                   "Priority=High", COOKIE_NAMES[0] + "=synthetic-token; Priority=High; Partitioned"]
+        self.assertEqual(parse_session_updates(headers), [(COOKIE_NAMES[0], "synthetic-token", None)])
+
+    def test_max_age_and_expires_are_preserved_with_max_age_precedence(self):
+        from datetime import datetime, timezone
+        from email.utils import format_datetime
+        now = 1800000000
+        expires = format_datetime(datetime.fromtimestamp(now + 600, timezone.utc), usegmt=True)
+        prefix = COOKIE_NAMES[0] + "=synthetic-token; Partitioned; Expires=" + expires
+        self.assertEqual(parse_session_updates([prefix], now=now)[0][2], 600)
+        self.assertEqual(parse_session_updates([prefix + "; Max-Age=20"], now=now)[0][2], 20)
+        self.assertEqual(parse_session_updates([prefix + "; Max-Age=-1"], now=now)[0][2], 0)
+        self.assertEqual(parse_session_updates([prefix], now=now + 700)[0][2], 0)
+
+    def test_last_deletion_wins_and_values_are_not_confused_with_attributes(self):
+        name = COOKIE_NAMES[0]
+        updates = parse_session_updates([name + "=token-max-age=0; Max-Age=3600; Partitioned"])
+        self.assertEqual(updates[0][2], 3600)
+        self.assertTrue(new_session_cookies(updates))
+        updates += parse_session_updates([name + "=; Max-Age=0; Partitioned"])
+        self.assertEqual(new_session_cookies(updates), "")
+
+    def test_signed_base64_and_percent_encoded_values_remain_unchanged(self):
+        for token in ("synthetic+signed/value==", "synthetic%2Bvalue%2Fsignature%3D"):
+            updates = parse_session_updates([COOKIE_NAMES[0] + "=" + token + "; Partitioned"])
+            self.assertEqual(new_session_cookies(updates), COOKIE_NAMES[0] + "=" + token)
+
+    def test_malformed_or_oversized_values_and_header_injection_are_rejected(self):
+        for token in ("bad token", "bad,token", "bad;token", "bad\\token", "bad\rtoken", "x" * 4097):
+            self.assertEqual(session_cookies({COOKIE_NAMES[0]: token}), "")
+        self.assertEqual(parse_session_updates([COOKIE_NAMES[0] + "=token\r\nInjected: value"]), [])
+        self.assertEqual(parse_session_updates(["not=a-cookie; " + COOKIE_NAMES[0] + "=token"]), [])
