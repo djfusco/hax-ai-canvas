@@ -31,7 +31,7 @@ except ImportError:
 
 ROOT = Path(__file__).resolve().parents[1]
 OPTIONS = argparse.Namespace(
-    cli=None, python=None, output=None, ai_fixture=False,
+    cli=None, python=None, output=None, ai_fixture=False, provider="openai",
     browser=Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
     if sys.platform == "darwin" else None)
 PIXEL = base64.b64decode(
@@ -125,15 +125,20 @@ def install_provider_http_fixture(root):
     calls, lock = [], threading.Lock()
 
     def transport(request):
-        if request.url.host != "api.openai.com":
+        anthropic = OPTIONS.provider == "anthropic"
+        expected_host = "api.anthropic.com" if anthropic else "api.openai.com"
+        if request.url.host != expected_host:
             raise AssertionError("Unexpected external HTTP request in synthetic fixture")
-        if request.headers.get("authorization") != "Bearer synthetic-browser-only-provider-key":
+        credential = request.headers.get("x-api-key") if anthropic else request.headers.get("authorization")
+        expected = "synthetic-browser-only-provider-key" if anthropic else "Bearer synthetic-browser-only-provider-key"
+        if credential != expected:
             raise AssertionError("Unexpected synthetic provider identity")
         if request.method == "GET" and request.url.path == "/v1/models":
             result = {"object": "list", "data": [
                 {"id": "synthetic-browser-model", "object": "model", "owned_by": "synthetic"}]}
             kind = "models"
-        elif request.method == "POST" and request.url.path == "/v1/chat/completions":
+        elif request.method == "POST" and request.url.path == (
+                "/v1/messages" if anthropic else "/v1/chat/completions"):
             body = json.loads(request.content)
             if body["model"] != "synthetic-browser-model":
                 raise AssertionError("The selected model was not pinned into inference")
@@ -161,6 +166,8 @@ def install_provider_http_fixture(root):
                     "evidence": [{"source_id": current["source_id"], "quote": current["text"][:200]}],
                     "limitations": ["Synthetic fixture only; no measured outcomes or established AI conditions."],
                 }
+                if not any(call["kind"].startswith("assessment_") for call in calls):
+                    time.sleep(1.2)  # Exercise visible waiting feedback without a paid request.
                 kind = "assessment_" + payload["scope"]
             elif "Create a concrete draft following" in prompt:
                 records = re.findall(r"SOURCE course:([^\s]+) \([^,\n]+, ([^\n)]+)\):", prompt)
@@ -197,6 +204,15 @@ def install_provider_http_fixture(root):
                              "message": {"role": "assistant", "content": json.dumps(data)}}],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
             }
+            if anthropic:
+                result = {
+                    "id": "msg_synthetic", "type": "message", "role": "assistant",
+                    "model": "synthetic-browser-model", "stop_reason": "end_turn", "stop_sequence": None,
+                    "content": [
+                        {"type": "thinking", "thinking": "PRIVATE-THINKING-NOT-ANSWER", "signature": "fixture"},
+                        {"type": "text", "text": json.dumps(data)}],
+                    "usage": {"input_tokens": 1, "output_tokens": 10},
+                }
         else:
             raise AssertionError("Unexpected provider HTTP endpoint in synthetic fixture")
         with lock:
@@ -245,7 +261,7 @@ class LocalEndToEndTest(unittest.TestCase):
         self.addCleanup(log.close)
         process = subprocess.Popen(
             [str(backend_python), str(Path(__file__).resolve()), "--serve", str(root)]
-            + (["--ai-fixture"] if mode != "guided" else []),
+            + (["--ai-fixture", "--provider", OPTIONS.provider] if mode != "guided" else []),
             cwd=root, env=environment(home, cli, node), stdin=subprocess.DEVNULL,
             stdout=log, stderr=subprocess.STDOUT, start_new_session=os.name != "nt")
 
@@ -312,7 +328,7 @@ class LocalEndToEndTest(unittest.TestCase):
                 base = "/mentor/api/workspaces/" + workspace_id
                 # Server must reject early approval/build, independent of disabled UI.
                 api(base + "/build", "POST", {"draft_revision": 0}, status=409)
-                page.locator("#mentor-provider").select_option("guided" if mode == "guided" else "openai")
+                page.locator("#mentor-provider").select_option("guided" if mode == "guided" else OPTIONS.provider)
                 page.wait_for_function("busy === false")
                 if mode != "guided":
                     page.locator("#mentor-key").fill("synthetic-browser-only-provider-key")
@@ -362,6 +378,7 @@ class LocalEndToEndTest(unittest.TestCase):
                 page.locator("#approve-direction").click()
                 page.wait_for_function("busy === false && workspace.direction_revision === workspace.revision")
                 page.locator("#analyze-course").click()
+                self.assertTrue(page.locator("#analysis-feedback").is_visible())
                 page.wait_for_function("busy === false && workspace.draft !== null && workspace.active_job === null",
                                        timeout=90000)
                 if mode != "guided":
@@ -507,8 +524,9 @@ class LocalEndToEndTest(unittest.TestCase):
                     kinds = [call["kind"] for call in calls]
                     self.assertEqual(kinds.count("assessment_baseline"), 2 if mode == "ai-imported" else 0)
                     self.assertEqual(kinds.count("assessment_draft"), 2 if mode == "ai-imported" else 4)
-                    self.assertTrue(all(call["path"] in ("/v1/models", "/v1/chat/completions")
+                    self.assertTrue(all(call["path"] in ("/v1/models", "/v1/chat/completions", "/v1/messages")
                                         for call in calls))
+                    self.assertNotIn("PRIVATE-THINKING-NOT-ANSWER", json.dumps(api(base)))
                 print(json.dumps({"result": "passed", "chunks": chunks, "workspace": workspace_id,
                                   "mode": mode,
                                   "hax_url": hax["url"], "restart_url": restarted["url"],
@@ -536,6 +554,7 @@ def main():
     parser.add_argument("--cli", type=Path)
     parser.add_argument("--ai-fixture", action="store_true",
                         help="Also run imported/blank AI paths through synthetic provider HTTP transport")
+    parser.add_argument("--provider", choices=("openai", "anthropic"), default="openai")
     OPTIONS = parser.parse_args()
     if OPTIONS.serve:
         serve(OPTIONS.serve.resolve())

@@ -16,6 +16,54 @@ from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
 
+class AIResponseError(ValueError):
+    """Safe, authored diagnostics for a completed but unusable AI response."""
+
+
+def _retryable(exc):
+    import httpx
+    if isinstance(exc, (AIResponseError, AttributeError, TypeError, ValueError, IndexError)):
+        return False
+    status = getattr(exc, "status_code", None)
+    if status is None:
+        status = getattr(exc, "code", None)
+    if type(status) is int:
+        return status in (408, 409, 429) or 500 <= status <= 599
+    return (isinstance(exc, (httpx.TransportError, TimeoutError, ConnectionError))
+            or type(exc).__name__ in ("APIConnectionError", "APITimeoutError"))
+
+
+def _anthropic_text(response):
+    # Reasoning-capable models can return thinking/redacted blocks before text,
+    # even without an explicit thinking parameter. Never read or publish them.
+    stop = getattr(response, "stop_reason", None)
+    if stop in ("max_tokens", "model_context_window_exceeded"):
+        raise AIResponseError(
+            "The AI reached its output or context limit before finishing. Thinking uses "
+            "the same token allowance. Choose a less reasoning-intensive model or a "
+            "smaller review scope; this incomplete response was not retried.")
+    if stop == "refusal":
+        raise AIResponseError("The AI declined this request. Review the task or choose another model; no automatic retry was made.")
+    if stop not in ("end_turn", "stop_sequence"):
+        raise AIResponseError("The AI did not return a completed text answer. Choose a compatible text model; no automatic retry was made.")
+    content = getattr(response, "content", None)
+    if not isinstance(content, list):
+        raise AIResponseError("The AI returned an invalid response format; no automatic retry was made.")
+    parts = []
+    for block in content:
+        kind = block.get("type") if isinstance(block, dict) else getattr(block, "type", None)
+        if kind == "text":
+            text = block.get("text") if isinstance(block, dict) else getattr(block, "text", None)
+            if not isinstance(text, str):
+                raise AIResponseError("The AI returned invalid answer text; no automatic retry was made.")
+            parts.append(text)
+    text = "".join(parts).strip()
+    if not text:
+        raise AIResponseError(
+            "The AI returned no answer text (it may have returned only thinking blocks). "
+            "Choose another text model or retry a smaller scope; no automatic retry was made.")
+    return text
+
 # ── optional provider imports ─────────────────────────────────────────────────
 try:
     from anthropic import Anthropic
@@ -134,7 +182,7 @@ class AIClient:
             if url:
                 kwargs["base_url"] = url
             if self.isolated_credentials:
-                kwargs.update(isolated_options, auth_token="")
+                kwargs.update(isolated_options, auth_token="", max_retries=0)
             self._client = Anthropic(**kwargs)
             via = f"NebulaOne/{self.model}" if p == "nebula" else f"Anthropic/{self.model}"
             print(f"  AI : {via}")
@@ -143,7 +191,8 @@ class AIClient:
             if not HAS_OPENAI:
                 raise ImportError("openai package missing — pip install openai")
             key = api_key or os.getenv("OPENAI_API_KEY", "")
-            self._client = OpenAI(api_key=key, **isolated_options)
+            self._client = OpenAI(api_key=key, **isolated_options,
+                                  **({"max_retries": 0} if self.isolated_credentials else {}))
             print(f"  AI : OpenAI/{self.model}")
 
         elif p == "gemini":
@@ -186,6 +235,10 @@ class AIClient:
                 return self._call_once(system, prompt, max_tokens, timeout)
             except Exception as exc:
                 last_exc = exc
+                if not _retryable(exc):
+                    logger.warning("LLM request failed (%s); not retrying a non-transient failure",
+                                   type(exc).__name__)
+                    raise
                 if attempt < 2:
                     wait = 2 ** attempt          # 1 s, then 2 s
                     logger.warning(
@@ -216,7 +269,7 @@ class AIClient:
                 messages=[{"role": "user", "content": prompt}],
                 timeout=effective_timeout,
             )
-            return r.content[0].text.strip()
+            return _anthropic_text(r)
 
         if p == "openai":
             token_options = ({"max_completion_tokens": max_tokens} if self.isolated_credentials

@@ -3,6 +3,9 @@ let mentorCSRF = '';
 let workspace = null;
 let busy = false;
 let pollTimer = null;
+let analysisHeartbeat = null;
+let analysisPending = null;
+let analysisRequestError = null;
 let hosted = false;
 let localMode = false;
 let localHax = false;
@@ -181,7 +184,7 @@ function getFlowState() {
     const number = uploadController || kind === 'prepare' ? 3 : kind === 'build' ? 6 : kind === 'interview' ? 4 : 5;
     return step(number, uploadController ? 'Your file is uploading' : 'Your course job is running',
       'Wait for this job to finish before changing its inputs. Progress is saved; job details and recovery controls are below.',
-      uploadController ? 'upload-progress-label' : 'processing-details', 'View progress');
+      uploadController ? 'upload-progress-label' : kind === 'prepare' ? 'processing-details' : 'analysis-feedback', 'View progress');
   }
   if (draftEditsPending()) return step(5, 'Save your draft edits before approval',
     'Your edited items are not saved yet. Save the snapshot, then complete a fresh final review before approving it.', 'save-draft', 'Go to save draft edits');
@@ -482,6 +485,53 @@ async function checkSavedUploadProgress() {
   }
 }
 
+function renderAnalysisFeedback() {
+  clearTimeout(analysisHeartbeat);
+  const panel = el('analysis-feedback');
+  const pending = analysisPending?.workspaceId === workspace?.id ? analysisPending : null;
+  const kinds = ['analysis', 'review', 'interview', 'build'];
+  const active = kinds.includes(workspace?.active_job?.kind) ? workspace.active_job : null;
+  const latest = [...(workspace?.jobs || [])].reverse().find(job => kinds.includes(job.kind) &&
+    (job.revision === undefined || job.revision === workspace.revision));
+  const requestError = analysisRequestError?.workspaceId === workspace?.id ? analysisRequestError : null;
+  const guided = provider() === 'guided';
+  el('analyze-course').textContent = pending || active?.kind === 'analysis'
+    ? guided ? 'Guided draft preparation running…' : 'Assessment & draft generation running…'
+    : 'Analyze & generate draft';
+  panel.hidden = !mentorAuthenticated || (!pending && !active && !latest && !requestError);
+  if (panel.hidden) return;
+  const labels = {analysis: guided ? 'Guided draft preparation' : 'AI assessment & draft generation', review: 'Draft review',
+    interview: 'Mentor discussion', build: 'Course site build'};
+  const running = !!pending || !!active;
+  const failed = !running && (requestError || latest?.status === 'failed');
+  panel.dataset.tone = failed ? 'error' : running ? 'info' : 'success';
+  panel.setAttribute('aria-busy', String(running));
+  el('analysis-feedback-title').textContent = pending ? guided ? 'Starting guided draft…' : 'Starting assessment…'
+    : active ? labels[active.kind] + ' is running'
+    : failed ? 'Processing needs your attention' : 'Processing finished — review the result below';
+  setLiveText('analysis-feedback-message', pending
+    ? 'Starting the saved job. Do not click Analyze again.'
+    : active ? active.message || 'Waiting for the selected AI provider to respond.'
+    : requestError?.message || latest?.error || 'The result is saved in this workspace.');
+  const start = pending?.startedAt || Date.parse((active || latest)?.created_at || '');
+  const seconds = Number.isFinite(start) ? Math.max(0, Math.floor((Date.now() - start) / 1000)) : 0;
+  el('analysis-feedback-elapsed').textContent = running
+    ? `Elapsed: ${Math.floor(seconds / 60)}m ${seconds % 60}s` : '';
+  el('analysis-feedback-progress').hidden = !running;
+  el('analysis-feedback-help').textContent = running
+    ? guided ? 'Guided mode preserves original content or the design brief. No AI requests or AI assessment scores are generated.'
+      : 'Some models think before returning an answer. Assessment runs one item at a time, followed by drafting and draft assessment. ' +
+      'The stage/item count above updates between requests; elapsed time does not mean a response has arrived. You can cancel below.'
+    : failed ? 'No new approval was granted. Your imported content and saved brief remain available; address this message before retrying.'
+    : 'Review the saved draft and framework assessment before approving it.';
+  el('analysis-feedback-cancel').hidden = !active;
+  el('analysis-feedback-cancel').disabled = busy;
+  if (running) {
+    analysisHeartbeat = setTimeout(renderAnalysisFeedback, 1000);
+    analysisHeartbeat?.unref?.();
+  }
+}
+
 function updateProcessingStatus() {
   const status = el('mentor-status');
   let text = '';
@@ -508,6 +558,7 @@ function setLiveText(id, text) {
 }
 function renderFlow() {
   updateProcessingStatus();
+  renderAnalysisFeedback();
   renderAssessmentState();
   renderUploadFeedback();
   el('mentor-guide').hidden = !mentorAuthenticated;
@@ -1330,7 +1381,9 @@ async function renderWorkspace() {
     el('course-inventory').textContent = 'The new file’s inventory will appear here after preparation finishes. Existing course content is not replaced until the result is verified.';
   } else {
     try {
-      const info = await api('/mentor/api/workspaces/' + renderId + '/inventory');
+      const cached = inventories.get(renderId);
+      const info = workspace.active_job && cached?.revision === renderRevision ? cached.info
+        : await api('/mentor/api/workspaces/' + renderId + '/inventory');
       if (workspace?.id !== renderId || workspace.revision !== renderRevision) return;
       inventories.set(renderId, {revision: renderRevision, info});
       inventoryErrors.delete(renderId);
@@ -1528,8 +1581,22 @@ function analyzeCourse() { action(async () => {
   requireMentorReady();
   if (el('design-brief').value !== workspace.brief)
     throw new Error('Save your design brief changes and approve the updated direction before generating a draft.');
-  workspace = await api(endpoint('/analyze'), 'POST', {revision: workspace.revision, provider: provider()});
-  await renderWorkspace();
+  const id = workspace.id;
+  analysisPending = {workspaceId: id, startedAt: Date.now()};
+  analysisRequestError = null;
+  renderAnalysisFeedback();
+  el('analysis-feedback').scrollIntoView({block: 'nearest'});
+  try {
+    workspace = await api(endpoint('/analyze'), 'POST', {revision: workspace.revision, provider: provider()});
+    analysisPending = null;
+    await renderWorkspace();
+  } catch (error) {
+    analysisRequestError = {workspaceId: id, message: error.message};
+    throw error;
+  } finally {
+    analysisPending = null;
+    renderAnalysisFeedback();
+  }
 }); }
 function saveDraft() { action(async () => {
   const items = workspace.draft.items.map((item, index) => ({

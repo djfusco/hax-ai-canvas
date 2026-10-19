@@ -678,7 +678,7 @@ def create_mentor_blueprint(root_provider):
                 "warnings": result.get("warnings", []),
             }, revision)
             return jsonify(public(workspace))
-        except Exception:
+        except Exception as exc:
             shutil.rmtree(base, ignore_errors=True)
             raise
 
@@ -1118,11 +1118,15 @@ def create_mentor_blueprint(root_provider):
                 database.finish_interview(owner, workspace["id"], job_id)
             database.add_message(owner, workspace["id"], "assistant",
                                  clean_local_output(owner, data_root, reply), kind)
-        except Exception:
+        except Exception as exc:
+            from ai_client import AIResponseError
+            from mentor_assessment import AssessmentError
+            failure = (str(exc)[:500] if isinstance(exc, (AIResponseError, AssessmentError))
+                       else "AI review failed. Check the selected model and retry. "
+                       "No approval was granted and no scores were fabricated.")
             try:
                 database.fail_job(owner, workspace["id"], job_id, "AI discussion failed.",
-                                  public_message="AI review failed. Check the selected model and retry. "
-                                  "No approval was granted and no scores were fabricated.")
+                                  public_message=failure)
             except WorkspaceConflict:
                 pass
         finally:
@@ -1167,6 +1171,11 @@ def create_mentor_blueprint(root_provider):
                 message = (safe_site_error(exc) if kind == "build" and hax_sites else
                            "AI assessment failed. Check model access and retry; "
                            "no approval was granted and no scores were fabricated." if assess_ai else None)
+                if assess_ai:
+                    from ai_client import AIResponseError
+                    from mentor_assessment import AssessmentError
+                    if isinstance(exc, (AIResponseError, AssessmentError)):
+                        message = str(exc)[:500]
                 database.fail_job(owner, workspace["id"], job_id,
                                   "Processing failed. Check the input/provider and retry; no approval was granted.",
                                   public_message=message)

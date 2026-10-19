@@ -5,6 +5,76 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
+test('analysis shows stage, elapsed time and cancel beside Analyze during a long provider wait', async () => {
+  const ui = await harness({authenticated: true});
+  try {
+    await ui.render({...ui.fixture, draft: null, active_job: {
+      id: 'analysis-one', kind: 'analysis', phase: 'assessing_baseline',
+      message: 'AI-assessing baseline item 1 of 3 against pedagogical frameworks.',
+      created_at: new Date(Date.now() - 65000).toISOString(),
+    }});
+    ui.evaluate('clearTimeout(pollTimer)');
+    assert.equal(ui.get('analysis-feedback').hidden, false);
+    assert.match(ui.get('analysis-feedback-message').textContent, /item 1 of 3/);
+    assert.match(ui.get('analysis-feedback-elapsed').textContent, /1m /);
+    assert.match(ui.get('analysis-feedback-help').textContent, /Some models think/);
+    assert.equal(ui.get('analysis-feedback-progress').hidden, false);
+    assert.equal(ui.get('analysis-feedback-cancel').hidden, false);
+    assert.match(ui.get('analyze-course').textContent, /running/);
+    assert.equal(ui.evaluate('getFlowState().target'), 'analysis-feedback');
+  } finally { ui.dispose(); }
+});
+
+test('analysis failure is visible near the button and no longer shows indeterminate progress', async () => {
+  const ui = await harness({authenticated: true});
+  try {
+    await ui.render({...ui.fixture, jobs: [{
+      id: 'analysis-one', kind: 'analysis', status: 'failed', revision: 1,
+      error: 'AI assessment stopped: output limit. <literal fixture>',
+    }]});
+    assert.equal(ui.get('analysis-feedback').hidden, false);
+    assert.match(ui.get('analysis-feedback-message').textContent, /output limit.*<literal fixture>/);
+    assert.equal(ui.get('analysis-feedback-progress').hidden, true);
+    assert.equal(ui.get('analysis-feedback-cancel').hidden, true);
+    assert.equal(ui.get('analyze-course').textContent, 'Analyze & generate draft');
+    await ui.render({...ui.fixture, id: 'different-course', jobs: []});
+    assert.equal(ui.get('analysis-feedback').hidden, true);
+  } finally { ui.dispose(); }
+});
+
+test('workspace polls reuse inventory until the input revision changes', async () => {
+  const ui = await harness({authenticated: true});
+  try {
+    const before = ui.calls.filter(call => call.url.endsWith('/inventory')).length;
+    const active = {...ui.fixture, active_job: {id: 'analysis-one', kind: 'analysis'}};
+    await ui.render(active);
+    await ui.render(active);
+    assert.equal(ui.calls.filter(call => call.url.endsWith('/inventory')).length, before);
+    await ui.render({...active, revision: 2});
+    assert.equal(ui.calls.filter(call => call.url.endsWith('/inventory')).length, before + 1);
+  } finally { ui.dispose(); }
+});
+
+test('clicking Analyze gives immediate feedback before job admission and prevents duplicate submission', async () => {
+  let complete;
+  const ui = await harness({authenticated: true, request: (url, options) => {
+    if (url.endsWith('/analyze')) return new Promise(resolve => { complete = resolve; });
+  }});
+  try {
+    ui.get('mentor-provider').value = 'guided';
+    await ui.render({...ui.fixture, draft: null, draft_revision: 0, direction_revision: 1});
+    ui.context.analyzeCourse();
+    assert.match(ui.get('analysis-feedback-title').textContent, /Starting guided draft/);
+    assert.equal(ui.get('analysis-feedback').hidden, false);
+    ui.context.analyzeCourse();
+    assert.equal(ui.calls.filter(call => call.url.endsWith('/analyze')).length, 1);
+    complete({ok: true, json: async () => ({...ui.fixture, draft: null, active_job: {
+      id: 'new-job', kind: 'analysis', message: 'Assessing the first item.'}})});
+    await ui.settle();
+    assert.match(ui.get('analysis-feedback-message').textContent, /first item/);
+  } finally { ui.dispose(); }
+});
+
 async function harness({authenticated = false, inventory = {course_items: 1, materials: [], counts: {}},
   session = {}, request, XMLHttpRequest} = {}) {
   const elements = new Map();

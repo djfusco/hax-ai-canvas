@@ -417,7 +417,12 @@ def assess_design(workspace, items, client, *, scope="draft", progress=None):
         # Never echo provider exceptions, prompts, credentials or returned text.
         try:
             response = client.call(SYSTEM, _prompt(title, item, scope, sources), max_tokens=MAX_TOKENS)
-        except Exception:
+        except Exception as exc:
+            from ai_client import AIResponseError
+            if isinstance(exc, AIResponseError):
+                raise AssessmentError(
+                    f"AI assessment stopped at {scope} item {position} of {len(prepared)}. {exc}"
+                ) from None
             raise AssessmentError(
                 f"AI assessment could not complete item {position} of {len(prepared)}. "
                 "Check the selected provider key, model, quota and connection, then retry. "

@@ -209,6 +209,14 @@
       <button class="btn btn-ghost" onclick="saveBrief()">Save revised brief (invalidates draft)</button>
       <button class="btn btn-primary" id="approve-direction" onclick="approveDirection()">Approve this direction</button>
       <button class="btn btn-success" id="analyze-course" onclick="analyzeCourse()">Analyze &amp; generate draft</button>
+      <section id="analysis-feedback" class="mentor-upload" tabindex="-1" aria-labelledby="analysis-feedback-title" hidden>
+        <h3 id="analysis-feedback-title"></h3>
+        <p id="analysis-feedback-message" role="status" aria-live="polite" aria-atomic="true"></p>
+        <progress id="analysis-feedback-progress" aria-label="Current processing stage"></progress>
+        <p id="analysis-feedback-elapsed" aria-live="off"></p>
+        <p id="analysis-feedback-help" class="field-help"></p>
+        <button id="analysis-feedback-cancel" class="btn btn-ghost" type="button" onclick="cancelMentorJob()" hidden>Cancel current job</button>
+      </section>
       <p class="field-help">Next: finish the conversation, save your design brief, approve its direction, then generate the draft. Changes to inputs or the brief invalidate earlier approvals.</p>
     </section>
     <section class="card mentor-section" id="draft-panel" tabindex="-1" hidden>
