@@ -1,272 +1,468 @@
 {% extends "base.html" %}
-{% block title %}Faculty Mentor — Canvas Course Builder{% endblock %}
+{% block title %}Course Mentor{% endblock %}
 {% block content %}
-<div class="page-wrap">
-  <div class="page-hero">
-    <h1>Faculty Course Mentor</h1>
-    <p class="hero-sub">Choose a course, set up your mentor, add content, then discuss and approve your changes. Nothing is published automatically.</p>
+
+<!-- Global status / error (always visible) -->
+<div id="mentor-error" role="alert" class="banner banner-warn" style="max-width:860px;margin:16px auto 0" hidden></div>
+<p id="mentor-status" role="status" aria-live="polite" style="max-width:860px;margin:8px auto 0;padding:0 24px;font-size:.9rem;color:#555"></p>
+
+<!-- Wizard progress bar -->
+<nav class="step-nav" id="step-nav" aria-label="Course preparation steps" hidden>
+  <div class="step-nav-inner">
+    <button class="step-chip" data-step="1" data-state="active" onclick="chipClick(1)" type="button">
+      <span class="step-chip-num"><span class="step-chip-num-text">1</span></span>
+      <span class="step-chip-label">Your course</span>
+    </button>
+    <button class="step-chip" data-step="2" data-state="future" onclick="chipClick(2)" type="button">
+      <span class="step-chip-num"><span class="step-chip-num-text">2</span></span>
+      <span class="step-chip-label">AI helper</span>
+    </button>
+    <button class="step-chip" data-step="3" data-state="future" onclick="chipClick(3)" type="button">
+      <span class="step-chip-num"><span class="step-chip-num-text">3</span></span>
+      <span class="step-chip-label">Add content</span>
+    </button>
+    <button class="step-chip" data-step="4" data-state="future" onclick="chipClick(4)" type="button">
+      <span class="step-chip-num"><span class="step-chip-num-text">4</span></span>
+      <span class="step-chip-label">Discuss</span>
+    </button>
+    <button class="step-chip" data-step="5" data-state="future" onclick="chipClick(5)" type="button">
+      <span class="step-chip-num"><span class="step-chip-num-text">5</span></span>
+      <span class="step-chip-label">Review draft</span>
+    </button>
+    <button class="step-chip" data-step="6" id="flow-step-6-chip" data-state="future" onclick="chipClick(6)" type="button">
+      <span class="step-chip-num"><span class="step-chip-num-text">6</span></span>
+      <span class="step-chip-label" id="step-6-chip-label">Build site</span>
+    </button>
   </div>
-  <div id="mentor-error" role="alert" class="banner banner-warn" hidden></div>
-  <p id="mentor-status" role="status" aria-live="polite"></p>
-  <section class="card mentor-guide" id="mentor-guide" tabindex="-1" aria-labelledby="next-step-title" hidden>
-    <p id="guide-workspace" class="mentor-eyebrow"></p>
-    <ol class="mentor-steps" aria-label="Course preparation steps">
-      <li id="flow-step-1">1. Workspace</li>
-      <li id="flow-step-2">2. AI setup</li>
-      <li id="flow-step-3">3. Content</li>
-      <li id="flow-step-4">4. Discuss</li>
-      <li id="flow-step-5">5. Draft &amp; review</li>
-      <li id="flow-step-6">6. Download</li>
-    </ol>
-    <p class="mentor-eyebrow" id="next-step-number"></p>
-    <h2 id="next-step-title" aria-live="polite" aria-atomic="true"></h2>
-    <p id="next-step-description"></p>
-    <button class="btn btn-primary" id="next-step-button" type="button" onclick="goToNextStep()">Continue</button>
-    <p id="mentor-mode" class="mentor-mode" role="status" aria-live="polite"></p>
-  </section>
+</nav>
+
+<!-- Hidden legacy guide card (JS reads/updates these IDs; kept for compatibility) -->
+<div id="mentor-guide" hidden aria-hidden="true">
+  <p id="guide-workspace"></p>
+  <ol aria-hidden="true">
+    <li id="flow-step-1"></li><li id="flow-step-2"></li><li id="flow-step-3"></li>
+    <li id="flow-step-4"></li><li id="flow-step-5"></li><li id="flow-step-6"></li>
+  </ol>
+  <p id="next-step-number"></p>
+  <h2 id="next-step-title"></h2>
+  <p id="next-step-description"></p>
+  <button id="next-step-button" type="button" hidden></button>
+  <p id="mentor-mode"></p>
+</div>
+
+<div class="page-wrap">
+
+<!-- ── Step 1: Choose or start a course ─────────────────────────────────── -->
+<section class="wizard-step" data-step="1" id="step-1">
+  <div class="wizard-step-header">
+    <h1>Choose or start a course</h1>
+    <p>Each workspace holds one course and its review history. You can have multiple courses.</p>
+  </div>
+
+  <!-- Hosted invite / account login -->
   <div class="card" id="mentor-login-card" hidden>
-    <h2>Welcome to the invited beta</h2>
-    <p>New beta users enter the administrator's invitation code here, then verify their email below. Returning account users can sign in directly.</p>
+    <h2>Welcome — enter your invitation code</h2>
+    <p>New users enter the administrator's invitation code, then verify their email below.</p>
     <form id="mentor-login-form">
-      <label class="field-label" for="mentor-invite-code">Beta invitation code</label>
+      <label class="field-label" for="mentor-invite-code">Invitation code</label>
       <input class="field-input" id="mentor-invite-code" type="password" autocomplete="off" required>
-      <button class="btn btn-primary" type="submit">Enter Faculty Mentor</button>
+      <button class="btn btn-primary" type="submit">Enter Course Mentor</button>
     </form>
   </div>
+
   <div class="card">
     <details id="local-auth-setup" hidden>
-      <summary>Optional: email sign-in for local workspaces</summary>
-      <p>Configure your administrator's public Neon Auth Base URL to reopen account-scoped workspaces on this computer. Neon handles identity only. Courses, conversations, provider keys and generated sites stay local; signing in on another computer does not synchronize them.</p>
+      <summary>Optional: email sign-in for this computer</summary>
+      <p class="field-help">Enter your administrator's Neon Auth Base URL to link workspaces to a verified email account. Neon stores identity only — courses, conversations, keys and sites stay on this computer.</p>
       <form id="local-auth-form">
-        <label class="field-label" for="local-auth-url">Public Neon Auth Base URL (not an API key)</label>
+        <label class="field-label" for="local-auth-url">Neon Auth Base URL</label>
         <input class="field-input" id="local-auth-url" type="url" required>
         <button class="btn btn-outline" type="submit">Configure email sign-in</button>
       </form>
-      <p class="field-help">Without this configuration, workspaces use the explicitly browser-local fallback below. No hosted course storage is configured.</p>
     </details>
+
     <div id="account-login-card" hidden>
       <h2>Sign in to your account</h2>
-      <p id="account-login-help">Use an emailed code to resume courses across devices. New beta users must also enter the invitation code above.</p>
-      <form id="account-code-form" aria-describedby="account-code-status">
+      <p id="account-login-help" class="field-help">Use an emailed sign-in code to resume your courses.</p>
+      <form id="account-code-form">
         <label class="field-label" for="account-email">Email address</label>
         <input class="field-input" id="account-email" type="email" autocomplete="email" maxlength="320" required>
-        <button class="btn btn-primary" id="account-send-code" type="submit">Email a sign-in code</button>
-        <p id="account-code-status" class="banner banner-info" role="status" aria-live="polite" aria-atomic="true" hidden></p>
+        <button class="btn btn-primary" id="account-send-code" type="submit">Email me a sign-in code</button>
+        <p id="account-code-status" class="banner banner-info" role="status" aria-live="polite" hidden></p>
       </form>
       <form id="account-verify-form" hidden>
-        <label class="field-label" for="account-code">Six-digit email code</label>
+        <label class="field-label" for="account-code">Six-digit code from your email</label>
         <input class="field-input" id="account-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>
-        <label class="step-check-item"><input id="claim-browser-work" type="checkbox"> Claim this browser's old beta work (only if it is mine and no jobs are running)</label>
-        <button class="btn btn-primary" id="account-verify-code" type="submit">Verify and sign in</button>
-        <p id="account-verify-status" class="banner banner-info" role="status" aria-live="polite" aria-atomic="true" hidden></p>
+        <label class="step-check-item"><input id="claim-browser-work" type="checkbox"> Claim this browser's old work (only if it is mine)</label>
+        <button class="btn btn-primary" id="account-verify-code" type="submit">Sign in</button>
+        <p id="account-verify-status" class="banner banner-info" role="status" aria-live="polite" hidden></p>
       </form>
     </div>
+
     <div id="account-profile" hidden>
       <p id="account-label"></p>
-      <button class="btn btn-ghost" type="button" onclick="signOutAccount()">Sign out / switch person</button>
+      <button class="btn btn-ghost" type="button" onclick="signOutAccount()">Sign out</button>
     </div>
+
     <div id="workspace-choice" hidden>
-    <h2>1. Choose or create a workspace</h2>
-    <p>Each workspace holds one course and its review history. Start here, then configure how you want the mentor to help.</p>
-    <p id="workspace-storage-help" class="field-help">{% if is_hosted %}Saved in private hosted storage and scoped to your verified account. Sign in with the same account to resume on another device.{% else %}Saved on this computer. Email sign-in, when configured, identifies your account only; it does not synchronize course data. Never paste API keys into the conversation.{% endif %}</p>
-    <label class="field-label" for="workspace-list">Resume a course</label>
-    <select id="workspace-list" class="field-input" onchange="openWorkspace(this.value)"><option value="">Choose a workspace</option></select>
-    <form id="new-workspace" style="margin-top:1rem">
-      <label class="field-label" for="new-title">New course/workspace title</label>
-      <input class="field-input" id="new-title" maxlength="240" required placeholder="e.g. Introduction to Cybersecurity">
-      <button class="btn btn-primary" type="submit">Create workspace</button>
-    </form>
+      <h2>Resume an existing course</h2>
+      <p id="workspace-storage-help" class="field-help">{% if is_hosted %}Saved in your private account.{% else %}Saved on this computer.{% endif %}</p>
+      <select id="workspace-list" class="field-input" onchange="openWorkspace(this.value)">
+        <option value="">— Choose a course —</option>
+      </select>
+
+      <hr style="margin:20px 0;border:none;border-top:1px solid #f0f0f0">
+      <h2>Or start a new course</h2>
+      <form id="new-workspace">
+        <label class="field-label" for="new-title">Course name</label>
+        <input class="field-input" id="new-title" maxlength="240" required placeholder="e.g. Introduction to Psychology">
+        <button class="btn btn-primary" type="submit">Create course workspace</button>
+      </form>
     </div>
   </div>
-  <section class="card mentor-section" id="provider-settings" tabindex="-1" hidden>
-    <h2>2. Configure AI before chatting</h2>
-    <p>Choose an AI provider, save your key, then choose and save a model. Or explicitly choose Guided mode for a walkthrough without AI.</p>
-    <p id="provider-privacy-help" class="field-help">Guided mode makes no AI calls and does not invent analysis scores. With AI enabled, course excerpts and your design brief are sent to that provider. Keys are encrypted server-side, never stored in browser storage or chat.</p>
-    <label class="field-label" for="mentor-provider">How would you like to work?</label>
-    <select id="mentor-provider" class="field-input">
-      <option value="" selected disabled>Choose an AI provider or Guided mode…</option>
-      <option value="nebula">NebulaONE</option><option value="anthropic">Anthropic</option>
-      <option value="openai">OpenAI</option><option value="gemini">Gemini</option>
-      <option value="guided">Continue without AI — Guided walkthrough</option>
+</section>
+
+<!-- ── Step 2: Set up AI helper ──────────────────────────────────────────── -->
+<section class="wizard-step" data-step="2" id="step-2">
+  <div class="wizard-step-header">
+    <h1>Set up your AI assistant</h1>
+    <p>Choose an AI service and enter your API key. Or choose "No AI" to review your course manually.</p>
+  </div>
+
+  <section class="card" id="provider-settings" tabindex="-1">
+    <p id="ai-setup-state" class="banner banner-info" role="status">Choose how you want to work.</p>
+    <p id="assessment-cost-help" class="field-help" hidden>AI analysis and draft generation make several provider requests and may incur charges from your selected provider.</p>
+    <p id="provider-privacy-help" class="field-help">Course text is sent to the AI service you choose. Keys are encrypted on this computer and never stored in your browser or chat.</p>
+
+    <label class="field-label">Choose an AI service</label>
+    <div class="provider-cards" id="provider-cards-ui">
+      <button type="button" class="provider-card" data-provider="anthropic" onclick="selectProviderCard('anthropic')">
+        <div class="provider-card-icon">🤖</div>
+        <div class="provider-card-name">Anthropic</div>
+        <div class="provider-card-desc">Claude models</div>
+      </button>
+      <button type="button" class="provider-card" data-provider="openai" onclick="selectProviderCard('openai')">
+        <div class="provider-card-icon">✨</div>
+        <div class="provider-card-name">OpenAI</div>
+        <div class="provider-card-desc">GPT models</div>
+      </button>
+      <button type="button" class="provider-card" data-provider="gemini" onclick="selectProviderCard('gemini')">
+        <div class="provider-card-icon">💎</div>
+        <div class="provider-card-name">Google Gemini</div>
+        <div class="provider-card-desc">Gemini models</div>
+      </button>
+      <button type="button" class="provider-card" data-provider="nebula" onclick="selectProviderCard('nebula')">
+        <div class="provider-card-icon">🏛️</div>
+        <div class="provider-card-name">NebulaONE</div>
+        <div class="provider-card-desc">Institutional gateway</div>
+      </button>
+      <button type="button" class="provider-card" data-provider="guided" onclick="selectProviderCard('guided')">
+        <div class="provider-card-icon">📋</div>
+        <div class="provider-card-name">No AI</div>
+        <div class="provider-card-desc">Manual walkthrough</div>
+      </button>
+    </div>
+    <!-- Hidden select kept for JS compatibility -->
+    <select id="mentor-provider" class="field-input" style="display:none" aria-hidden="true">
+      <option value="" selected disabled></option>
+      <option value="nebula">NebulaONE</option>
+      <option value="anthropic">Anthropic</option>
+      <option value="openai">OpenAI</option>
+      <option value="gemini">Gemini</option>
+      <option value="guided">Guided</option>
     </select>
-    <p id="ai-setup-state" class="banner banner-info" role="status">Choose how to work. AI is not enabled until you save a provider key and model.</p>
-    <p id="assessment-cost-help" class="field-help" hidden>AI drafting and final review can make several provider requests to assess instructional items and the proposed draft, including separate judgments for chunks of longer retained excerpts. Your selected provider may charge for each request. Model-specific limits and reasoning controls are shown below; automatic output is capped at 16,384 tokens per request for this workflow. Actual token usage determines charges; incomplete responses are not automatically retried with larger budgets. Bounded excerpts are used; assessment coverage, context reductions and truncation are disclosed. Chunk judgments are not aggregate item scores. Guided mode makes no AI requests or assessment report.</p>
+
     <form id="credential-form" hidden>
       <label class="field-label" for="mentor-key">API key</label>
-      <input class="field-input" id="mentor-key" type="password" autocomplete="off">
+      <input class="field-input" id="mentor-key" type="password" autocomplete="off" placeholder="Paste your API key here">
       <div id="gateway-settings" hidden>
-      <label class="field-label" for="mentor-gateway">Nebula HTTPS gateway</label>
-      <input class="field-input" id="mentor-gateway" type="url" placeholder="https://your-gateway.azure-api.net/anthropic">
+        <label class="field-label" for="mentor-gateway">Institutional gateway URL</label>
+        <input class="field-input" id="mentor-gateway" type="url" placeholder="https://your-gateway.azure-api.net/anthropic">
       </div>
-      <label class="step-check-item"><input type="checkbox" id="remember-key"> Remember for 30 days for this identity; otherwise expire after 12 hours</label>
-      <button class="btn btn-primary" id="save-provider-key" type="submit">Save key &amp; fetch models</button>
-      <button class="btn btn-ghost" id="forget-provider-key" type="button" onclick="forgetKey()">Forget selected provider key</button>
+      <label class="step-check-item"><input type="checkbox" id="remember-key"> Remember for 30 days</label>
+      <button class="btn btn-primary" id="save-provider-key" type="submit">Save key &amp; load models</button>
+      <button class="btn btn-ghost" id="forget-provider-key" type="button" onclick="forgetKey()">Remove saved key</button>
     </form>
+
     <div id="model-settings" hidden>
-      <label class="field-label" for="mentor-model">Model for this provider</label>
-      <select class="field-input" id="mentor-model" aria-describedby="model-status model-capabilities"><option value="">Save a key, then fetch models</option></select>
-      <button class="btn btn-ghost" id="refresh-models" type="button" onclick="refreshModels()">Refresh models from provider</button>
-      <label class="step-check-item" id="manual-model-label" hidden><input id="manual-model-enabled" type="checkbox"> Enter an institutional gateway deployment/model ID manually</label>
-      <input class="field-input" id="manual-model" maxlength="120" aria-label="Institutional model or deployment ID" hidden>
-      <button class="btn btn-primary" id="save-model" type="button" onclick="saveModel()">Use selected model</button>
-      <p id="model-status" role="status"></p>
-      <section id="model-capabilities" class="mentor-capabilities field-help" aria-label="Model capabilities" aria-live="polite" hidden></section>
+      <label class="field-label" for="mentor-model">Model</label>
+      <select class="field-input" id="mentor-model"></select>
+      <button class="btn btn-ghost btn-sm" id="refresh-models" type="button" onclick="refreshModels()">Refresh model list</button>
+      <label class="step-check-item" id="manual-model-label" hidden>
+        <input id="manual-model-enabled" type="checkbox"> Enter a gateway deployment/model ID manually
+      </label>
+      <input class="field-input" id="manual-model" maxlength="120" aria-label="Institutional model ID" hidden>
+      <button class="btn btn-primary" id="save-model" type="button" onclick="saveModel()">Use this model</button>
+      <p id="model-status" role="status" class="field-help"></p>
+      <section id="model-capabilities" class="mentor-capabilities field-help" aria-label="Model details" aria-live="polite" hidden></section>
     </div>
-    <p id="credential-status" role="status"></p>
+    <p id="credential-status" class="field-help"></p>
   </section>
+
+  <div class="wizard-nav-footer">
+    <button class="btn btn-ghost" type="button" onclick="wizardBack()">← Back</button>
+    <span class="wizard-spacer"></span>
+    <button class="btn btn-primary btn-lg" type="button" id="step2-continue" onclick="wizardNext()">Continue →</button>
+  </div>
+</section>
+
+<!-- ── Step 3: Add course content ────────────────────────────────────────── -->
+<section class="wizard-step" data-step="3" id="step-3">
   <div id="workspace-content" hidden>
     <p id="local-job-error" class="banner banner-error" role="alert" aria-live="polite" hidden></p>
-    <section class="card mentor-section" id="course-sources" tabindex="-1">
-      <p class="mentor-eyebrow">3. Add content, or start a new course</p>
-      <h2 id="workspace-title"></h2>
-      <p id="workspace-stage"></p>
+    <section class="card" id="course-sources" tabindex="-1">
+      <div class="wizard-step-header">
+        <h1 id="workspace-title"></h1>
+        <p id="workspace-stage" class="field-help"></p>
+      </div>
+
       <p id="source-readiness" class="banner banner-info" role="status"></p>
-      <button class="btn btn-outline" id="start-blank-course" type="button" onclick="startBlankCourse()">I'm designing a new course — continue without a file</button>
-      <h3>Import an existing Canvas course</h3>
-      <form id="source-form">
-        <label class="field-label" for="source-file">Canvas .imscc or prepared .haxcourse</label>
+
+      <div class="source-choice">
+        <div class="source-card" id="source-card-file" onclick="focusSourceFile()">
+          <div class="source-card-icon">📦</div>
+          <div class="source-card-title">Import a Canvas course</div>
+          <div class="source-card-desc">Upload your .imscc export file from Canvas</div>
+        </div>
+        <div class="source-card" id="source-card-blank">
+          <div class="source-card-icon">✏️</div>
+          <div class="source-card-title">Design a new course</div>
+          <div class="source-card-desc">Start from scratch without a file</div>
+        </div>
+      </div>
+
+      <form id="source-form" style="margin-top:8px">
+        <label class="field-label" for="source-file">Canvas export file (.imscc or .haxcourse)</label>
         <input class="field-input" id="source-file" type="file" accept=".imscc,.haxcourse">
-        <button class="btn btn-primary" id="upload-course-button" type="submit">Upload &amp; prepare course</button>
+        <button class="btn btn-primary" id="upload-course-button" type="submit">Import course file</button>
       </form>
-      <p id="local-upload-help" class="field-help" hidden>Import up to 8 GiB directly to this computer in bounded chunks. This is a local disk copy, not a cloud upload. Your original is unchanged. Supported local assets are retained separately from the instructional review; review coverage warnings for exclusions and unavailable external resources.</p>
+
+      <p id="local-upload-help" class="field-help" hidden>Files are copied to this computer in chunks. Your original is unchanged. Supported media is retained for the HAX site.</p>
+      <p id="hosted-upload-help" class="field-help" hidden>Large exports upload directly to private storage. Your original is unchanged.</p>
+
       <div id="local-source-choice" hidden>
         <p id="local-source-label"></p>
-        <button class="btn btn-outline" id="import-local-source" type="button" onclick="importLocalSource()">Prepare startup course file</button>
-        <p class="field-help">Use the file selected by the launcher without copying it through the browser. The original file is never modified.</p>
+        <button class="btn btn-outline" id="import-local-source" type="button" onclick="importLocalSource()">Use this startup file</button>
       </div>
-      <p id="hosted-upload-help" class="field-help" hidden>Large exports upload directly to private Vercel storage in bounded parts. You do not need Python or a local helper. The original cloud upload is deleted only after the prepared result is saved and validated; your computer's original is unchanged.</p>
+
       <section id="upload-feedback" class="mentor-upload" tabindex="-1" aria-labelledby="upload-feedback-title" hidden>
         <h4 id="upload-feedback-title"></h4>
         <p id="upload-feedback-file"></p>
-        <ol class="mentor-upload-steps" aria-label="File import stages">
-          <li id="upload-step-1">1. Start</li><li id="upload-step-2">2. Transfer</li><li id="upload-step-3">3. Prepare</li>
+        <ol class="mentor-upload-steps" aria-label="Import stages">
+          <li id="upload-step-1">1. Start</li>
+          <li id="upload-step-2">2. Transfer</li>
+          <li id="upload-step-3">3. Prepare</li>
         </ol>
-        <p id="upload-feedback-status" role="status" aria-live="polite" aria-atomic="true"></p>
-        <label id="upload-progress-label" for="hosted-upload-progress" tabindex="-1" hidden>Upload progress</label>
+        <p id="upload-feedback-status" role="status" aria-live="polite"></p>
+        <label id="upload-progress-label" for="hosted-upload-progress" hidden>Upload progress</label>
         <progress id="hosted-upload-progress" max="100" hidden></progress>
         <p id="upload-feedback-bytes"></p>
         <p id="upload-feedback-elapsed" aria-live="off"></p>
         <p id="upload-feedback-help" class="field-help"></p>
-        <button class="btn btn-ghost" id="abort-upload" type="button" onclick="abortHostedUpload()" hidden>Cancel transfer</button>
-        <button class="btn btn-outline" id="check-upload-progress" type="button" onclick="checkSavedUploadProgress()">Check saved progress</button>
-        <button class="btn btn-ghost" id="upload-recovery" type="button" onclick="showUploadRecovery()" hidden>View job / recovery options</button>
+        <button class="btn btn-ghost" id="abort-upload" type="button" onclick="abortHostedUpload()" hidden>Cancel</button>
+        <button class="btn btn-outline btn-sm" id="check-upload-progress" type="button" onclick="checkSavedUploadProgress()">Check saved progress</button>
+        <button class="btn btn-ghost btn-sm" id="upload-recovery" type="button" onclick="showUploadRecovery()" hidden>Recovery options</button>
       </section>
-      <p id="upload-state" role="status" aria-live="polite"></p>
+      <p id="upload-state" role="status" aria-live="polite" class="field-help"></p>
+
       <details>
-        <summary id="compact-package-help">Optional: prepare a media-heavy export on your computer instead</summary>
-        <p>Use the local preparation tool. It reads text/metadata without inflating bulk media and records what was excluded. Your original remains untouched. Upload the resulting compact .haxcourse package here.</p>
-        <pre>python3 python/prepare_course.py "/path/course.imscc" --output "/path/course.haxcourse"</pre>
-        <p>This is a review package, not a complete backup. Videos/images omitted locally are not analyzed or rebuilt unless provided separately in supported form.</p>
+        <summary id="compact-package-help">Large file? Prepare it locally first</summary>
+        <p class="field-help">For exports over ~500 MB, run the preparation tool on your computer and upload the resulting .haxcourse file here. Your original is never modified.</p>
+        <pre style="background:#f5f5f5;padding:12px;border-radius:6px;font-size:.82rem;overflow-x:auto">python3 python/prepare_course.py "/path/course.imscc" --output "/path/course.haxcourse"</pre>
       </details>
-      <details {% if is_hosted %}hidden{% endif %}>
-        <summary>Or connect to Canvas using this local app's API configuration</summary>
-        <p class="field-help">Acquires content only; it does not start analysis or bypass the mentoring checkpoints. Configure the local Canvas URL/token first. This legacy local configuration is not a hosted multi-user credential store.</p>
+
+      <details {% if is_hosted %}hidden{% endif %} style="margin-top:12px">
+        <summary>Connect via Canvas API instead</summary>
+        <p class="field-help">Requires a Canvas URL and token configured on the legacy Configuration page.</p>
         <form id="mentor-canvas-form">
           <label class="field-label" for="mentor-canvas-id">Canvas course ID</label>
           <input class="field-input" id="mentor-canvas-id" inputmode="numeric" pattern="[0-9]+" required>
-          <button class="btn btn-primary" type="submit">Acquire course for mentoring</button>
+          <button class="btn btn-primary" type="submit">Acquire course</button>
         </form>
       </details>
-      <details id="supplemental-sources">
-      <summary>Add optional supporting documents, links or teaching notes</summary>
-      <p class="field-help">Reference and policy materials inform the mentor; they are not automatically published.</p>
-      <label class="field-label" for="material-role">Purpose of the source</label>
-      <select id="material-role" class="field-input"><option value="reference">Reference / background</option><option value="policy">Instructor or institutional policy — not auto-published</option><option value="student">Student-facing source — eligible for proposed adaptation</option></select>
-      <form id="material-file-form">
-        <label class="field-label" for="material-file">Supplemental document (10 MiB maximum)</label>
-        <input class="field-input" id="material-file" type="file" accept=".txt,.md,.csv,.html,.pdf,.docx,.pptx">
-        <button class="btn btn-primary" id="upload-material-button" type="submit">Add document</button>
-      </form>
-      <form id="material-url-form">
-        <label class="field-label" for="material-url">Public resource URL</label>
-        <input class="field-input" id="material-url" type="url" placeholder="https://example.edu/resource">
-        <button class="btn btn-primary" type="submit">Read public URL</button>
-      </form>
-      <form id="material-text-form">
-        <label class="field-label" for="material-text">Additional notes / undocumented teaching activities</label>
-        <textarea class="field-input" id="material-text" rows="3" maxlength="60000"></textarea>
-        <button class="btn btn-primary" type="submit">Add notes</button>
-      </form>
-      <ul id="material-list"></ul>
+
+      <details id="supplemental-sources" style="margin-top:16px">
+        <summary>Add supporting documents or notes (optional)</summary>
+        <p class="field-help">Add syllabi, policies, rubrics or teaching notes. These inform the AI; they are not automatically added to student pages.</p>
+        <label class="field-label" for="material-role">What kind of document is this?</label>
+        <select id="material-role" class="field-input">
+          <option value="reference">Background reference</option>
+          <option value="policy">Instructor / institutional policy</option>
+          <option value="student">Student-facing source</option>
+        </select>
+        <form id="material-file-form">
+          <label class="field-label" for="material-file">Upload document (10 MB max)</label>
+          <input class="field-input" id="material-file" type="file" accept=".txt,.md,.csv,.html,.pdf,.docx,.pptx">
+          <button class="btn btn-primary" id="upload-material-button" type="submit">Add document</button>
+        </form>
+        <form id="material-url-form" style="margin-top:8px">
+          <label class="field-label" for="material-url">Or paste a public URL</label>
+          <input class="field-input" id="material-url" type="url" placeholder="https://example.edu/resource">
+          <button class="btn btn-primary" type="submit">Add URL</button>
+        </form>
+        <form id="material-text-form" style="margin-top:8px">
+          <label class="field-label" for="material-text">Or type notes directly</label>
+          <textarea class="field-input" id="material-text" rows="3" maxlength="60000" placeholder="Paste text or type additional context here"></textarea>
+          <button class="btn btn-primary" type="submit">Add notes</button>
+        </form>
+        <ul id="material-list" style="margin-top:12px"></ul>
       </details>
-      <h3>What the mentor has so far</h3>
+
+      <h3 style="margin-top:20px">What the mentor can see</h3>
       <div id="course-inventory"></div>
     </section>
-    <section class="card mentor-section" id="course-discussion" tabindex="-1">
-      <h2>4. Discuss goals, then approve the direction</h2>
-      <p>The preliminary inventory is not a full AI analysis. Explain the audience, learning goals, constraints, what works and what should change.</p>
-      <p id="discussion-readiness" class="banner banner-info" role="status"></p>
-      <div id="mentor-messages" aria-live="polite"></div>
-      <form id="mentor-chat-form">
-        <label class="field-label" for="chat-kind">Conversation checkpoint</label>
-        <select id="chat-kind" class="field-input"><option value="interview">Initial interview / design direction</option><option value="review">Final draft review / requested revisions</option></select>
-        <label class="field-label" for="mentor-message">Your message</label>
-        <textarea class="field-input" id="mentor-message" rows="3" maxlength="6000" required></textarea>
-        <button class="btn btn-primary" id="send-mentor-message" type="submit">Send message to mentor</button>
-      </form>
-      <h3>Editable design brief</h3>
-      <p class="field-help">Interview feedback is added here. Refine it into goals and constraints before approval.</p>
-      <textarea class="field-input" id="design-brief" rows="7" maxlength="30000"></textarea>
-      <button class="btn btn-ghost" onclick="saveBrief()">Save revised brief (invalidates draft)</button>
-      <button class="btn btn-primary" id="approve-direction" onclick="approveDirection()">Approve this direction</button>
-      <button class="btn btn-success" id="analyze-course" onclick="analyzeCourse()">Analyze &amp; generate draft</button>
-      <section id="analysis-feedback" class="mentor-upload" tabindex="-1" aria-labelledby="analysis-feedback-title" hidden>
-        <h3 id="analysis-feedback-title"></h3>
-        <p id="analysis-feedback-message" role="status" aria-live="polite" aria-atomic="true"></p>
-        <progress id="analysis-feedback-progress" aria-label="Current processing stage"></progress>
-        <p id="analysis-feedback-elapsed" aria-live="off"></p>
-        <p id="analysis-feedback-help" class="field-help"></p>
-        <button id="analysis-feedback-cancel" class="btn btn-ghost" type="button" onclick="cancelMentorJob()" hidden>Cancel current job</button>
-      </section>
-      <p class="field-help">Next: finish the conversation, save your design brief, approve its direction, then generate the draft. Changes to inputs or the brief invalidate earlier approvals.</p>
-    </section>
-    <section class="card mentor-section" id="draft-panel" tabindex="-1" hidden>
-      <h2>5. Review the draft before building</h2>
-      <p>Open the draft items below. Use the final-review conversation to request changes, then explicitly approve the exact version you want to build.</p>
-      <p id="draft-summary"></p><p id="draft-coverage" class="field-help"></p>
-      <ul id="draft-warnings"></ul>
-      <section id="assessment-panel" class="mentor-assessment" aria-labelledby="assessment-title" hidden>
-        <h3 id="assessment-title">Instructor-only framework assessment</h3>
-        <p>This report supports your judgment; it is not a validated research measurement or an aggregate course grade. Bloom's taxonomy describes cognitive demand. AIAS describes AI use in task design: higher AIAS levels are not inherently better. The six numeric dimension rubrics are application-defined heuristics, not framework-validated scores.</p>
-        <p>Assessments, evidence and recommendations stay in your private mentor workspace and are not included in the student HAX site.</p>
-        <p id="assessment-readiness" class="banner banner-info" role="status" aria-live="polite"></p>
-        <details id="baseline-assessment" hidden>
-          <summary>Imported course baseline — before proposed changes</summary>
-          <div id="baseline-assessment-content"></div>
-        </details>
-        <details id="proposed-assessment" open hidden>
-          <summary>Proposed draft assessment — review before approval</summary>
-          <div id="proposed-assessment-content"></div>
-        </details>
-      </section>
-      <div id="draft-items"></div>
-      <button class="btn btn-ghost" id="save-draft" onclick="saveDraft()">Save edited snapshot (requires new approval)</button>
-      <p>Use the final-review chat above to discuss or request revisions. The mentor cannot grant approval.</p>
-      <button class="btn btn-primary" id="approve-build" onclick="approveBuild()">Approve this exact draft</button>
-      <button class="btn btn-success" id="build-course" onclick="buildCourse()">Build approved content</button>
-      <h3 id="completion-title">6. Download approved content</h3>
-      <p id="completion-help">Building prepares a private download and preview. It does not publish a public HAX site.</p>
-      <section id="hax-site-panel" class="mentor-hax-site" tabindex="-1" aria-labelledby="hax-site-title" hidden>
-        <h4 id="hax-site-title">Your local HAX site</h4>
-        <p id="hax-site-status" role="status" aria-live="polite"></p>
-        <p id="hax-site-error" role="alert" class="banner banner-warn" hidden></p>
-        <p>Output directory: <code id="hax-site-directory"></code></p>
-        <a id="open-hax-site" class="btn btn-primary" target="_blank" rel="noopener noreferrer" hidden>Open HAX site</a>
-        <button id="start-hax-site" class="btn btn-outline" type="button" onclick="startHaxSite()" hidden>Start HAX site</button>
-        <button id="stop-hax-site" class="btn btn-ghost" type="button" onclick="stopHaxSite()" hidden>Stop HAX site</button>
-        <button id="refresh-hax-site" class="btn btn-ghost" type="button" onclick="refreshHaxSite()">Check site status</button>
-        <p class="field-help">Only a verified, running local site can be opened. Starting or stopping the site does not change your approved draft. Rebuilds create a new output directory; edits made in HAX are separate from the mentor snapshot. Quizzes, grading, submissions and LTI are not restored.</p>
-      </section>
-      <div id="artifact-links" tabindex="-1"></div>
-    </section>
-    <details class="card" id="processing-details" tabindex="-1"><summary>Processing details and revision history</summary>
-      <p id="workspace-revisions"></p>
-      <pre id="mentor-jobs" style="white-space:pre-wrap"></pre>
-      <button class="btn btn-ghost" id="cancel-mentor-job" onclick="cancelMentorJob()" hidden>Cancel / recover interrupted job</button>
-      <p class="field-help">Cancellation rejects late results but cannot undo an AI request already sent to a provider.</p>
-    </details>
   </div>
-</div>
+
+  <div class="wizard-nav-footer">
+    <button class="btn btn-ghost" type="button" onclick="wizardBack()">← Back</button>
+    <span class="wizard-spacer"></span>
+    <button class="btn btn-primary btn-lg" type="button" id="step3-continue" onclick="wizardNext()">Continue →</button>
+  </div>
+</section>
+
+<!-- ── Step 4: Discuss goals ─────────────────────────────────────────────── -->
+<section class="wizard-step" data-step="4" id="step-4">
+  <div class="wizard-step-header">
+    <h1>Tell the mentor your goals</h1>
+    <p>Describe who your students are, what you want them to learn, and what must stay unchanged. The mentor will ask focused questions.</p>
+  </div>
+
+  <div class="card">
+    <p id="discussion-readiness" class="banner banner-info" role="status"></p>
+
+    <!-- Chat log -->
+    <div id="mentor-messages" class="chat-log" aria-live="polite"></div>
+
+    <!-- Chat input — chat-kind hidden but preserved for JS -->
+    <form id="mentor-chat-form">
+      <select id="chat-kind" aria-hidden="true" style="display:none">
+        <option value="interview">interview</option>
+        <option value="review">review</option>
+      </select>
+      <label class="field-label" for="mentor-message">Your message</label>
+      <textarea class="field-input" id="mentor-message" rows="3" maxlength="6000" required
+        placeholder="What should students be able to do? What must stay unchanged? What's not working?"></textarea>
+      <button class="btn btn-primary" id="send-mentor-message" type="submit">Send to mentor</button>
+    </form>
+  </div>
+
+  <div class="card" style="margin-top:0">
+    <h2>Your design brief</h2>
+    <p class="field-help">The mentor fills this in from your conversation. Review and edit it, then approve it when it reflects your intent.</p>
+    <textarea class="field-input" id="design-brief" rows="7" maxlength="30000"
+      placeholder="Your goals, constraints and AI-use expectations will appear here after the conversation."></textarea>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px">
+      <button class="btn btn-ghost" onclick="saveBrief()">Save brief</button>
+      <button class="btn btn-primary" id="approve-direction" onclick="approveDirection()">Approve this direction</button>
+    </div>
+
+    <section id="analysis-feedback" class="mentor-upload" tabindex="-1" aria-labelledby="analysis-feedback-title" hidden style="margin-top:16px">
+      <h3 id="analysis-feedback-title"></h3>
+      <p id="analysis-feedback-message" role="status" aria-live="polite"></p>
+      <progress id="analysis-feedback-progress" aria-label="Processing"></progress>
+      <p id="analysis-feedback-elapsed" aria-live="off"></p>
+      <p id="analysis-feedback-help" class="field-help"></p>
+      <button id="analysis-feedback-cancel" class="btn btn-ghost btn-sm" type="button" onclick="cancelMentorJob()" hidden>Cancel</button>
+    </section>
+
+    <div style="margin-top:16px">
+      <button class="btn btn-success" id="analyze-course" onclick="analyzeCourse()" style="width:100%">Analyze course &amp; generate draft →</button>
+      <p class="field-help" style="margin-top:8px">Approve your direction first. The AI will assess the course and propose a revised draft.</p>
+    </div>
+  </div>
+
+  <div class="wizard-nav-footer">
+    <button class="btn btn-ghost" type="button" onclick="wizardBack()">← Back</button>
+  </div>
+</section>
+
+<!-- ── Step 5: Review the draft ──────────────────────────────────────────── -->
+<section class="wizard-step" data-step="5" id="step-5">
+  <div class="wizard-step-header">
+    <h1>Review the proposed draft</h1>
+    <p>Open each item to read the proposed changes. Use the chat to request revisions. Approve only when you're satisfied.</p>
+  </div>
+
+  <section class="card" id="draft-panel" tabindex="-1">
+    <p id="draft-summary"></p>
+    <p id="draft-coverage" class="field-help"></p>
+    <ul id="draft-warnings" style="padding-left:20px;color:#666;font-size:.88rem"></ul>
+
+    <section id="assessment-panel" class="mentor-assessment" aria-labelledby="assessment-title" hidden>
+      <h3 id="assessment-title">Instructor assessment report</h3>
+      <p class="field-help">This report supports your judgment; it is not a quality grade. Bloom's describes cognitive demand. AIAS describes AI use in task design.</p>
+      <p id="assessment-readiness" class="banner banner-info" role="status" aria-live="polite"></p>
+      <details id="baseline-assessment" hidden>
+        <summary>Original course assessment (before changes)</summary>
+        <div id="baseline-assessment-content"></div>
+      </details>
+      <details id="proposed-assessment" open hidden>
+        <summary>Proposed draft assessment</summary>
+        <div id="proposed-assessment-content"></div>
+      </details>
+    </section>
+
+    <div id="draft-items"></div>
+
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:16px">
+      <button class="btn btn-ghost" id="save-draft" onclick="saveDraft()">Save edits</button>
+      <button class="btn btn-primary" id="approve-build" onclick="approveBuild()">Approve this exact draft</button>
+    </div>
+    <p class="field-help" style="margin-top:8px">Use the chat below to request revisions. Editing or requesting changes requires a new approval.</p>
+  </section>
+
+  <div class="wizard-nav-footer">
+    <button class="btn btn-ghost" type="button" onclick="wizardBack()">← Back</button>
+  </div>
+</section>
+
+<!-- ── Step 6: Build the HAX site ────────────────────────────────────────── -->
+<section class="wizard-step" data-step="6" id="step-6">
+  <div class="wizard-step-header">
+    <h1 id="completion-title">Build your HAX site</h1>
+    <p id="completion-help">Build the exact approved draft into a local HAX site. Nothing is published.</p>
+  </div>
+
+  <div class="card">
+    <button class="btn btn-success btn-lg" id="build-course" onclick="buildCourse()" style="width:100%;font-size:1.05rem;padding:14px">
+      Build &amp; open HAX site
+    </button>
+    <p class="field-help" style="margin-top:10px">Build is only available after you approve the exact draft above.</p>
+
+    <section id="hax-site-panel" class="mentor-hax-site" tabindex="-1" aria-labelledby="hax-site-title" hidden style="margin-top:16px">
+      <h4 id="hax-site-title">Your local HAX site</h4>
+      <p id="hax-site-status" role="status" aria-live="polite"></p>
+      <p id="hax-site-error" role="alert" class="banner banner-warn" hidden></p>
+      <p class="field-help">Output folder: <code id="hax-site-directory"></code></p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+        <a id="open-hax-site" class="btn btn-primary" target="_blank" rel="noopener noreferrer" hidden>Open HAX site</a>
+        <button id="start-hax-site" class="btn btn-outline" type="button" onclick="startHaxSite()" hidden>Start site</button>
+        <button id="stop-hax-site" class="btn btn-ghost" type="button" onclick="stopHaxSite()" hidden>Stop site</button>
+        <button id="refresh-hax-site" class="btn btn-ghost btn-sm" type="button" onclick="refreshHaxSite()">Check status</button>
+      </div>
+    </section>
+
+    <div id="artifact-links" style="margin-top:16px"></div>
+  </div>
+
+  <div class="wizard-nav-footer">
+    <button class="btn btn-ghost" type="button" onclick="wizardBack()">← Back</button>
+  </div>
+</section>
+
+<!-- Processing details (available from any step) -->
+<details class="card" id="processing-details" style="margin-top:16px">
+  <summary>Processing details &amp; job history</summary>
+  <p id="workspace-revisions" class="field-help"></p>
+  <pre id="mentor-jobs" style="white-space:pre-wrap;font-size:.82rem;color:#555;margin-top:8px"></pre>
+  <button class="btn btn-ghost btn-sm" id="cancel-mentor-job" onclick="cancelMentorJob()" hidden>Cancel / recover interrupted job</button>
+  <p class="field-help">Cancellation rejects late results but cannot undo a provider request already sent.</p>
+</details>
+
+<!-- start-blank-course: referenced by JS but not used as an onclick here; kept hidden for JS compat -->
+<button id="start-blank-course" type="button" hidden onclick="startBlankCourse()"></button>
+
+</div><!-- /.page-wrap -->
 {% endblock %}
 {% block scripts %}
 {% if is_hosted %}
