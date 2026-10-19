@@ -165,6 +165,33 @@ class HostedApiTests(unittest.TestCase):
         self.assertIn("Secure", cookie)
         self.assertIn("HttpOnly", cookie)
 
+    def test_alternate_entry_hosts_redirect_to_canonical_without_query_or_cookie(self):
+        for path in ("/", "/mentor", "/mentor/"):
+            for method in ("GET", "HEAD"):
+                response = self.client.open(
+                    path + "?private-query=discard-me", method=method,
+                    base_url="https://alternate-deployment.example")
+                self.assertEqual(response.status_code, 302)
+                self.assertEqual(response.headers["Location"], "https://mentor.example/mentor")
+                self.assertNotIn("Set-Cookie", response.headers)
+        response = self.get("/mentor")
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("Location", response.headers)
+
+    def test_alias_posts_still_reject_origin_and_never_redirect_credentials(self):
+        response = self.client.post(
+            "/mentor/api/login", base_url="https://alternate-deployment.example",
+            json={"code": "synthetic-not-a-real-code"},
+            headers={"Origin": "https://alternate-deployment.example", "X-Mentor-CSRF": self.csrf})
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("Cross-origin", response.json["error"])
+        self.assertNotIn("Location", response.headers)
+        self.assertFalse(self.get("/mentor/api/session").json["authenticated"])
+        # A spoofed forwarded host must not choose the redirect destination.
+        response = self.client.get("/mentor", base_url="https://alternate-deployment.example",
+                                   headers={"X-Forwarded-Host": "evil.example"})
+        self.assertEqual(response.headers["Location"], "https://mentor.example/mentor")
+
     def test_upload_ticket_is_integer_expiry_and_not_storage_authority(self):
         self.create()
         raw, intent = self.intent()

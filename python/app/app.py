@@ -70,10 +70,18 @@ def protect_unprovisioned_hosted_app():
     if request.path.startswith("/static/"):
         return
     try:
-        settings()
+        config = settings()
     except HostedSetupError as exc:
         return jsonify({"error": str(exc), "code": "HOSTED_SETUP_REQUIRED"}), 503
-    if request.path == "/":
+    if request.method in ("GET", "HEAD") and request.path in ("/", "/mentor", "/mentor/"):
+        from urllib.parse import urlsplit
+        expected_host = urlsplit(config.origin).netloc.lower().removesuffix(":443")
+        incoming_host = request.host.lower().removesuffix(":443")
+        if incoming_host != expected_host:
+            # Page navigation only: never forward an invitation/OTP POST body,
+            # cookies or query parameters between deployment aliases.
+            return redirect(config.origin + "/mentor", code=302)
+    if request.path == "/" and request.method in ("GET", "HEAD"):
         return redirect("/mentor")
     if (request.path.startswith("/mentor") or request.path.startswith("/.well-known/workflow/")
             or request.path == "/healthz"):
