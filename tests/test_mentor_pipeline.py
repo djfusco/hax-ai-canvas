@@ -94,6 +94,32 @@ class MentorPipelineTests(unittest.TestCase):
             self.assertTrue(any("Baseline assessment completed: 30 of 30" in text for _, text in progress))
 
 
+class GenerateDraftPreflightTests(unittest.TestCase):
+    def setUp(self):
+        self.originals = [item(str(i)) for i in range(3)]
+        self.state = {**workspace(), "id": "preflight-test", "source_type": "imscc"}
+        self.source = patch.object(service, "source_items", return_value=(self.originals, []))
+        self.source.start()
+        self.addCleanup(self.source.stop)
+
+    def test_preflight_includes_estimated_assessment_context_when_assess_true(self):
+        """When assess=True, first _fit_prompt call must include estimated assessment context."""
+        client = PipelineClient()
+        service.generate_draft(self.state, client, assess=True)
+        first_prompt = client.plans[0][0] if client.plans else ""
+        self.assertIn("BASELINE ASSESSMENT PRIORITIES", first_prompt,
+                      "Initial preflight must include estimated assessment context so "
+                      "model-too-small errors surface before paid baseline calls")
+
+    def test_preflight_without_assess_does_not_include_assessment_context(self):
+        """When assess=False, preflight should not include assessment context estimate."""
+        client = PipelineClient()
+        service.generate_draft(self.state, client, assess=False)
+        if client.plans:
+            first_prompt = client.plans[0][0]
+            self.assertNotIn("BASELINE ASSESSMENT PRIORITIES", first_prompt)
+
+
 class ReviewDraftTests(unittest.TestCase):
     def setUp(self):
         self.original = {**item("0"), "raw": {}}

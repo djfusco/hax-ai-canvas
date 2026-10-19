@@ -415,9 +415,21 @@ def generate_draft(workspace: dict, client=None, *, assess=False, progress=None)
           '"html":"<h1>...</h1><p>...</p>","reason":"...","source_ids":["instructor-brief"]}],'
           '"warnings":["..."]}. At most 20 focused proposals. No approvals or build instructions.'
         )
-    # Prove the final generation's essential directions/brief fit before a
-    # baseline assessment can make paid calls. Priorities remain optional.
-    _fit_prompt(workspace, client, build, 7000, items=originals, schema=schema)
+    # Preflight with an estimated max-size assessment_context so that a model
+    # too small to fit the prompt after baseline is caught before any paid calls.
+    # The estimate uses 3 short concerns/recommendations per item; the real
+    # context is structurally identical but text may vary in length.
+    if assess and originals:
+        _est_assessment_context = "\n\nBASELINE ASSESSMENT PRIORITIES:\n" + json.dumps(
+            [{"item_id": it["id"], "concerns": ["c" * 80] * 3, "recommendations": ["r" * 80] * 3}
+             for it in originals], ensure_ascii=False)
+        assessment_context = _est_assessment_context
+        try:
+            _fit_prompt(workspace, client, build, 7000, items=originals, schema=schema)
+        finally:
+            assessment_context = ""
+    else:
+        _fit_prompt(workspace, client, build, 7000, items=originals, schema=schema)
     if assess:
         from mentor_assessment import assess_design
         if originals:
