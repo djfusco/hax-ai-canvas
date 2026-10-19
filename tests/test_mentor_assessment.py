@@ -454,5 +454,69 @@ class AssessmentTests(unittest.TestCase):
         self.assertNotEqual(report2["frameworks"][0]["title"], "mutated")
 
 
+class ParallelAssessmentTests(unittest.TestCase):
+    def test_items_are_assessed_concurrently_not_serially(self):
+        """assess_design must run item LLM calls in parallel; items 2+ must start before item 1 ends."""
+        import threading
+        call_events = []
+        call_lock = threading.Lock()
+        # Barrier ensures all 3 worker threads must be in the LLM call simultaneously
+        barrier = threading.Barrier(3, timeout=5)
+
+        class BarrierClient:
+            provider = "anthropic"
+            model = "test"
+            capabilities = {"structured_outputs": True}
+
+            def call_structured(self, system, prompt, schema, max_tokens):
+                with call_lock:
+                    call_events.append(("start", json.loads(prompt.split("\n", 2)[1])["item"]["id"]))
+                barrier.wait()  # all 3 items must arrive here before any continues
+                data = payload(prompt)
+                result = response_for(data)
+                with call_lock:
+                    call_events.append(("end", data["item"]["id"]))
+                return json.dumps(result)
+
+            def call(self, *args, **kwargs):
+                raise AssertionError("Must use call_structured")
+
+        items = [item(str(i)) for i in range(3)]
+        report = assess_design(workspace(), items, BarrierClient(), scope="draft")
+        self.assertEqual(report["coverage"]["items_evaluated"], 3)
+        # If serial, the barrier.wait() would deadlock (only 1 thread at a time)
+        # The fact that we got here without deadlock proves concurrency
+        starts = [eid for ev, eid in call_events if ev == "start"]
+        self.assertEqual(sorted(starts), ["0", "1", "2"])
+
+    def test_parallel_result_order_matches_input_order(self):
+        """Items in the result must be in input order regardless of completion order."""
+        import threading
+        # Item "0" arrives last (slow), but must appear first in result
+        delay_event = threading.Event()
+
+        class ReorderingClient:
+            provider = "anthropic"
+            model = "test"
+            capabilities = {"structured_outputs": True}
+
+            def call_structured(self, system, prompt, schema, max_tokens):
+                data = payload(prompt)
+                item_id = data["item"]["id"]
+                if item_id == "0":
+                    delay_event.wait(timeout=5)  # item 0 finishes last
+                else:
+                    delay_event.set()  # other items release item 0
+                return json.dumps(response_for(data))
+
+            def call(self, *args, **kwargs):
+                raise AssertionError("Must use call_structured")
+
+        items = [item(str(i)) for i in range(3)]
+        report = assess_design(workspace(), items, ReorderingClient(), scope="draft")
+        result_ids = [r["item_id"] for r in report["items"]]
+        self.assertEqual(result_ids, ["0", "1", "2"], "Result order must match input order")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -7,11 +7,13 @@ No provider failure is replaced by a neutral/default score or a partial report.
 
 from __future__ import annotations
 
+import concurrent.futures
 from copy import deepcopy
 import hashlib
 import json
 import math
 import re
+import threading
 
 from bs4 import BeautifulSoup
 
@@ -587,17 +589,23 @@ def assess_design(workspace, items, client, *, scope="draft", progress=None):
         warnings.extend(fit_warnings)
         for chunk in chunks:
             warnings.extend(chunk["plan"].get("warnings", []))
-    report_items = []
-    for position, (item, chunks) in enumerate(zip(prepared, requests), 1):
+    report_items_by_position = {}
+    progress_lock = threading.Lock()
+
+    def _assess_item(args):
+        position, item, chunks = args
         if progress:
-            progress("assessing_" + scope, f"AI-assessing {scope} item {position} of {len(prepared)} "
-                     f"against pedagogical frameworks; {chunks_total} total planned chunk requests.")
+            with progress_lock:
+                progress("assessing_" + scope,
+                         f"AI-assessing {scope} item {position} of {len(prepared)} "
+                         f"against pedagogical frameworks; {chunks_total} total planned chunk requests.")
         judgments = []
         for index, chunk in enumerate(chunks, 1):
             if progress and len(chunks) > 1:
-                progress("assessing_" + scope, f"AI-assessing {scope} item {position} of {len(prepared)}, "
-                         f"chunk {index} of {len(chunks)}; {chunks_total} total planned chunk requests.")
-            # Never echo provider exceptions, prompts, credentials or returned text.
+                with progress_lock:
+                    progress("assessing_" + scope,
+                             f"AI-assessing {scope} item {position} of {len(prepared)}, "
+                             f"chunk {index} of {len(chunks)}; {chunks_total} total planned chunk requests.")
             try:
                 _preflight(client, chunk["prompt"])
                 structured = getattr(client, "call_structured", None)
@@ -636,7 +644,18 @@ def assess_design(workspace, items, client, *, scope="draft", progress=None):
                 f"Only the first {MAX_ITEM_EXCERPT} visible-text characters of this item were supplied; omitted content was not assessed.")
         if not item["text"]:
             assessed["limitations"].append("This item has no visible instructional text; media were not semantically assessed.")
-        report_items.append(assessed)
+        return position, assessed
+
+    max_workers = min(4, len(prepared)) if prepared else 1
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        args_list = [(pos, item, chunks)
+                     for pos, (item, chunks) in enumerate(zip(prepared, requests), 1)]
+        futures = {executor.submit(_assess_item, args): args[0] for args in args_list}
+        for future in concurrent.futures.as_completed(futures):
+            position, assessed = future.result()
+            report_items_by_position[position] = assessed
+
+    report_items = [report_items_by_position[pos] for pos in range(1, len(prepared) + 1)]
     truncated = [item["id"] for item in prepared if item["truncated"]]
     warnings = [*_REPORT_WARNINGS, *warnings]
     if truncated:
