@@ -628,8 +628,8 @@ function renderFlow() {
   renderAnalysisFeedback();
   renderAssessmentState();
   renderUploadFeedback();
-  el('mentor-guide').hidden = !mentorAuthenticated;
-  if (!mentorAuthenticated) return;
+  el('mentor-guide').hidden = true;
+  if (!mentorAuthenticated) { renderWizard(); return; }
   const mode = mentorMode();
   const flow = getFlowState();
   el('guide-workspace').textContent = workspace ? 'Course: ' + workspace.title : 'Start a course workspace';
@@ -667,7 +667,7 @@ function renderFlow() {
   el('workspace-list').disabled = busy;
   el('new-workspace').querySelector('button').disabled = busy;
   el('import-local-source').disabled = waiting || !workspace || localNeedsRecovery;
-  if (!workspace) return;
+  if (!workspace) { renderWizard(); return; }
   const inputs = courseInputs();
   setLiveText('source-readiness', inputs.info?.course_items
     ? `${inputs.info.course_items} instructional items are ready for discussion.`
@@ -1200,8 +1200,9 @@ async function action(callback) {
   if (busy) return;
   busy = true;
   el('mentor-error').hidden = true;
+  try {
   renderFlow();
-  try { await callback(); }
+  await callback(); }
   catch (error) {
     el('mentor-error').textContent = error.message;
     el('mentor-error').hidden = false;
@@ -1599,8 +1600,7 @@ el('new-workspace').onsubmit = async event => {
     created = true;
   });
   if (created) {
-    el('mentor-guide').scrollIntoView({block: 'start'});
-    el('next-step-button').focus({preventScroll: true});
+    el('step-nav').scrollIntoView({block: 'start'});
   }
 };
 el('credential-form').onsubmit = event => {
@@ -1760,15 +1760,15 @@ if (_reviewShortcut) {
   };
 }
 
+// ── Wizard layer ──────────────────────────────────────────────────────────
+
+let wizardStep = 1;
+
 action(async () => {
   const session = await updateCredentials();
   if (session.authenticated) await refreshList();
   if (session.authenticated && provider() && provider() !== 'guided') await loadModels();
 });
-
-// ── Wizard layer ──────────────────────────────────────────────────────────
-
-let wizardStep = 1;
 
 function selectProviderCard(value) {
   const sel = el('mentor-provider');
