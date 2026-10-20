@@ -213,6 +213,83 @@ def _normalized(text):
     return " ".join(text.split())
 
 
+def _chunk_text(text, max_chunk=1500):
+    """Split text at paragraph then sentence boundaries. Returns list of str."""
+    if not text:
+        return [""]
+    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+    chunks = []
+    for para in paragraphs:
+        if len(para) <= max_chunk:
+            chunks.append(para)
+        else:
+            parts = re.split(r'(?<=[.?!]) ', para)
+            current = ""
+            for part in parts:
+                if not current:
+                    current = part
+                elif len(current) + 1 + len(part) <= max_chunk:
+                    current += " " + part
+                else:
+                    chunks.append(current)
+                    current = part
+            if current:
+                chunks.append(current)
+    merged = []
+    i = 0
+    while i < len(chunks):
+        if len(chunks[i]) < 100:
+            acc = [chunks[i]]
+            while i + 1 < len(chunks) and len(chunks[i + 1]) < 100:
+                i += 1
+                acc.append(chunks[i])
+            if i + 1 < len(chunks):
+                i += 1
+                acc.append(chunks[i])
+            merged.append("\n\n".join(acc))
+        else:
+            merged.append(chunks[i])
+        i += 1
+    return merged if merged else [""]
+
+
+def _select_chunks(full_text, item_title, item_text, budget):
+    """Return the highest-relevance chunks from full_text up to budget chars total."""
+    chunks = _chunk_text(full_text)
+    if budget <= 0:
+        total = len(chunks)
+        return f"[{total} of {total} sections omitted — not scored for this item]"
+    query = (item_title + " " + item_text[:500]).lower()
+    query_words = set(re.findall(r'\w+', query))
+
+    def score(chunk):
+        chunk_words = set(re.findall(r'\w+', chunk.lower()))
+        union = query_words | chunk_words
+        if not union:
+            return 0.0
+        return len(query_words & chunk_words) / math.log(1 + len(union))
+
+    scored = sorted(enumerate(chunks), key=lambda ic: score(ic[1]), reverse=True)
+    selected_indices = []
+    total_chars = 0
+    for idx, chunk in scored:
+        if total_chars + len(chunk) <= budget:
+            selected_indices.append(idx)
+            total_chars += len(chunk)
+        elif not selected_indices:
+            selected_indices.append(idx)
+            break
+    selected_indices.sort()
+    omitted = len(chunks) - len(selected_indices)
+    result_parts = [chunks[i] for i in selected_indices]
+    result = "\n\n".join(result_parts)
+    if len(result) > budget and budget > 0:
+        result = result[:budget]
+    if omitted > 0:
+        result += f"\n\n[{omitted} of {len(chunks)} sections omitted — not scored for this item]"
+    return result
+
+
 def _context(workspace):
     if not isinstance(workspace, dict):
         raise AssessmentError("Assessment requires a local workspace snapshot.")

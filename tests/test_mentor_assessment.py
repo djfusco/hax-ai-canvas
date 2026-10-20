@@ -518,5 +518,77 @@ class ParallelAssessmentTests(unittest.TestCase):
         self.assertEqual(result_ids, ["0", "1", "2"], "Result order must match input order")
 
 
+class ChunkUtilityTests(unittest.TestCase):
+    def test_chunk_text_splits_on_paragraphs(self):
+        from mentor_assessment import _chunk_text
+        # Paragraphs >= 100 chars won't trigger merging
+        p1 = "This is the first paragraph with sufficient length to avoid being merged with subsequent paragraphs by the algorithm."
+        p2 = "This is the second paragraph with sufficient length to avoid being merged with subsequent paragraphs by the algorithm."
+        p3 = "This is the third paragraph with sufficient length to avoid being merged with subsequent paragraphs by the algorithm."
+        text = p1 + "\n\n" + p2 + "\n\n" + p3
+        chunks = _chunk_text(text, max_chunk=1500)
+        self.assertEqual(len(chunks), 3)
+        self.assertEqual(chunks[0], p1)
+        self.assertEqual(chunks[1], p2)
+        self.assertEqual(chunks[2], p3)
+
+    def test_chunk_text_splits_long_paragraph_on_sentence(self):
+        from mentor_assessment import _chunk_text
+        # Sentences of 110 chars each; max_chunk=100 forces splits; each part > 100 so no re-merge
+        long_para = ("A" * 109 + ". ") * 3  # 3 sentences of ~111 chars
+        chunks = _chunk_text(long_para, max_chunk=100)
+        self.assertGreater(len(chunks), 1)
+
+    def test_chunk_text_merges_short_chunks(self):
+        from mentor_assessment import _chunk_text
+        # Two tiny paragraphs followed by a longer one; the tiny ones get merged with next
+        short1 = "Hi."
+        short2 = "Ok."
+        long_p = "This is a longer paragraph with more substance than the short ones above it."
+        text = short1 + "\n\n" + short2 + "\n\n" + long_p
+        chunks = _chunk_text(text, max_chunk=1500)
+        # short1 + short2 merge with long_p, result is one chunk
+        self.assertEqual(len(chunks), 1)
+        self.assertIn(short1, chunks[0])
+        self.assertIn(long_p, chunks[0])
+
+    def test_chunk_text_empty_returns_one_empty_chunk(self):
+        from mentor_assessment import _chunk_text
+        self.assertEqual(_chunk_text("", max_chunk=1500), [""])
+
+    def test_select_chunks_returns_within_budget(self):
+        from mentor_assessment import _select_chunks
+        full_text = "\n\n".join(["Chunk about rubric " + str(i) + " criteria." for i in range(20)])
+        result = _select_chunks(full_text, "Rubric assessment", "evaluate rubric criteria", budget=500)
+        self.assertIsInstance(result, str)
+        self.assertLessEqual(len(result), 700)  # budget + disclosure line
+
+    def test_select_chunks_prefers_relevant_chunks(self):
+        from mentor_assessment import _select_chunks
+        text = ("Completely irrelevant content about cooking.\n\n"
+                "The rubric criteria require students to evaluate evidence.\n\n"
+                "More irrelevant content about gardening.")
+        result = _select_chunks(text, "Rubric assessment", "evaluate rubric criteria", budget=200)
+        self.assertIn("rubric criteria", result)
+
+    def test_select_chunks_adds_omission_disclosure(self):
+        from mentor_assessment import _select_chunks
+        full_text = "\n\n".join(["Section " + str(i) + " " + "x" * 200 for i in range(10)])
+        result = _select_chunks(full_text, "item", "text", budget=300)
+        self.assertIn("omitted", result)
+
+    def test_select_chunks_no_omission_when_all_fit(self):
+        from mentor_assessment import _select_chunks
+        full_text = "Short section."
+        result = _select_chunks(full_text, "item", "text", budget=2000)
+        self.assertNotIn("omitted", result)
+
+    def test_select_chunks_zero_budget_returns_disclosure(self):
+        from mentor_assessment import _select_chunks
+        full_text = "Some content."
+        result = _select_chunks(full_text, "item", "text", budget=0)
+        self.assertIn("omitted", result)
+
+
 if __name__ == "__main__":
     unittest.main()
