@@ -288,7 +288,7 @@ function getFlowState() {
   if (!inputs.ready) return step(3, 'Add course content, or choose to start from scratch',
     'No usable content is confirmed yet. Upload a Canvas export, add supporting sources, or explicitly continue without a file.', 'course-sources', 'Choose your course source');
   if (workspace.direction_revision === workspace.revision)
-    return step(5, 'Generate a draft from your approved direction',
+    return step(4, 'Generate a draft from your approved direction',
       'Your direction is approved. Generate the draft below, then review it before approving a build.', 'analyze-course', 'Go to draft generation');
   const interviewed = (workspace.jobs || []).some(job => job.kind === 'interview' &&
     job.status === 'completed' && job.revision === workspace.revision);

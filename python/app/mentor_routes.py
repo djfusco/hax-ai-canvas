@@ -1207,9 +1207,11 @@ def create_mentor_blueprint(root_provider):
                 stages = {
                     "preparing_analysis": "analysis preparation",
                     "assessing_baseline": "baseline assessment",
+                    "triaging": "item triage for batch draft generation",
                     "drafting": "draft generation after baseline assessment",
                     "validating_draft": "draft proposal validation",
                     "assessing_draft": "proposed-draft assessment",
+                    "synthesizing": "course-level assessment synthesis",
                     "saving_draft": "saving the assessed draft",
                 }
                 message = (safe_site_error(exc) if kind == "build" and hax_sites else
