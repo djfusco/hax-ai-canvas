@@ -327,7 +327,7 @@ def _context(workspace):
         if not text:
             warnings.append(f"Supplemental material {index + 1} ({role}) has no extracted text; its contents were not assessed.")
         sources[identifier] = {"source_id": identifier, "role": role, "name": name,
-                               "text": text[:budget]}
+                               "text": text[:budget], "_full_text": text}
     return title, sources, warnings
 
 
@@ -535,6 +535,16 @@ def _plan_item(client, title, item, scope, context):
     """Plan every retained character before spending on any assessment call."""
     context = deepcopy(context)
     warnings = []
+
+    # Apply per-item relevance chunk selection to non-brief sources
+    n_materials = sum(1 for s in context.values() if s.get("role") != "instructor_brief")
+    per_material_budget = MAX_MATERIAL_CONTEXT // max(1, n_materials)
+    for source in context.values():
+        full_text = source.pop("_full_text", None)
+        if full_text and source.get("role") != "instructor_brief":
+            source["text"] = _select_chunks(
+                full_text, item.get("title", ""), item.get("text", "")[:500], per_material_budget
+            )
 
     def request(text, start=0):
         sources = {**context, "course:" + item["id"]: {

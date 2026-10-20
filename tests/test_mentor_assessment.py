@@ -215,13 +215,15 @@ class AssessmentTests(unittest.TestCase):
         sources = client.calls[0]["data"]["evidence_sources"]
         material_sources = [source for source in sources if source["source_id"].startswith("material-")]
         self.assertEqual(len(material_sources), 20)
-        self.assertEqual(sum(len(source["text"]) for source in material_sources), MAX_MATERIAL_CONTEXT)
+        # Chunk selection may add omission disclosures; total stays at or near MAX_MATERIAL_CONTEXT
+        self.assertLessEqual(sum(len(source["text"]) for source in material_sources), MAX_MATERIAL_CONTEXT + 1000)
         self.assertTrue(any("Instructor brief truncated" in warning for warning in report["warnings"]))
         self.assertEqual(sum("Supplemental material" in warning for warning in report["warnings"]), 20)
 
     def test_unseen_supplemental_text_cannot_be_cited(self):
         state = workspace()
-        state["materials"][0]["text"] = "x" * 2100 + "UNSEEN_POLICY"
+        # Place "UNSEEN_POLICY" beyond the per-material budget (12000/3=4000 chars)
+        state["materials"][0]["text"] = "x" * 4100 + "UNSEEN_POLICY"
         def unseen(response, data):
             response["evidence"].append({"source_id": "policy-one", "quote": "UNSEEN_POLICY"})
         with self.assertRaises(AssessmentError):
@@ -524,6 +526,45 @@ class ParallelAssessmentTests(unittest.TestCase):
         report = assess_design(workspace(), items, ReorderingClient(), scope="draft")
         result_ids = [r["item_id"] for r in report["items"]]
         self.assertEqual(result_ids, ["0", "1", "2"], "Result order must match input order")
+
+
+class RelevantChunkSelectionTests(unittest.TestCase):
+    def test_relevant_chunks_replace_uniform_truncation(self):
+        ws = {
+            "title": "Test course",
+            "brief": "Students will evaluate evidence.",
+            "materials": [{
+                "id": "mat-one", "role": "reference", "name": "Big document",
+                "text": ("Completely irrelevant cooking content with lots of words. " * 50 + "\n\n"
+                         "Rubric criteria: students must evaluate sources thoroughly. " * 10),
+            }],
+        }
+        items_list = [item("one")]
+        client = MockClient()
+        report = assess_design(ws, items_list, client)
+        call = client.calls[0]
+        sources = {s["source_id"]: s for s in call["data"]["evidence_sources"]}
+        mat_text = sources["mat-one"]["text"]
+        self.assertIn("evaluate sources", mat_text)
+
+    def test_supplement_budget_still_bounded(self):
+        ws = {
+            "title": "Test",
+            "brief": "Outcomes.",
+            "materials": [
+                {"id": f"mat-{i}", "role": "reference", "name": f"Doc {i}",
+                 "text": "Content about rubric criteria evaluation assessment " * 200}
+                for i in range(5)
+            ],
+        }
+        client = MockClient()
+        report = assess_design(ws, [item("x")], client)
+        call = client.calls[0]
+        total_material_chars = sum(
+            len(s["text"]) for s in call["data"]["evidence_sources"]
+            if s["source_id"] != "instructor-brief" and not s["source_id"].startswith("course:")
+        )
+        self.assertLessEqual(total_material_chars, MAX_MATERIAL_CONTEXT + 500)
 
 
 class SynthesisTests(unittest.TestCase):
