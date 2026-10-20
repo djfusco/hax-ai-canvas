@@ -1,4 +1,5 @@
 """Thirty-item transition tests; synthetic data and no provider requests."""
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -8,7 +9,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "python"), str(ROOT / "tests")]
 import mentor_service as service
-from mentor_assessment import assessment_current
+from mentor_assessment import assessment_current, DIMENSIONS
 from test_mentor_assessment import item, workspace, payload, response_for
 
 
@@ -259,6 +260,61 @@ class BriefGapCheckTests(unittest.TestCase):
         self.assertIn("student context", gap_prompt)
         self.assertIn("constraints", gap_prompt)
         self.assertIn("AI use policy", gap_prompt)
+
+
+class AssessmentInformedRevisionTests(unittest.TestCase):
+    def _make_draft_state(self, with_assessment=True):
+        originals = [{**item(str(i)), "raw": {}} for i in range(3)]
+        state = {**workspace(), "id": "revision-test", "source_type": "imscc"}
+        state["draft"] = {
+            "summary": "Initial draft",
+            "items": originals,
+            "warnings": [],
+            "mode": "ai",
+        }
+        if with_assessment:
+            state["draft"]["assessment"] = {
+                "mode": "ai", "scope": "draft", "version": 1,
+                "items": [
+                    {"item_id": "0", "title": "t", "item_type": "assignments",
+                     "source_ids": ["instructor-brief"],
+                     "content_sha256": hashlib.sha256(originals[0]["html"].encode()).hexdigest(),
+                     "concerns": ["Unclear success criteria"],
+                     "recommendations": ["Add explicit rubric"],
+                     "blooms": {"level": 3, "label": "Apply", "rationale": "r"},
+                     "aias": {"observed_level": None, "recommended_level": 2,
+                              "label": "AI Planning", "rationale": "r"},
+                     "dimensions": {k: {"score": 5, "rationale": "r"} for k in DIMENSIONS},
+                     "strengths": [], "evidence": [], "limitations": []},
+                ],
+                "coverage": {"items_total": 3, "items_evaluated": 3,
+                             "truncated_items": [], "chunks_total": 3, "chunks_evaluated": 3},
+            }
+        return state, originals
+
+    def test_review_prompt_contains_assessment_findings(self):
+        state, _ = self._make_draft_state(with_assessment=True)
+        prompts = []
+        client = PipelineClient()
+        def capture(system, prompt, schema, max_tokens):
+            prompts.append(prompt)
+            return json.dumps({"reply": "Revised.", "items": []})
+        client.call_structured = capture
+        with patch.object(service, "source_items", return_value=(state["draft"]["items"], [])):
+            service.review_draft(state, "Please revise.", client)
+        self.assertTrue(any("ASSESSMENT FINDINGS" in p for p in prompts))
+
+    def test_review_prompt_without_assessment_has_no_findings_block(self):
+        state, _ = self._make_draft_state(with_assessment=False)
+        prompts = []
+        client = PipelineClient()
+        def capture(system, prompt, schema, max_tokens):
+            prompts.append(prompt)
+            return json.dumps({"reply": "Revised.", "items": []})
+        client.call_structured = capture
+        with patch.object(service, "source_items", return_value=(state["draft"]["items"], [])):
+            service.review_draft(state, "Please revise.", client)
+        self.assertFalse(any("ASSESSMENT FINDINGS" in p for p in prompts))
 
 
 if __name__ == "__main__":

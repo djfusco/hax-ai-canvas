@@ -611,9 +611,40 @@ def review_draft(workspace: dict, message: str, client=None, *, assess=False, pr
         if item["id"] in known:
             known[item["id"]] = {**known[item["id"]], "raw": item["raw"]}
     def build(source_context, scale):
+        assessment = (workspace.get("draft") or {}).get("assessment") or {}
+        item_findings = {}
+        for a in assessment.get("items", []):
+            iid = a.get("item_id")
+            concerns = a.get("concerns", [])[:3]
+            recs = a.get("recommendations", [])[:3]
+            if iid and (concerns or recs):
+                item_findings[iid] = {"concerns": concerns, "recommendations": recs}
+        assessment_block = ""
+        if item_findings and scale == 1.0:
+            assessment_block = (
+                "\n\nASSESSMENT FINDINGS — address these when revising:\n"
+                + json.dumps(item_findings, ensure_ascii=False)
+            )
+        elif item_findings:
+            assessment_block = (
+                "\n\nASSESSMENT FINDINGS: omitted at reduced context scale; "
+                "full findings are in the instructor assessment report."
+            )
+        synthesis = assessment.get("synthesis", {})
+        course_concerns = synthesis.get("cross_cutting_concerns", [])
+        course_gaps = synthesis.get("coverage_gaps", [])
+        course_block = ""
+        if (course_concerns or course_gaps) and scale == 1.0:
+            course_block = (
+                "\n\nCOURSE-LEVEL FINDINGS:\n"
+                + json.dumps({"cross_cutting_concerns": course_concerns,
+                              "coverage_gaps": course_gaps}, ensure_ascii=False)
+            )
         return (
         source_context
         + "\n\nCURRENT DRAFT (bounded): " + json.dumps(_draft_excerpt(draft, scale), ensure_ascii=False)
+        + assessment_block
+        + course_block
         + "\n\nINSTRUCTOR REVIEW: " + message
         + '\nReturn {"reply":"...", "items":[{"id":"existing ID or empty for new item",'
           '"type":"pages","title":"...","html":"...","reason":"...","source_ids":["instructor-brief"]}]} '
