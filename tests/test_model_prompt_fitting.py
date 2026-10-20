@@ -247,15 +247,15 @@ class ServiceFittingTests(unittest.TestCase):
 
     def test_generation_keeps_all_originals_and_discloses_fitting(self):
         state = self.state()
-        originals = [item(str(index), "<p>" + "source evidence " * 1000 + "</p>") for index in range(20)]
+        originals = [item(str(index), "<p>" + "source evidence " * 1000 + "</p>") for index in range(10)]
         client = MentorClient(6000)
         with patch.object(service, "source_items", return_value=(originals, [])):
             result = service.generate_draft(state, client)
-        self.assertEqual(len(result["items"]), 21)
-        self.assertEqual(result["items"][:20], originals)
+        self.assertEqual(len(result["items"]), 11)
+        self.assertEqual(result["items"][:10], originals)
         self.assertTrue(any("reduced" in value for value in result["warnings"]))
         self.assertIn(state["brief"], client.calls[0])
-        self.assertIn("SOURCE course:19", client.calls[0])
+        self.assertIn("SOURCE course:9", client.calls[0])
 
     def test_review_scope_limits_are_enforced_before_calls(self):
         for items in (

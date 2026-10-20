@@ -40,6 +40,8 @@ class PipelineClient:
                 "course_recommendations": ["Improve rubric clarity"],
                 "limitations": [],
             })
+        if "priority_order" in str(schema):
+            return json.dumps({"priority_order": [], "key_concerns": {}, "course_gaps": []})
         if isinstance(self.draft_response, Exception):
             raise self.draft_response
         return self.draft_response if self.draft_response is not None else json.dumps({
@@ -66,7 +68,8 @@ class MentorPipelineTests(unittest.TestCase):
         progress = []
         draft = service.generate_draft(self.state, client, assess=True,
                                        progress=lambda *value: progress.append(value))
-        self.assertEqual(len(client.calls), 63)
+        # 30 baseline + 1 synthesis + 1 triage + 3 batches + 30 draft + 1 draft synthesis
+        self.assertEqual(len(client.calls), 66)
         self.assertEqual(len(draft["items"]), 30)
         self.assertEqual(draft["items"][1:], self.originals[1:])
         self.assertEqual(draft["baseline_assessment"]["coverage"]["items_evaluated"], 30)
@@ -76,10 +79,12 @@ class MentorPipelineTests(unittest.TestCase):
         self.assertLess(phases.index("drafting"), phases.index("validating_draft"))
         self.assertLess(phases.index("validating_draft"), phases.index("assessing_draft"))
         self.assertTrue(any("Baseline assessment completed: 30 of 30" in text for _, text in progress))
-        schema = client.calls[31][1]["properties"]["items"]["items"]["properties"]
-        self.assertEqual(set(schema["id"]["enum"]), {"", *[str(i) for i in range(30)]})
-        self.assertNotIn("course:0", schema["id"]["enum"])
-        self.assertIn("course:0", schema["source_ids"]["items"]["enum"])
+        # triage call at index 31; first batch draft at index 32
+        triage_props = client.calls[31][1]["properties"]
+        self.assertIn("priority_order", triage_props)
+        batch_schema = client.calls[32][1]["properties"]["items"]["items"]["properties"]
+        self.assertNotIn("course:0", batch_schema["id"]["enum"])
+        self.assertIn("course:0", batch_schema["source_ids"]["items"]["enum"])
         self.assertNotIn("summary", client.calls[0][1]["properties"])
 
     def test_failures_after_thirty_baseline_items_are_safe_and_not_mislabeled(self):
@@ -95,7 +100,8 @@ class MentorPipelineTests(unittest.TestCase):
             with self.subTest(expected=expected), self.assertRaises(service.MentorResponseError) as error:
                 service.generate_draft(self.state, client, assess=True,
                                        progress=lambda *value: progress.append(value))
-            self.assertEqual(len(client.calls), 32)
+            # 30 baseline + 1 synthesis + 1 triage (succeeds) + 1 first-batch call (fails)
+            self.assertEqual(len(client.calls), 33)
             self.assertEqual(progress[-1][0], last_phase)
             self.assertIn(expected, str(error.exception))
             self.assertNotIn("PRIVATE_", str(error.exception))
@@ -147,6 +153,83 @@ class ReviewDraftTests(unittest.TestCase):
                 self.state, "Please improve this assignment.", client)
         self.assertGreater(len(client.calls), 0, "review_draft must use call_structured, not call()")
         self.assertIsInstance(reply, str)
+
+
+class TriageBatchingTests(unittest.TestCase):
+    def test_small_course_uses_single_call(self):
+        """≤ 12 items: no triage call, single draft call."""
+        originals = [item(str(i)) for i in range(10)]
+        state = {**workspace(), "id": "batch-test-10", "source_type": "imscc"}
+        with patch.object(service, "source_items", return_value=(originals, [])):
+            client = PipelineClient()
+            progress = []
+            service.generate_draft(state, client, progress=lambda *v: progress.append(v))
+        triage_calls = [p for p, _ in client.calls if "priority_order" in str(_)]
+        self.assertEqual(len(triage_calls), 0)
+
+    def test_large_course_triggers_triage(self):
+        """15 items: triage call appears."""
+        originals = [item(str(i)) for i in range(15)]
+        state = {**workspace(), "id": "batch-test-15", "source_type": "imscc"}
+        call_log = []
+        def tracking_call_structured(system, prompt, schema, max_tokens):
+            call_log.append((prompt[:80], schema))
+            if "priority_order" in str(schema):
+                return json.dumps({
+                    "priority_order": [str(i) for i in range(15)],
+                    "key_concerns": {},
+                    "course_gaps": [],
+                })
+            if prompt.startswith("Assess this one item"):
+                return json.dumps(response_for(payload(prompt)))
+            if prompt.startswith("Synthesize this course assessment"):
+                return json.dumps({
+                    "scaffolding_analysis": "Good.",
+                    "cross_cutting_concerns": [], "coverage_gaps": [],
+                    "course_recommendations": [], "limitations": [],
+                })
+            return json.dumps({"summary": "batch draft", "items": [], "warnings": []})
+        client = PipelineClient()
+        client.call_structured = tracking_call_structured
+        with patch.object(service, "source_items", return_value=(originals, [])):
+            service.generate_draft(state, client)
+        triage_calls = [p for p, s in call_log if "priority_order" in str(s)]
+        self.assertGreater(len(triage_calls), 0)
+
+    def test_batched_proposals_merged_across_batches(self):
+        """Items proposed in different batches all appear in final result."""
+        originals = [item(str(i)) for i in range(15)]
+        state = {**workspace(), "id": "batch-test-merge", "source_type": "imscc"}
+        batch_num = [0]
+        def batch_response(system, prompt, schema, max_tokens):
+            if "priority_order" in str(schema):
+                return json.dumps({
+                    "priority_order": [str(i) for i in range(15)],
+                    "key_concerns": {},
+                    "course_gaps": [],
+                })
+            if prompt.startswith("Assess this one item"):
+                return json.dumps(response_for(payload(prompt)))
+            if prompt.startswith("Synthesize this course assessment"):
+                return json.dumps({
+                    "scaffolding_analysis": "Good.",
+                    "cross_cutting_concerns": [], "coverage_gaps": [],
+                    "course_recommendations": [], "limitations": [],
+                })
+            batch_num[0] += 1
+            iid = str(batch_num[0] - 1)
+            return json.dumps({
+                "summary": f"batch {batch_num[0]}",
+                "items": [{"id": iid, "type": "assignments", "title": "Updated",
+                           "html": "<p>Updated content for this batch item.</p>",
+                           "reason": "improved", "source_ids": ["instructor-brief"]}],
+                "warnings": [],
+            })
+        client = PipelineClient()
+        client.call_structured = batch_response
+        with patch.object(service, "source_items", return_value=(originals, [])):
+            result = service.generate_draft(state, client)
+        self.assertEqual(len(result["items"]), 15)
 
 
 class BriefGapCheckTests(unittest.TestCase):

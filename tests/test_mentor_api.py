@@ -326,7 +326,7 @@ class MentorApiTests(unittest.TestCase):
                 self.assertIn(expected, job["error"])
                 self.assertNotIn("PRIVATE_", job["error"])
                 self.assertNotIn("Check model access", job["error"])
-                self.assertEqual(len(client.calls), 32)
+                self.assertEqual(len(client.calls), 33)
                 self.assertIsNone(result["draft"])
                 self.assertEqual(result["stage"], "direction_approved")
                 self.request(self.base + "/approve-build", data={"draft_revision": 0}, expected=409)
