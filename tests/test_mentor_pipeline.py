@@ -149,5 +149,34 @@ class ReviewDraftTests(unittest.TestCase):
         self.assertIsInstance(reply, str)
 
 
+class BriefGapCheckTests(unittest.TestCase):
+    def test_interview_prompt_contains_gap_check_instruction(self):
+        state = {**workspace(), "id": "gap-check-test"}
+        prompts = []
+        client = PipelineClient()
+        orig = client.call_structured
+        def capture(system, prompt, schema, max_tokens):
+            prompts.append(prompt)
+            return json.dumps({"reply": "What are the learning outcomes?"})
+        client.call_structured = capture
+        service.interview(state, "Make it more engaging", client)
+        self.assertTrue(any("BRIEF COMPLETENESS CHECK" in p for p in prompts))
+
+    def test_interview_prompt_gap_check_covers_four_elements(self):
+        state = {**workspace(), "id": "gap-check-test2"}
+        prompts = []
+        client = PipelineClient()
+        def capture(system, prompt, schema, max_tokens):
+            prompts.append(prompt)
+            return json.dumps({"reply": "What learning outcomes should students achieve?"})
+        client.call_structured = capture
+        service.interview(state, "Make it more engaging", client)
+        gap_prompt = next(p for p in prompts if "BRIEF COMPLETENESS CHECK" in p)
+        self.assertIn("learning outcomes", gap_prompt)
+        self.assertIn("student context", gap_prompt)
+        self.assertIn("constraints", gap_prompt)
+        self.assertIn("AI use policy", gap_prompt)
+
+
 if __name__ == "__main__":
     unittest.main()

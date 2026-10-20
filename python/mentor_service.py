@@ -313,6 +313,12 @@ def interview(workspace: dict, message: str, client=None) -> str:
         source_context + "\n\nRECENT CONVERSATION:\n" + json.dumps(retained, ensure_ascii=False)
         + f"\nCONVERSATION COVERAGE: {len(retained)} of {len(history)} recent messages supplied."
         + "\n\nINSTRUCTOR: " + message
+        + "\n\nBRIEF COMPLETENESS CHECK: After your response, scan the instructor design brief "
+          "above for these four elements: (1) explicit learning outcomes — what students will be "
+          "able to demonstrate; (2) student context — course level, prior knowledge; (3) constraints "
+          "— what must not change; (4) AI use policy for student work. If any element is absent and "
+          "the instructor has not already addressed it in this exchange, ask specifically about the "
+          "most important missing one. If all four are present, do not mention them."
         + '\nReturn {"reply":"A concise evidence-aware response with 1-3 focused questions."}.'
         )
     schema = mentor_response_schema("interview")
