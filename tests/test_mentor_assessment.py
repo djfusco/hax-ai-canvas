@@ -93,15 +93,21 @@ class AssessmentTests(unittest.TestCase):
         items = [item(str(index)) for index in range(25)]
         phases = []
         report, client = self.evaluate(items=items, progress=lambda phase, message: phases.append((phase, message)))
-        self.assertEqual(len(client.calls), len(items))
+        # 25 per-item calls + 1 synthesis call
+        self.assertEqual(len(client.calls), len(items) + 1)
         self.assertEqual(report["coverage"], {
             "items_total": 25, "items_evaluated": 25, "truncated_items": [],
             "chunks_total": 25, "chunks_evaluated": 25,
         })
         self.assertEqual([value["item_id"] for value in report["items"]], [value["id"] for value in items])
-        self.assertEqual(len(phases), 25)
-        self.assertTrue(all(phase == "assessing_draft" and isinstance(message, str) for phase, message in phases))
-        self.assertTrue(all(call["max_tokens"] == 3500 for call in client.calls))
+        # 25 assessing_draft + 2 synthesizing progress messages
+        self.assertEqual(len(phases), 27)
+        assessing_phases = [(p, m) for p, m in phases if p == "assessing_draft"]
+        self.assertEqual(len(assessing_phases), 25)
+        self.assertTrue(all(isinstance(message, str) for _, message in assessing_phases))
+        # Only per-item assessment calls have max_tokens=3500; synthesis call may differ
+        item_calls = [c for c in client.calls if "evidence_sources" in c.get("data", {})]
+        self.assertTrue(all(call["max_tokens"] == 3500 for call in item_calls))
 
     def test_server_hashes_labels_metadata_and_report_shape(self):
         report, _ = self.evaluate()
@@ -142,7 +148,9 @@ class AssessmentTests(unittest.TestCase):
 
     def test_brief_and_role_labelled_supplements_are_in_every_prompt(self):
         _, client = self.evaluate(items=[item("one"), item("two")])
-        for call in client.calls:
+        # Filter to only per-item assessment calls (synthesis call has no evidence_sources)
+        assessment_calls = [c for c in client.calls if "evidence_sources" in c.get("data", {})]
+        for call in assessment_calls:
             sources = {source["source_id"]: source for source in call["data"]["evidence_sources"]}
             self.assertEqual(sources["instructor-brief"]["text"], workspace()["brief"])
             self.assertEqual(sources["policy-one"]["role"], "policy")
@@ -516,6 +524,74 @@ class ParallelAssessmentTests(unittest.TestCase):
         report = assess_design(workspace(), items, ReorderingClient(), scope="draft")
         result_ids = [r["item_id"] for r in report["items"]]
         self.assertEqual(result_ids, ["0", "1", "2"], "Result order must match input order")
+
+
+class SynthesisTests(unittest.TestCase):
+    def test_synthesis_added_to_assess_design_result(self):
+        items = [item(str(i)) for i in range(3)]
+        client = MockClient()
+        original_call = client.call
+        synthesis_calls = []
+        def call_with_synthesis(system, prompt, max_tokens):
+            if prompt.startswith("Synthesize this course assessment"):
+                synthesis_calls.append(prompt)
+                return json.dumps({
+                    "scaffolding_analysis": "Good progression.",
+                    "cross_cutting_concerns": ["Criteria clarity"],
+                    "coverage_gaps": [],
+                    "course_recommendations": ["Add rubric to all assignments"],
+                    "limitations": ["Only 3 items assessed"],
+                })
+            return original_call(system, prompt, max_tokens)
+        client.call = call_with_synthesis
+        report = assess_design(workspace(), items, client)
+        self.assertIn("synthesis", report)
+        synthesis = report["synthesis"]
+        self.assertIn("bloom_distribution", synthesis)
+        self.assertIn("dimension_averages", synthesis)
+        self.assertIn("course_recommendations", synthesis)
+        self.assertEqual(len(synthesis_calls), 1)
+
+    def test_synthesis_failure_does_not_affect_item_results(self):
+        items = [item(str(i)) for i in range(2)]
+        client = MockClient()
+        original_call = client.call
+        def call_raising(system, prompt, max_tokens):
+            if prompt.startswith("Synthesize this course assessment"):
+                raise RuntimeError("synthesis LLM error")
+            return original_call(system, prompt, max_tokens)
+        client.call = call_raising
+        report = assess_design(workspace(), items, client)
+        self.assertEqual(len(report["items"]), 2)
+        self.assertIn("synthesis", report)
+        self.assertIn("synthesis_error", report["synthesis"])
+        self.assertIn("bloom_distribution", report["synthesis"])
+
+    def test_compute_statistics_bloom_distribution(self):
+        from mentor_assessment import _compute_statistics
+        assessed_items = [
+            {"blooms": {"level": 3}, "aias": {"observed_level": 1, "recommended_level": 2},
+             "dimensions": {k: {"score": 5} for k in DIMENSIONS}},
+            {"blooms": {"level": 5}, "aias": {"observed_level": None, "recommended_level": 3},
+             "dimensions": {k: {"score": 7} for k in DIMENSIONS}},
+        ]
+        stats = _compute_statistics(assessed_items)
+        self.assertEqual(stats["bloom_distribution"]["3"], 1)
+        self.assertEqual(stats["bloom_distribution"]["5"], 1)
+        self.assertAlmostEqual(stats["dimension_averages"]["ai_leverage"], 6.0)
+
+    def test_synthesis_skipped_for_single_item(self):
+        client = MockClient()
+        synthesis_calls = []
+        original_call = client.call
+        def call_tracking(system, prompt, max_tokens):
+            if prompt.startswith("Synthesize this course assessment"):
+                synthesis_calls.append(prompt)
+            return original_call(system, prompt, max_tokens)
+        client.call = call_tracking
+        report = assess_design(workspace(), [item()], client)
+        self.assertEqual(len(synthesis_calls), 0)
+        self.assertNotIn("synthesis", report)
 
 
 class ChunkUtilityTests(unittest.TestCase):

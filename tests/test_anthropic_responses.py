@@ -100,8 +100,11 @@ class AnthropicResponseTests(unittest.TestCase):
         client, requests = self.client(content, stop=stop)
         report = assess_design(workspace(), [item(str(index)) for index in range(30)], client, scope="baseline")
         self.assertEqual(report["coverage"]["items_evaluated"], 30)
-        self.assertEqual(len(requests), 30)
-        self.assertTrue(all(json.loads(request.content)["max_tokens"] == 11692 for request in requests))
+        # 30 per-item assessment requests; synthesis adds more (best-effort, failure is safe)
+        item_requests = [r for r in requests
+                         if "Assess this one item" in json.loads(r.content)["messages"][0]["content"]]
+        self.assertEqual(len(item_requests), 30)
+        self.assertTrue(all(json.loads(r.content)["max_tokens"] == 11692 for r in item_requests))
 
     def test_redacted_thinking_and_multiple_text_blocks_are_combined(self):
         client, requests = self.client([

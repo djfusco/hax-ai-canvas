@@ -32,6 +32,14 @@ class PipelineClient:
         self.calls.append((prompt, schema))
         if prompt.startswith("Assess this one item"):
             return json.dumps(response_for(payload(prompt)))
+        if prompt.startswith("Synthesize this course assessment"):
+            return json.dumps({
+                "scaffolding_analysis": "Good progression.",
+                "cross_cutting_concerns": [],
+                "coverage_gaps": [],
+                "course_recommendations": ["Improve rubric clarity"],
+                "limitations": [],
+            })
         if isinstance(self.draft_response, Exception):
             raise self.draft_response
         return self.draft_response if self.draft_response is not None else json.dumps({
@@ -58,7 +66,7 @@ class MentorPipelineTests(unittest.TestCase):
         progress = []
         draft = service.generate_draft(self.state, client, assess=True,
                                        progress=lambda *value: progress.append(value))
-        self.assertEqual(len(client.calls), 61)
+        self.assertEqual(len(client.calls), 63)
         self.assertEqual(len(draft["items"]), 30)
         self.assertEqual(draft["items"][1:], self.originals[1:])
         self.assertEqual(draft["baseline_assessment"]["coverage"]["items_evaluated"], 30)
@@ -68,7 +76,7 @@ class MentorPipelineTests(unittest.TestCase):
         self.assertLess(phases.index("drafting"), phases.index("validating_draft"))
         self.assertLess(phases.index("validating_draft"), phases.index("assessing_draft"))
         self.assertTrue(any("Baseline assessment completed: 30 of 30" in text for _, text in progress))
-        schema = client.calls[30][1]["properties"]["items"]["items"]["properties"]
+        schema = client.calls[31][1]["properties"]["items"]["items"]["properties"]
         self.assertEqual(set(schema["id"]["enum"]), {"", *[str(i) for i in range(30)]})
         self.assertNotIn("course:0", schema["id"]["enum"])
         self.assertIn("course:0", schema["source_ids"]["items"]["enum"])
@@ -87,7 +95,7 @@ class MentorPipelineTests(unittest.TestCase):
             with self.subTest(expected=expected), self.assertRaises(service.MentorResponseError) as error:
                 service.generate_draft(self.state, client, assess=True,
                                        progress=lambda *value: progress.append(value))
-            self.assertEqual(len(client.calls), 31)
+            self.assertEqual(len(client.calls), 32)
             self.assertEqual(progress[-1][0], last_phase)
             self.assertIn(expected, str(error.exception))
             self.assertNotIn("PRIVATE_", str(error.exception))

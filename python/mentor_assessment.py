@@ -629,6 +629,98 @@ def _combine_chunks(chunks):
     return result
 
 
+def _compute_statistics(assessed_items):
+    """Compute Bloom/AIAS distributions and dimension averages from assessed items."""
+    bloom_distribution = {str(i): 0 for i in range(1, 7)}
+    bloom_distribution["null"] = 0
+    aias_observed = {str(i): 0 for i in range(1, 6)}
+    aias_observed["null"] = 0
+    aias_recommended = {str(i): 0 for i in range(1, 6)}
+    aias_recommended["null"] = 0
+    dim_sums = {d: 0 for d in DIMENSIONS}
+    dim_counts = {d: 0 for d in DIMENSIONS}
+    for assessed in assessed_items:
+        bloom_level = assessed.get("blooms", {}).get("level")
+        key = str(bloom_level) if bloom_level is not None else "null"
+        bloom_distribution[key] = bloom_distribution.get(key, 0) + 1
+        aias = assessed.get("aias", {})
+        obs = aias.get("observed_level")
+        rec = aias.get("recommended_level")
+        obs_key = str(obs) if obs is not None else "null"
+        rec_key = str(rec) if rec is not None else "null"
+        aias_observed[obs_key] = aias_observed.get(obs_key, 0) + 1
+        aias_recommended[rec_key] = aias_recommended.get(rec_key, 0) + 1
+        for d in DIMENSIONS:
+            score = assessed.get("dimensions", {}).get(d, {}).get("score")
+            if score is not None:
+                dim_sums[d] += score
+                dim_counts[d] += 1
+    dimension_averages = {
+        d: round(dim_sums[d] / dim_counts[d], 2) if dim_counts[d] else None
+        for d in DIMENSIONS
+    }
+    return {
+        "bloom_distribution": bloom_distribution,
+        "aias_distribution": {"observed": aias_observed, "recommended": aias_recommended},
+        "dimension_averages": dimension_averages,
+    }
+
+
+def synthesize_course(workspace, assessed_items, prepared_items, statistics, client, *, progress=None):
+    """Make one compact LLM call for course-level synthesis. Raises on failure."""
+    from collections import Counter
+    title = workspace.get("title", "")
+    brief = workspace.get("brief", "")
+    concerns_flat = []
+    recs_flat = []
+    items_by_type = {}
+    for a in assessed_items:
+        concerns_flat.extend(a.get("concerns", []))
+        recs_flat.extend(a.get("recommendations", []))
+    for it in prepared_items:
+        kind = it.get("type", "pages")
+        items_by_type.setdefault(kind, []).append(it.get("title", ""))
+    top_concerns = [c for c, _ in Counter(concerns_flat).most_common(10)]
+    top_recs = [r for r, _ in Counter(recs_flat).most_common(10)]
+    payload = {
+        "course_title": title,
+        "brief_excerpt": brief[:3000],
+        "item_count": len(assessed_items),
+        "bloom_distribution": statistics["bloom_distribution"],
+        "aias_distribution": statistics["aias_distribution"],
+        "dimension_averages": statistics["dimension_averages"],
+        "top_concerns": top_concerns,
+        "top_recommendations": top_recs,
+        "item_titles_by_type": items_by_type,
+    }
+    schema = {
+        "type": "object",
+        "properties": {
+            "scaffolding_analysis": {"type": "string"},
+            "cross_cutting_concerns": {"type": "array", "items": {"type": "string"}},
+            "coverage_gaps": {"type": "array", "items": {"type": "string"}},
+            "course_recommendations": {"type": "array", "items": {"type": "string"}},
+            "limitations": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["scaffolding_analysis", "cross_cutting_concerns", "coverage_gaps",
+                     "course_recommendations", "limitations"],
+        "additionalProperties": False,
+    }
+    prompt = (
+        "Synthesize this course assessment into a compact course-level analysis. "
+        "Identify Bloom's progression, cross-cutting concerns, coverage gaps, and 3-5 prioritized "
+        "course-level recommendations. Return strict JSON only.\n"
+        + json.dumps(payload, ensure_ascii=False)
+    )
+    structured = getattr(client, "call_structured", None)
+    response = (structured(SYSTEM, prompt, schema, max_tokens=MAX_TOKENS)
+                if callable(structured)
+                else client.call(SYSTEM, prompt, max_tokens=MAX_TOKENS))
+    if isinstance(response, str):
+        response = json.loads(response)
+    return response
+
+
 def assess_design(workspace, items, client, *, scope="draft", progress=None):
     """Assess every supplied item, or fail without a counterfeit/partial report.
 
@@ -733,6 +825,20 @@ def assess_design(workspace, items, client, *, scope="draft", progress=None):
             report_items_by_position[position] = assessed
 
     report_items = [report_items_by_position[pos] for pos in range(1, len(prepared) + 1)]
+
+    synthesis = None
+    if len(prepared) > 1:
+        statistics = _compute_statistics(report_items)
+        if progress:
+            progress("synthesizing", f"Computing course-level patterns across {len(report_items)} assessed items...")
+        try:
+            if progress:
+                progress("synthesizing", "Generating course analysis and recommendations...")
+            qualitative = synthesize_course(workspace, report_items, prepared, statistics, client, progress=progress)
+            synthesis = {**statistics, **qualitative}
+        except Exception as exc:
+            synthesis = {**statistics, "synthesis_error": str(exc)}
+
     truncated = [item["id"] for item in prepared if item["truncated"]]
     warnings = [*_REPORT_WARNINGS, *warnings]
     if truncated:
@@ -757,7 +863,7 @@ def assess_design(workspace, items, client, *, scope="draft", progress=None):
         metadata["provider"] = provider
     if isinstance(model, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:/@+-]{0,199}", model):
         metadata["model"] = model
-    return {
+    result = {
         "version": 1, "scope": scope, "mode": "ai",
         "frameworks": deepcopy(list(FRAMEWORKS)),
         "coverage": {"items_total": len(prepared), "items_evaluated": len(report_items),
@@ -766,6 +872,9 @@ def assess_design(workspace, items, client, *, scope="draft", progress=None):
         "items": report_items, "summary": summary, "warnings": list(dict.fromkeys(warnings)),
         **metadata,
     }
+    if synthesis is not None:
+        result["synthesis"] = synthesis
+    return result
 
 
 def _assessment_current_single(items, report):
