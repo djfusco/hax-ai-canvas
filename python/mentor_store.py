@@ -517,7 +517,7 @@ class MentorStore:
     def pin_provider(self, owner, id, job_id, provider, model, credential_version, capabilities=None):
         """Pin only nonsecret execution choices; never read mutable model preferences later."""
         from provider_models import model_id
-        if provider not in ("openai", "anthropic", "gemini", "nebula"):
+        if provider not in ("openai", "anthropic", "gemini", "nebula", "openrouter"):
             raise ValueError("Unsupported AI provider.")
         model_id(model)
         if capabilities is not None:

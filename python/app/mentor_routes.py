@@ -258,7 +258,7 @@ def create_mentor_blueprint(root_provider):
         provider = data.get("provider", "guided")
         if provider == "guided":
             return provider, None
-        if provider not in ("nebula", "anthropic", "openai", "gemini"):
+        if provider not in ("nebula", "anthropic", "openai", "gemini", "openrouter"):
             raise ValueError("Unsupported AI provider.")
         values = g.vault.get(g.owner, provider)
         if values is None:
@@ -296,6 +296,11 @@ def create_mentor_blueprint(root_provider):
     @bp.before_request
     def browser_identity():
         from mentor_credentials import CredentialVault, private_key
+        if request.endpoint == "mentor.openrouter_callback":
+            # Reached by a cross-site redirect from openrouter.ai, which does not
+            # carry our SameSite=Strict cookies. Never mint or replace an identity
+            # here; the page finishes the exchange with a same-site request.
+            return
         if hosted_mode():
             try:
                 config = settings()
@@ -553,6 +558,59 @@ def create_mentor_blueprint(root_provider):
         provider = data.get("provider", "")
         validate_gateway(provider, data.get("base_url", ""))
         return jsonify(g.vault.save(g.owner, provider, data, remember=data.get("remember") is True))
+
+    # ── OpenRouter one-click connect (OAuth PKCE) ─────────────────────────────
+    # https://openrouter.ai/docs/use-cases/oauth-pkce
+    OPENROUTER_AUTH = "https://openrouter.ai/auth"
+    OPENROUTER_KEYS = "https://openrouter.ai/api/v1/auth/keys"
+
+    def app_origin():
+        return g.hosted_config.origin if hosted_mode() else request.host_url.rstrip("/")
+
+    @bp.post("/api/openrouter/start")
+    def openrouter_start():
+        import base64
+        from urllib.parse import urlencode
+        verifier = secrets.token_urlsafe(64)
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+        url = OPENROUTER_AUTH + "?" + urlencode({
+            "callback_url": app_origin() + "/mentor/openrouter/callback",
+            "code_challenge": challenge, "code_challenge_method": "S256"})
+        response = jsonify({"url": url})
+        response.set_cookie("openrouter_pkce", g.mentor_signer.dumps({"verifier": verifier, "owner": g.owner}),
+                            max_age=600, path="/mentor", httponly=True,
+                            secure=hosted_mode() or request.is_secure, samesite="Strict")
+        return response
+
+    @bp.get("/openrouter/callback")
+    def openrouter_callback():
+        return render_template("openrouter_callback.html")
+
+    @bp.post("/api/openrouter/exchange")
+    def openrouter_exchange():
+        import httpx
+        code = payload().get("code")
+        if not isinstance(code, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,512}", code):
+            raise ValueError("OpenRouter returned an invalid authorization code. Try connecting again.")
+        try:
+            pending = g.mentor_signer.loads(request.cookies.get("openrouter_pkce", ""), max_age=600)
+        except (BadSignature, SignatureExpired):
+            pending = None
+        if not isinstance(pending, dict) or pending.get("owner") != g.owner:
+            raise ValueError("This OpenRouter connection was not started here or has expired. Try connecting again.")
+        try:
+            with httpx.Client(trust_env=False, follow_redirects=False, timeout=15) as http:
+                response = http.post(OPENROUTER_KEYS, json={
+                    "code": code, "code_verifier": pending["verifier"], "code_challenge_method": "S256"})
+            key = response.json().get("key") if response.is_success else None
+        except (httpx.HTTPError, ValueError):
+            key = None
+        if not isinstance(key, str) or not key.strip():
+            raise ValueError("OpenRouter did not issue a key. Try connecting again.")
+        g.vault.save(g.owner, "openrouter", {"api_key": key.strip()}, remember=True)
+        result = jsonify({"ok": True, "provider": "openrouter"})
+        result.delete_cookie("openrouter_pkce", path="/mentor")
+        return result
 
     @bp.delete("/api/credentials/<provider>")
     def forget_credentials(provider):

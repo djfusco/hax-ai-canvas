@@ -154,7 +154,7 @@ def execute_mentor(owner, workspace_id, job_id, kind, provider="guided", backend
     ai = None
     try:
         if provider != "guided" and kind != "build":
-            if provider not in ("nebula", "anthropic", "openai", "gemini"):
+            if provider not in ("nebula", "anthropic", "openai", "gemini", "openrouter"):
                 raise ValueError("Unsupported provider.")
             saved = service.vault.get(owner, provider)
             if (not saved or not active.get("model") or active.get("provider") != provider

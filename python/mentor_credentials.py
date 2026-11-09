@@ -18,7 +18,7 @@ from contextlib import contextmanager
 
 from cryptography.fernet import Fernet, InvalidToken
 
-PROVIDERS = ("nebula", "anthropic", "openai", "gemini")
+PROVIDERS = ("nebula", "anthropic", "openai", "gemini", "openrouter")
 SESSION_TTL = 12 * 60 * 60
 REMEMBER_TTL = 30 * 24 * 60 * 60
 

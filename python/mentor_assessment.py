@@ -869,7 +869,7 @@ def assess_design(workspace, items, client, *, scope="draft", progress=None):
     metadata = {}
     provider = getattr(client, "provider", None)
     model = getattr(client, "model", None)
-    if isinstance(provider, str) and provider in ("openai", "anthropic", "gemini", "nebula"):
+    if isinstance(provider, str) and provider in ("openai", "anthropic", "gemini", "nebula", "openrouter"):
         metadata["provider"] = provider
     if isinstance(model, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:/@+-]{0,199}", model):
         metadata["model"] = model

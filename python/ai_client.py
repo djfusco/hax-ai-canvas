@@ -302,6 +302,7 @@ class AIClient:
                 "anthropic": "https://api.anthropic.com",
                 "openai": "https://api.openai.com/v1",
                 "gemini": "https://generativelanguage.googleapis.com",
+                "openrouter": "https://openrouter.ai/api/v1",
             }
             base_url = base_url if p == "nebula" else origins.get(p)
             if not base_url:
@@ -322,7 +323,7 @@ class AIClient:
                         del request.headers[header]
                 if p in ("anthropic", "nebula"):
                     request.headers["x-api-key"] = api_key
-                elif p == "openai":
+                elif p in ("openai", "openrouter"):
                     request.headers["authorization"] = "Bearer " + api_key
                 else:
                     request.headers["x-goog-api-key"] = api_key
@@ -357,6 +358,14 @@ class AIClient:
                                   **({"max_retries": 0} if self.isolated_credentials else {}))
             print(f"  AI : OpenAI/{self.model}")
 
+        elif p == "openrouter":
+            if not HAS_OPENAI:
+                raise ImportError("openai package missing — pip install openai")
+            if not self.isolated_credentials:
+                raise ValueError("OpenRouter is available only with explicit per-user credentials.")
+            # OpenAI-compatible API; the isolating transport pins openrouter.ai.
+            self._client = OpenAI(api_key=api_key, max_retries=0, **isolated_options)
+
         elif p == "gemini":
             if not HAS_GEMINI:
                 raise ImportError(
@@ -375,7 +384,7 @@ class AIClient:
 
         else:
             raise ValueError(
-                f"Unknown provider {p!r}. Choose from: anthropic, nebula, openai, gemini"
+                f"Unknown provider {p!r}. Choose from: anthropic, nebula, openai, gemini, openrouter"
             )
 
     # ── public API ────────────────────────────────────────────────────────────
@@ -480,6 +489,15 @@ class AIClient:
                 timeout=effective_timeout,
             )
             return _openai_chat_text(r) if plan else r.choices[0].message.content.strip()
+
+        if p == "openrouter":
+            options = {"model": self.model, "max_tokens": output, "timeout": effective_timeout,
+                       "messages": [{"role": "system", "content": system},
+                                    {"role": "user", "content": prompt}]}
+            if schema is not None:
+                options["response_format"] = {"type": "json_schema", "json_schema": {
+                    "name": "course_consultant", "schema": schema, "strict": True}}
+            return _openai_chat_text(self._client.chat.completions.create(**options))
 
         if p == "gemini":
             # Gemini uses a single combined prompt

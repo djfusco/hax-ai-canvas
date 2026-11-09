@@ -20,9 +20,11 @@ MAX_OUTPUT_LIMIT = 2_000_000
 TOKEN_ESTIMATION = "Conservative UTF-8 byte estimate plus 256 protocol tokens; not exact tokenization."
 
 _DEFAULT_API = {"anthropic": "messages", "nebula": "messages",
-                "openai": "chat_completions", "gemini": "generate_content"}
+                "openai": "chat_completions", "gemini": "generate_content",
+                "openrouter": "openrouter_chat"}
 _OUTPUT_PARAMETER = {"messages": "max_tokens", "chat_completions": "max_completion_tokens",
-                     "responses": "max_output_tokens", "generate_content": "max_output_tokens"}
+                     "responses": "max_output_tokens", "generate_content": "max_output_tokens",
+                     "openrouter_chat": "max_tokens"}
 _SOURCES = {
     "fallback": "conservative local fallback",
     "unsupported": "local text compatibility policy",
@@ -32,6 +34,7 @@ _SOURCES = {
     "anthropic_metadata": "Anthropic model catalog",
     "nebula_metadata": "Institutional gateway model catalog",
     "gemini_metadata": "Gemini model catalog",
+    "openrouter_metadata": "OpenRouter model catalog",
 }
 _WARNINGS = {
     "unverified": "Unverified model: conservative local ceilings are not verified provider limits or API compatibility.",
@@ -225,7 +228,43 @@ def resolve_capabilities(provider, model, metadata=None):
                 profile["context_window"] = None if provider == "gemini" else metadata[raw]
         else:
             invalid = True
-    if provider == "gemini":
+    if provider == "openrouter":
+        # https://openrouter.ai/docs/api-reference/list-available-models
+        architecture = metadata.get("architecture")
+        if isinstance(architecture, dict):
+            outputs = architecture.get("output_modalities")
+            inputs = architecture.get("input_modalities")
+            if (isinstance(outputs, list) and "text" not in outputs) or (
+                    isinstance(inputs, list) and "text" not in inputs):
+                profile.update(status="unsupported", api=None, reasoning=False, effort=None,
+                               structured_outputs=False,
+                               source=_SOURCES["unsupported"], warnings=[_WARNINGS["unsupported"]])
+                return profile
+        top = metadata.get("top_provider") if isinstance(metadata.get("top_provider"), dict) else {}
+        context = metadata.get("context_length", top.get("context_length"))
+        if context is not None:
+            if _integer(context, MAX_INPUT_LIMIT):
+                profile.update(context_window=context, input_limit=context)
+                changed = True
+                valid_limits += 1
+            else:
+                invalid = True
+        completion = top.get("max_completion_tokens")
+        if completion is not None:
+            if _integer(completion, MAX_OUTPUT_LIMIT) and (context is None or completion <= context):
+                profile["output_limit"] = completion
+                changed = True
+                valid_limits += 1
+            else:
+                invalid = True
+        parameters = metadata.get("supported_parameters")
+        if isinstance(parameters, list) and all(isinstance(p, str) for p in parameters):
+            profile["structured_outputs"] = "structured_outputs" in parameters
+            profile["reasoning"] = "reasoning" in parameters
+            changed = True
+        elif parameters is not None:
+            invalid = True
+    elif provider == "gemini":
         methods = metadata.get("supportedGenerationMethods")
         if methods is not None:
             if isinstance(methods, list) and all(isinstance(x, str) for x in methods):

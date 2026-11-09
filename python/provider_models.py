@@ -33,6 +33,20 @@ def validate_gateway(provider, value):
         raise ValueError("Use an HTTPS Azure APIM gateway or an administrator-allowlisted AI host.")
 
 
+def _pricing(item):
+    """OpenRouter USD per million tokens, for showing instructors what a model costs."""
+    pricing = item.get("pricing") if isinstance(item.get("pricing"), dict) else {}
+    result = {}
+    for key, label in (("prompt", "input_per_million"), ("completion", "output_per_million")):
+        try:
+            value = float(pricing.get(key))
+        except (TypeError, ValueError):
+            continue
+        if 0 <= value < 1:
+            result[label] = round(value * 1_000_000, 4)
+    return result
+
+
 def discover_models(provider, saved, *, transport=None):
     import httpx
     key = saved["api_key"]
@@ -48,10 +62,15 @@ def discover_models(provider, saved, *, transport=None):
         headers = {"x-api-key": key, "anthropic-version": "2023-06-01"}
     elif provider == "gemini":
         url, headers = "https://generativelanguage.googleapis.com/v1beta/models", {"x-goog-api-key": key}
+    elif provider == "openrouter":
+        url, headers = "https://openrouter.ai/api/v1/models", {"Authorization": "Bearer " + key}
     else:
         raise ValueError("Unsupported AI provider.")
     result, seen, cursors = [], set(), set()
-    params = {"pageSize": 100} if provider == "gemini" else {"limit": 100} if provider != "openai" else {}
+    params = ({"pageSize": 100} if provider == "gemini"
+              else {} if provider in ("openai", "openrouter") else {"limit": 100})
+    # OpenRouter returns its whole catalog, with descriptions, in one response.
+    max_bytes = 8 * 1024 * 1024 if provider == "openrouter" else 1024 * 1024
     deadline = time.monotonic() + 20
     try:
         with httpx.Client(trust_env=False, follow_redirects=False, transport=transport) as client:
@@ -69,7 +88,7 @@ def discover_models(provider, saved, *, transport=None):
                     content = bytearray()
                     for chunk in response.iter_bytes():
                         content.extend(chunk)
-                        if len(content) > 1024 * 1024 or time.monotonic() > deadline:
+                        if len(content) > max_bytes or time.monotonic() > deadline:
                             raise ModelDiscoveryError("Provider catalog exceeded its time or size limit.")
                     import json
                     data = json.loads(content)
@@ -88,18 +107,23 @@ def discover_models(provider, saved, *, transport=None):
                     identifier = model_id(identifier)
                     if key in identifier:
                         continue
+                    if provider == "openrouter" and resolve_capabilities(
+                            provider, identifier, item)["status"] == "unsupported":
+                        continue
                     if provider != "nebula" and re.search(
                             r"(embed|whisper|tts|image|audio|realtime|moderation|dall-e|video|sora)", identifier, re.I):
                         continue
                     if item.get("lifecycle") == "retired" or identifier in seen:
                         continue
                     seen.add(identifier)
-                    label = item.get("displayName", item.get("display_name", identifier))
+                    label = item.get("displayName", item.get("display_name", item.get("name", identifier)
+                                     if provider == "openrouter" else identifier))
                     if not isinstance(label, str):
                         label = identifier
                     label = label.replace(key, "[credential removed]")
                     result.append({"id": identifier, "name": "".join(c for c in label[:160] if c.isprintable()),
                                    "compatibility": "unverified" if provider in ("openai", "nebula") else "text",
+                                   **({"pricing": _pricing(item)} if provider == "openrouter" else {}),
                                    "capabilities": resolve_capabilities(provider, identifier, item)})
                     if len(result) > 500:
                         raise ModelDiscoveryError("More than 500 text-model candidates were returned. Narrow the provider catalog.")
