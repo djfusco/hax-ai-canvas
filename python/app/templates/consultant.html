@@ -82,7 +82,8 @@
     <nav class="cc-tabs" role="tablist" aria-label="Course Consultant">
       <button role="tab" id="tab-course" aria-controls="view-course" aria-selected="true" type="button">1 · Your course</button>
       <button role="tab" id="tab-consult" aria-controls="view-consult" aria-selected="false" type="button">2 · Consultation</button>
-      <button role="tab" id="tab-plan" aria-controls="view-plan" aria-selected="false" type="button">3 · Proposed changes <span id="cc-plan-count" class="cc-count" hidden></span></button>
+      <button role="tab" id="tab-plan" aria-controls="view-plan" aria-selected="false" type="button">3 · Plan <span id="cc-plan-count" class="cc-count" hidden></span></button>
+      <button role="tab" id="tab-docs" aria-controls="view-docs" aria-selected="false" type="button">4 · Revised documents</button>
     </nav>
 
     <!-- 1. Course -->
@@ -175,12 +176,55 @@
       </div>
     </section>
 
-    <!-- 3. Proposed changes -->
+    <!-- 3. Plan -->
     <section id="view-plan" role="tabpanel" aria-labelledby="tab-plan" hidden>
-      <h1>Proposed changes</h1>
-      <p class="cc-muted">Ideas from your consultation, each with its reasoning. Accepting and editing changes, and turning
-        them into revised documents, are coming next.</p>
+      <div class="cc-head">
+        <div><h1>Course Improvement Plan</h1>
+          <p class="cc-muted">Decide on each proposed change, then draft and edit the plan. Only changes you accept go into the plan and your revised documents.</p></div>
+        <div class="cc-row">
+          <a id="cc-plan-word" class="cc-btn cc-btn-quiet" href="#" download>Download Word</a>
+          <a id="cc-plan-html" class="cc-btn cc-btn-quiet" href="#" download>Download HTML</a>
+        </div>
+      </div>
+      <h2>Proposed changes</h2>
       <div id="cc-proposals"></div>
+      <article class="cc-card cc-plan">
+        <div class="cc-head"><h2>Plan</h2>
+          <button id="cc-plan-draft" type="button" class="cc-btn">Draft the plan with AI</button></div>
+        <p id="cc-plan-note" class="cc-muted"></p>
+        <form id="cc-plan-form">
+          <label for="cc-plan-vision">Course vision</label>
+          <textarea id="cc-plan-vision" rows="4" maxlength="3000"></textarea>
+          <label for="cc-plan-outcomes">Learning outcomes (one per line)</label>
+          <textarea id="cc-plan-outcomes" rows="6"></textarea>
+          <label for="cc-plan-policy">Course AI policy (for students)</label>
+          <textarea id="cc-plan-policy" rows="5" maxlength="4000"></textarea>
+          <label for="cc-plan-questions">Open questions (one per line)</label>
+          <textarea id="cc-plan-questions" rows="3"></textarea>
+          <button type="submit" class="cc-btn">Save plan</button>
+        </form>
+      </article>
+    </section>
+
+    <!-- 4. Revised documents -->
+    <section id="view-docs" role="tabpanel" aria-labelledby="tab-docs" hidden>
+      <div class="cc-head">
+        <div><h1>Revised documents</h1>
+          <p class="cc-muted">Generate documents that carry out your accepted changes. Edit and approve each one; only approved documents are downloaded.</p></div>
+        <div class="cc-row">
+          <a id="cc-docs-zip" class="cc-btn" href="#" download>Download all (Word + HTML)</a>
+          <a id="cc-docs-hax" class="cc-btn cc-btn-quiet" href="#" download>Download HAX site</a>
+        </div>
+      </div>
+      <article class="cc-card">
+        <h2>Create a document</h2>
+        <div class="cc-row">
+          <label for="cc-target" class="cc-sr">Document to create</label>
+          <select id="cc-target"></select>
+          <button id="cc-generate" type="button" class="cc-btn">Write it</button>
+        </div>
+      </article>
+      <div id="cc-documents"></div>
     </section>
   </div>
 </div>

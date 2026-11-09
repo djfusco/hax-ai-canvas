@@ -35,6 +35,14 @@ class FakeAI:
     def preflight_structured(self, *args, **kwargs):
         return {}
     def call_structured(self, system, prompt, schema, max_tokens=4096):
+        if "drafting a Course Improvement Plan" in system:
+            return json.dumps({"vision": "A first-year course where students build arguments from evidence.",
+                               "outcomes": [{"text": "Construct a scientific argument from evidence.", "note": "unchanged"}],
+                               "ai_policy": "You may use AI to practise; cite any AI help.",
+                               "open_questions": ["Keep the final exam?"]})
+        if "revising a faculty member's course documents" in system:
+            return json.dumps({"title": "BIO 101 Syllabus", "html": "<h1>BIO 101 Syllabus</h1><p>Essay outline due in week 1.</p>",
+                               "summary_of_changes": "Added the outline checkpoint.", "applied_proposals": ["p-1"]})
         if "first session" in prompt:
             return json.dumps({"reply": "Here's what I see: **two modules** and weighted grading.\n- Labs are 30%\n- The essay has a rubric\nWho are your students?",
                                "topic_updates": [{"topic": "purpose", "status": "in_progress", "facts": [], "goals": [],
@@ -144,10 +152,40 @@ test('instructor journey: model, export upload, course map, consultation, propos
       assert.equal(await page.locator('#cc-plan-count').textContent(), '1');
       await shot(page, '3-consultation');
 
-      // Proposed changes
+      // Plan: decide, draft, edit
       await page.click('#tab-plan');
+      await page.locator('.cc-proposal').first().waitFor();
       assert.match(await page.locator('#cc-proposals').textContent(), /Add a graded outline before the essay.*AI-resilient assessment/s);
-      await shot(page, '4-proposals');
+      await page.click('.cc-proposal button:has-text("Accept")');
+      await page.locator('.cc-proposal .cc-tag:has-text("Accepted")').waitFor();
+      assert.equal(await page.locator('#cc-plan-count').isHidden(), true);
+      await page.click('#cc-plan-draft');
+      await page.waitForFunction(() => document.querySelector('#cc-plan-vision').value.includes('build arguments'));
+      await page.fill('#cc-plan-questions', 'Keep the final exam?\nAdd a lab practical?');
+      await page.click('#cc-plan-form button[type=submit]');
+      await page.waitForFunction(() => document.querySelector('#cc-status').textContent.includes('Plan saved'));
+      const planHtml = await page.evaluate(async () => (await fetch(document.querySelector('#cc-plan-html').href)).text());
+      assert.match(planHtml, /Add a lab practical\?/);
+      assert.match(planHtml, /Add a graded outline before the essay/);
+      await shot(page, '4-plan');
+
+      // Revised documents
+      await page.click('#tab-docs');
+      await page.locator('#cc-target option').first().waitFor({ state: 'attached' });
+      assert.match(await page.locator('#cc-target option').first().textContent(), /Revised syllabus \(applies 1 accepted change\)/);
+      await page.click('#cc-generate');
+      await page.locator('.cc-document').waitFor();
+      const frame = page.frameLocator('.cc-doc-frame');
+      assert.equal(await frame.locator('h1').textContent(), 'BIO 101 Syllabus');
+      await page.click('.cc-document button:has-text("Approve")');
+      await page.locator('.cc-document .cc-tag:has-text("Approved")').waitFor();
+      const zip = await page.evaluate(async () => {
+        const response = await fetch(document.querySelector('#cc-docs-zip').href);
+        return { status: response.status, type: response.headers.get('content-type'), size: (await response.arrayBuffer()).byteLength };
+      });
+      assert.deepEqual([zip.status, zip.type], [200, 'application/zip']);
+      assert.ok(zip.size > 1000);
+      await shot(page, '5-documents');
 
       // Returning later shows where we left off
       await page.reload();
@@ -170,7 +208,7 @@ test('mobile width has no horizontal scroll', { skip: !playwright, timeout: 6000
     await page.goto(`${ORIGIN}/mentor`);
     await page.locator('#cc-intake').waitFor({ state: 'visible' });
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
-    await shot(page, '5-mobile');
+    await shot(page, '6-mobile');
     assert.ok(overflow <= 0, `page scrolls horizontally by ${overflow}px`);
   } finally {
     await browser.close();

@@ -107,3 +107,16 @@
 .cc-proposal dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 8px 0 0; }
 .cc-proposal dt { color: var(--cc-muted); }
 .cc-proposal dd { margin: 0; }
+
+/* Plan and documents */
+.cc-tag.good { border-color: var(--cc-good); color: var(--cc-good); }
+.cc-proposal h3 { margin: 0; font-size: 1.05rem; }
+.cc-status-rejected { opacity: .65; }
+.cc-plan { margin-top: 16px; }
+.cc-plan textarea { margin-bottom: 4px; }
+.cc-document { margin-top: 16px; }
+.cc-doc-frame { width: 100%; height: 360px; border: 1px solid var(--cc-line); border-radius: 8px; background: #fff; }
+@media (prefers-color-scheme: dark) { .cc-doc-frame { background: #1d2129; } }
+.cc-code { font-family: ui-monospace, monospace; font-size: .85em; }
+.cc-disabled { opacity: .5; }
+.cc-head .cc-row { margin-top: 0; }

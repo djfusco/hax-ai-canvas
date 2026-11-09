@@ -284,14 +284,15 @@
 
   function selectTab(name) {
     state.tab = name;
-    for (const tab of ['course', 'consult', 'plan']) {
+    for (const tab of ['course', 'consult', 'plan', 'docs']) {
       $('tab-' + tab).setAttribute('aria-selected', String(tab === name));
       $('view-' + tab).hidden = tab !== name;
     }
     if (name === 'consult') renderConsult();
-    if (name === 'plan') renderPlan();
+    if (name === 'plan') run('Loading the plan…', loadPlan);
+    if (name === 'docs') run('Loading documents…', loadDocuments);
   }
-  for (const tab of ['course', 'consult', 'plan']) $('tab-' + tab).addEventListener('click', () => selectTab(tab));
+  for (const tab of ['course', 'consult', 'plan', 'docs']) $('tab-' + tab).addEventListener('click', () => selectTab(tab));
 
   // ── course intake ────────────────────────────────────────────────────────
 
@@ -304,7 +305,8 @@
     if (course) renderCourse();
     renderPlanCount();
     if (state.tab === 'consult') renderConsult();
-    if (state.tab === 'plan') renderPlan();
+    if (state.tab === 'plan') await loadPlan();
+    if (state.tab === 'docs') await loadDocuments();
   }
 
   function intakeForm() {
@@ -568,29 +570,205 @@
       { method: 'POST', json: { directness: event.target.value } });
   }));
 
-  // ── proposed changes ─────────────────────────────────────────────────────
+  // ── plan ─────────────────────────────────────────────────────────────────
+
+  const STATUS_LABELS = { proposed: 'Undecided', accepted: 'Accepted', rejected: 'Rejected', deferred: 'Deferred' };
 
   function proposals() {
     return (state.consult && state.consult.state && state.consult.state.proposals) || [];
   }
 
   function renderPlanCount() {
-    const count = proposals().length;
-    $('cc-plan-count').textContent = String(count);
-    $('cc-plan-count').hidden = !count;
+    const waiting = proposals().filter(p => p.status === 'proposed').length;
+    $('cc-plan-count').textContent = String(waiting);
+    $('cc-plan-count').hidden = !waiting;
+  }
+
+  function base() { return `/mentor/api/workspaces/${state.workspace.id}`; }
+
+  async function loadPlan() {
+    state.plan = await api(base() + '/plan');
+    renderPlan();
+  }
+
+  function decide(id, status, edits = {}) {
+    return run('Saving…', async () => {
+      state.plan = await api(`${base()}/consult/proposals/${encodeURIComponent(id)}`, { method: 'POST', json: { status, ...edits } });
+      if (state.consult && state.consult.state) state.consult.state.proposals = state.plan.proposals;
+      renderPlan();
+      renderPlanCount();
+    });
+  }
+
+  function proposalCard(p, topics) {
+    const card = el('article', { class: 'cc-card cc-proposal cc-status-' + p.status });
+    const view = () => {
+      card.replaceChildren(
+        el('div', { class: 'cc-head' }, el('h3', { text: p.title }),
+          el('span', { class: 'cc-tag' + (p.status === 'accepted' ? ' good' : ''), text: STATUS_LABELS[p.status] })),
+        el('p', { class: 'cc-muted' }, topics[p.topic] || p.topic, ' · ', `${p.effort} effort`,
+          p.ai_dimension !== 'none' ? ` · ${AI_DIMENSIONS[p.ai_dimension]}` : ''),
+        el('p', { text: p.change }),
+        el('dl', {}, el('dt', { text: 'Why' }), el('dd', { text: p.rationale }),
+          el('dt', { text: 'Principle' }), el('dd', { text: p.principle })),
+        el('div', { class: 'cc-row' },
+          p.status !== 'accepted' ? el('button', { type: 'button', class: 'cc-btn', text: 'Accept', onclick: () => decide(p.id, 'accepted') }) : null,
+          p.status !== 'deferred' ? el('button', { type: 'button', class: 'cc-btn cc-btn-quiet', text: 'Later', onclick: () => decide(p.id, 'deferred') }) : null,
+          p.status !== 'rejected' ? el('button', { type: 'button', class: 'cc-btn cc-btn-quiet', text: 'Reject', onclick: () => decide(p.id, 'rejected') }) : null,
+          p.status !== 'proposed' ? el('button', { type: 'button', class: 'cc-btn cc-btn-quiet', text: 'Undo', onclick: () => decide(p.id, 'proposed') }) : null,
+          el('button', { type: 'button', class: 'cc-btn cc-btn-quiet', text: 'Edit', onclick: edit })));
+    };
+    const edit = () => {
+      const title = el('input', { value: p.title, maxlength: 200, 'aria-label': 'Title' });
+      const change = el('textarea', { rows: 3, maxlength: 2000, 'aria-label': 'Change' });
+      change.value = p.change;
+      const rationale = el('textarea', { rows: 2, maxlength: 2000, 'aria-label': 'Why' });
+      rationale.value = p.rationale;
+      card.replaceChildren(el('label', { text: 'Title' }), title, el('label', { text: 'Change' }), change,
+        el('label', { text: 'Why' }), rationale,
+        el('div', { class: 'cc-row' },
+          el('button', { type: 'button', class: 'cc-btn', text: 'Save and accept', onclick: () =>
+            decide(p.id, 'accepted', { title: title.value, change: change.value, rationale: rationale.value }) }),
+          el('button', { type: 'button', class: 'cc-btn cc-btn-quiet', text: 'Cancel', onclick: view })));
+      title.focus();
+    };
+    view();
+    return card;
   }
 
   function renderPlan() {
-    const list = proposals();
+    if (!state.plan) return;
     const topics = Object.fromEntries((state.consult ? state.consult.topics : []).map(t => [t.id, t.label]));
-    $('cc-proposals').replaceChildren(...(list.length ? list.map(p => el('article', { class: 'cc-card cc-proposal' },
-      el('h2', { text: p.title }),
-      el('p', { class: 'cc-muted' }, topics[p.topic] || p.topic, ' · ', `${p.effort} effort`,
-        p.ai_dimension !== 'none' ? ` · ${AI_DIMENSIONS[p.ai_dimension]}` : ''),
-      el('p', { text: p.change }),
-      el('dl', {}, el('dt', { text: 'Why' }), el('dd', { text: p.rationale }),
-        el('dt', { text: 'Principle' }), el('dd', { text: p.principle })))) :
-      [el('p', { class: 'cc-banner', text: 'No proposed changes yet. They appear here as the consultation goes on.' })]));
+    const order = { proposed: 0, accepted: 1, deferred: 2, rejected: 3 };
+    const list = [...state.plan.proposals].sort((a, b) => order[a.status] - order[b.status]);
+    $('cc-proposals').replaceChildren(...(list.length ? list.map(p => proposalCard(p, topics))
+      : [el('p', { class: 'cc-banner', text: 'No proposed changes yet. They appear as the consultation goes on.' })]));
+    const plan = state.plan.plan;
+    $('cc-plan-vision').value = plan.vision || '';
+    $('cc-plan-outcomes').value = plan.outcomes.map(o => o.text).join('\n');
+    $('cc-plan-policy').value = plan.ai_policy || '';
+    $('cc-plan-questions').value = plan.open_questions.join('\n');
+    const accepted = state.plan.proposals.filter(p => p.status === 'accepted').length;
+    $('cc-plan-note').textContent = !state.plan.consulted
+      ? 'Hold the consultation first; the plan is drafted from it.'
+      : `${accepted} accepted change${accepted === 1 ? '' : 's'} will shape the plan.`
+        + (plan.drafted_at ? ' Drafting again replaces the text below.' : '');
+    $('cc-plan-draft').disabled = !state.plan.consulted;
+    $('cc-plan-word').href = base() + '/plan/export?format=docx';
+    $('cc-plan-html').href = base() + '/plan/export?format=html';
+  }
+
+  $('cc-plan-draft').addEventListener('click', () => run('Drafting the plan… this can take a minute', async () => {
+    requireAi();
+    if (state.plan.plan.vision && !window.confirm('Replace the current plan text with a new draft?')) return;
+    state.plan = await api(base() + '/plan/draft', { method: 'POST', json: { provider: state.provider } });
+    renderPlan();
+  }));
+  $('cc-plan-form').addEventListener('submit', event => {
+    event.preventDefault();
+    const lines = id => $(id).value.split('\n').map(l => l.trim()).filter(Boolean);
+    run('Saving the plan…', async () => {
+      const notes = Object.fromEntries(state.plan.plan.outcomes.map(o => [o.text, o.note]));
+      state.plan = await api(base() + '/plan', { method: 'PUT', json: {
+        vision: $('cc-plan-vision').value, ai_policy: $('cc-plan-policy').value,
+        outcomes: lines('cc-plan-outcomes').map(text => ({ text, note: notes[text] || '' })),
+        open_questions: lines('cc-plan-questions') } });
+      renderPlan();
+      status('Plan saved.');
+    });
+  });
+
+  // ── revised documents ────────────────────────────────────────────────────
+
+  async function loadDocuments() {
+    state.docs = await api(base() + '/documents');
+    renderDocuments();
+  }
+
+  function renderDocuments() {
+    const view = state.docs;
+    const select = $('cc-target');
+    const kinds = { syllabus: 'Syllabus', assignment: 'Assignment', rubric: 'Rubric' };
+    select.replaceChildren(...view.targets.map((t, index) => el('option', { value: String(index),
+      text: (t.kind === 'syllabus' ? 'Revised syllabus' : `${kinds[t.kind]}: ${t.title.replace(/^Rubric: /, '')}`)
+        + (t.proposals.length ? ` (applies ${plural(t.proposals.length, 'accepted change')})` : '') })));
+    $('cc-generate').disabled = !view.targets.length;
+    const approved = view.documents.filter(d => d.status === 'approved').length;
+    for (const id of ['cc-docs-zip', 'cc-docs-hax']) {
+      $(id).setAttribute('aria-disabled', String(!approved));
+      $(id).classList.toggle('cc-disabled', !approved);
+    }
+    $('cc-docs-zip').href = base() + '/documents/export';
+    $('cc-docs-hax').href = base() + '/documents/export?format=hax';
+    $('cc-documents').replaceChildren(...(view.documents.length ? [...view.documents].reverse().map(documentCard)
+      : [el('p', { class: 'cc-banner', text: 'No documents yet. Accept changes in the plan, then write a revised syllabus, assignment or rubric.' })]));
+  }
+
+  function documentCard(d) {
+    const card = el('article', { class: 'cc-card cc-document' });
+    const preview = () => {
+      const frame = el('div', { class: 'cc-doc-body' });
+      // Server-sanitized HTML is shown in an isolated, script-less frame.
+      const iframe = el('iframe', { sandbox: '', title: d.title, class: 'cc-doc-frame' });
+      iframe.srcdoc = `<!doctype html><meta charset=utf-8><style>body{font:15px/1.5 system-ui;margin:12px;color:#1d2330}
+        table{border-collapse:collapse}td,th{border:1px solid #ccd;padding:6px;vertical-align:top;text-align:left}
+        @media (prefers-color-scheme:dark){body{background:#1d2129;color:#e7eaf0}}</style>${d.html}`;
+      frame.append(iframe);
+      card.replaceChildren(
+        el('div', { class: 'cc-head' }, el('h2', { text: d.title }),
+          el('span', { class: 'cc-tag' + (d.status === 'approved' ? ' good' : ''), text: d.status === 'approved' ? 'Approved' : 'Draft' })),
+        d.summary ? el('p', { class: 'cc-muted', text: d.summary }) : null,
+        frame,
+        el('div', { class: 'cc-row' },
+          d.status !== 'approved'
+            ? el('button', { type: 'button', class: 'cc-btn', text: 'Approve', onclick: () => change(d.id, { status: 'approved' }) })
+            : el('button', { type: 'button', class: 'cc-btn cc-btn-quiet', text: 'Back to draft', onclick: () => change(d.id, { status: 'draft' }) }),
+          el('button', { type: 'button', class: 'cc-btn cc-btn-quiet', text: 'Edit', onclick: edit }),
+          el('a', { class: 'cc-btn cc-btn-quiet', href: `${base()}/documents/${d.id}/export?format=docx`, download: '', text: 'Word' }),
+          el('a', { class: 'cc-btn cc-btn-quiet', href: `${base()}/documents/${d.id}/export`, download: '', text: 'HTML' }),
+          el('button', { type: 'button', class: 'cc-btn cc-btn-quiet', text: 'Delete', onclick: () => {
+            if (window.confirm(`Delete “${d.title}”?`)) run('Deleting…', async () => {
+              state.docs = await api(`${base()}/documents/${d.id}`, { method: 'DELETE' });
+              renderDocuments();
+            });
+          } })));
+    };
+    const edit = () => {
+      const title = el('input', { value: d.title, maxlength: 240, 'aria-label': 'Title' });
+      const html = el('textarea', { rows: 16, class: 'cc-code', 'aria-label': 'Document HTML' });
+      html.value = d.html;
+      card.replaceChildren(el('label', { text: 'Title' }), title,
+        el('label', { text: 'Content (HTML: headings, paragraphs, lists, tables)' }), html,
+        el('p', { class: 'cc-muted', text: 'Saving returns the document to draft so you can review it before approving.' }),
+        el('div', { class: 'cc-row' },
+          el('button', { type: 'button', class: 'cc-btn', text: 'Save', onclick: () => change(d.id, { title: title.value, html: html.value }) }),
+          el('button', { type: 'button', class: 'cc-btn cc-btn-quiet', text: 'Cancel', onclick: preview })));
+    };
+    preview();
+    return card;
+  }
+
+  function change(id, body) {
+    return run('Saving…', async () => {
+      state.docs = await api(`${base()}/documents/${id}`, { method: 'PUT', json: body });
+      renderDocuments();
+    });
+  }
+
+  $('cc-generate').addEventListener('click', () => run('Writing the document… this can take a minute', async () => {
+    requireAi();
+    const target = state.docs.targets[Number($('cc-target').value)];
+    state.docs = await api(base() + '/documents/generate', { method: 'POST',
+      json: { provider: state.provider, kind: target.kind, item_id: target.item_id } });
+    renderDocuments();
+  }));
+  for (const id of ['cc-docs-zip', 'cc-docs-hax']) {
+    $(id).addEventListener('click', event => {
+      if ($(id).getAttribute('aria-disabled') === 'true') {
+        event.preventDefault();
+        showError('Approve at least one document first.');
+      }
+    });
   }
 
   // ── start ────────────────────────────────────────────────────────────────
