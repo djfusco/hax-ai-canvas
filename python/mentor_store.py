@@ -352,10 +352,55 @@ class MentorStore:
         if role not in ("user", "assistant", "instructor", "system"):
             raise ValueError("Invalid message role.")
         _text(content, "message content")
-        if kind not in ("interview", "review"):
+        if kind not in ("interview", "review", "consult"):
             raise ValueError("Invalid message kind.")
         message = dict(id=uuid4().hex, role=role, content=content, kind=kind, created_at=_now())
         return self._change(owner, id, lambda state: state["messages"].append(message))
+
+    # ── consultation ─────────────────────────────────────────────────────────
+    CONSULT_LEASE_SECONDS = 300
+
+    def begin_consult(self, owner, id):
+        """Reserve the workspace for one consultation turn (one at a time)."""
+        def transition(state):
+            self._idle(state)
+            busy = state.get("consult_busy")
+            if busy:
+                age = (datetime.now(timezone.utc) - datetime.fromisoformat(busy)).total_seconds()
+                if age < self.CONSULT_LEASE_SECONDS:
+                    raise WorkspaceConflict("The consultant is still answering. Wait a moment.")
+            if not (state.get("source") or {}).get("course_model"):
+                raise WorkspaceConflict("Import a course before starting the consultation.")
+            state["consult_busy"] = _now()
+        return self._change(owner, id, transition)
+
+    def finish_consult(self, owner, id, consultation, messages):
+        """Save the new consultation state and the turn's messages, and release the lease."""
+        consultation = _object(consultation)
+        stamped = []
+        for role, content in messages:
+            if role not in ("user", "assistant"):
+                raise ValueError("Invalid message role.")
+            _text(content, "message content")
+            stamped.append(dict(id=uuid4().hex, role=role, content=content, kind="consult", created_at=_now()))
+
+        def transition(state):
+            state["consultation"] = consultation
+            state["messages"].extend(stamped)
+            state["consult_busy"] = None
+        return self._change(owner, id, transition)
+
+    def release_consult(self, owner, id):
+        return self._change(owner, id, lambda state: state.update(consult_busy=None))
+
+    def save_consultation(self, owner, id, consultation):
+        consultation = _object(consultation)
+
+        def transition(state):
+            if state.get("consult_busy"):
+                raise WorkspaceConflict("The consultant is still answering. Wait a moment.")
+            state["consultation"] = consultation
+        return self._change(owner, id, transition)
 
     def approve_direction(self, owner, id, revision):
         def transition(state):

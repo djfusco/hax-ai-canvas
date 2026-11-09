@@ -1078,6 +1078,103 @@ def create_mentor_blueprint(root_provider):
             return jsonify({"error": "Import a course first."}), 404
         return jsonify(build_course_map(model, (workspace.get("source") or {}).get("alignment")))
 
+    # ── consultation ──────────────────────────────────────────────────────────
+
+    def consult_view(workspace):
+        import consultation as consult
+        state = workspace.get("consultation")
+        return {
+            "topics": [{"id": t, "label": consult.TOPIC_LABELS[t]} for t in consult.TOPICS],
+            "state": state,
+            "resume": consult.resume_summary(state) if state and state.get("turns") else None,
+            "messages": [m for m in workspace["messages"] if m.get("kind") == "consult"],
+            "busy": bool(workspace.get("consult_busy")),
+        }
+
+    @bp.get("/api/workspaces/<workspace_id>/consult")
+    def consult_get(workspace_id):
+        return jsonify(consult_view(store().get(g.owner, workspace_id)))
+
+    @bp.post("/api/workspaces/<workspace_id>/consult/settings")
+    def consult_settings(workspace_id):
+        import consultation as consult
+        data = payload()
+        workspace = store().get(g.owner, workspace_id)
+        state = workspace.get("consultation") or consult.new_state()
+        try:
+            if "directness" in data:
+                state = consult.set_directness(state, data["directness"])
+            if "topic" in data:
+                state = consult.choose_topic(state, data["topic"])
+        except consult.ConsultationError as exc:
+            raise ValueError(str(exc)) from None
+        return jsonify(consult_view(store().save_consultation(g.owner, workspace_id, state)))
+
+    @bp.post("/api/workspaces/<workspace_id>/consult")
+    def consult_turn(workspace_id):
+        """One consultation turn, answered within this request."""
+        import consultation as consult
+        from course_map import build_course_map
+        data = payload()
+        mode = data.get("mode", "turn")
+        if mode not in ("opening", "turn"):
+            raise ValueError("Unknown consultation mode.")
+        message = None
+        if mode == "turn":
+            message = str(data.get("message", "")).strip()
+            if not 1 <= len(message) <= 6000:
+                raise ValueError("Enter a message of 1–6000 characters.")
+            message = redact(message)
+        resolved = provider_values(data)
+        if resolved[1] is None:
+            raise ValueError("Choose an AI provider and model for the consultation.")
+        workspace = store().begin_consult(g.owner, workspace_id)
+        ai = None
+        try:
+            model = store().get_course_model(g.owner, workspace_id)
+            state = workspace.get("consultation") or consult.new_state()
+            if mode == "opening" and state.get("turns"):
+                raise ValueError("The consultation has already started.")
+            alignment = (workspace.get("source") or {}).get("alignment")
+            course_map = build_course_map(model, alignment)
+            history = [m for m in workspace["messages"] if m.get("kind") == "consult"]
+            ai = client(data, resolved)
+            reply, state = consult.respond(state, history, model, course_map, ai, mode=mode, message=message)
+        except consult.ConsultationError as exc:
+            store().release_consult(g.owner, workspace_id)
+            return jsonify({"error": redact(str(exc))[:500]}), 502
+        except Exception:
+            store().release_consult(g.owner, workspace_id)
+            raise
+        finally:
+            if ai is not None:
+                ai.close()
+        turn = ([("user", message)] if message else []) + [("assistant", redact(reply))]
+        workspace = store().finish_consult(g.owner, workspace_id, state, turn)
+        return jsonify(consult_view(workspace))
+
+    @bp.post("/api/workspaces/<workspace_id>/course-map/align")
+    def course_map_align(workspace_id):
+        from course_map import CourseMapError, build_course_map, propose_alignment
+        data = payload()
+        resolved = provider_values(data)
+        if resolved[1] is None:
+            raise ValueError("Choose an AI provider and model to map outcomes.")
+        workspace = store().get(g.owner, workspace_id)
+        summary = (workspace.get("source") or {}).get("course_model")
+        model = store().get_course_model(g.owner, workspace_id)
+        if model is None or not summary:
+            return jsonify({"error": "Import a course first."}), 404
+        ai = client(data, resolved)
+        try:
+            alignment = propose_alignment(model, ai)
+        except CourseMapError as exc:
+            return jsonify({"error": str(exc)}), 502
+        finally:
+            ai.close()
+        store().save_course_alignment(g.owner, workspace_id, summary["imported_at"], alignment)
+        return jsonify(build_course_map(model, alignment))
+
     @bp.post("/api/workspaces/<workspace_id>/materials")
     def add_material(workspace_id):
         workspace = store().get(g.owner, workspace_id)
