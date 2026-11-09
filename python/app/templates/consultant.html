@@ -118,6 +118,24 @@
               <li>Open your course in Canvas and click the extension.</li>
               <li>Review, then <em>Send to Course Consultant</em>.</li></ol>
           </article>
+          <article class="cc-card" id="cc-canvas-card" hidden>
+            <h2>Connect to your school's Canvas</h2>
+            <p>Your institution has approved Course Consultant. Sign in to Canvas and choose a course; it reads course
+              content only, and the connection lasts one hour.</p>
+            <div id="cc-canvas-connect">
+              <label for="cc-institution">Institution</label>
+              <select id="cc-institution"></select>
+              <button id="cc-canvas-go" type="button" class="cc-btn">Connect to Canvas</button>
+            </div>
+            <div id="cc-canvas-pick" hidden>
+              <label for="cc-canvas-course">Your course</label>
+              <select id="cc-canvas-course"></select>
+              <div class="cc-row">
+                <button id="cc-canvas-import" type="button" class="cc-btn">Import course</button>
+                <button id="cc-canvas-disconnect" type="button" class="cc-btn cc-btn-quiet">Disconnect</button>
+              </div>
+            </div>
+          </article>
           <article class="cc-card">
             <h2>Start from documents</h2>
             <p>No Canvas course? Add your syllabus or describe the course.</p>

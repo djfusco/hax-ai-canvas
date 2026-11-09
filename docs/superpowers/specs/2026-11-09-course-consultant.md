@@ -319,3 +319,18 @@ and approval flow. Exports:
 - Where instructors' AI keys are stored (deferred).
 - Exact retention period and storage quotas.
 - Whether the plan export needs a format for curriculum committees.
+
+## 13. Status (2026-11-09)
+
+| Phase | Status |
+|---|---|
+| 1. Intake and consultation core | Done (see the Phase 1 plan's status section) |
+| 2. Improvement Plan | Done: decisions on proposals, AI draft, edits, Word/HTML export |
+| 3. Documents and exports | Done: revised syllabus, assignments and rubrics; Word, HTML, ZIP and HAX site package |
+| 4. More browsers | Firefox build with a bridge hand-off; tested via Chromium, not yet in Firefox |
+| Later: institutional connection | OAuth2 developer-key connection done; LTI 1.3 not started |
+
+Still to verify with real users and systems: an instructor's own large export
+on a deployed site, the extension and OAuth connection against live Canvas
+instances, New Quizzes, the Firefox build in Firefox, and real AI
+conversations for tone and advice quality.

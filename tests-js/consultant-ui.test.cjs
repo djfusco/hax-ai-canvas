@@ -80,9 +80,9 @@ with zipfile.ZipFile(sys.argv[1], "w", zipfile.ZIP_DEFLATED) as z:
                    if name == "wiki_content/welcome.html" else data)
 `;
 
-function startApp(dataDir) {
+function startApp(dataDir, extraEnv = {}) {
   const child = spawn(PYTHON, ['-c', SERVER, dataDir, String(PORT)], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, HAX_EXECUTION_MODE: 'local' } });
+    env: { ...process.env, HAX_EXECUTION_MODE: 'local', ...extraEnv } });
   return new Promise((resolve, reject) => {
     let stderr = '';
     child.stderr.on('data', chunk => { stderr += chunk; });
@@ -213,5 +213,76 @@ test('mobile width has no horizontal scroll', { skip: !playwright, timeout: 6000
   } finally {
     await browser.close();
     app.kill();
+  }
+});
+
+// A fake Canvas on a different site (localhost vs 127.0.0.1): real OAuth redirects.
+function fakeCanvas() {
+  const http = require('node:http');
+  const fixture = JSON.parse(fs.readFileSync(path.join(ROOT, 'tests/fixtures/extension_bundle.json'), 'utf8'));
+  const c = '/api/v1/courses/101';
+  const routes = {
+    '/api/v1/courses': [{ id: 101, name: 'Biology 101: Cells', course_code: 'BIO-101', term: { name: 'Fall 2026' } }],
+    [c]: fixture.course, [c + '/modules']: fixture.modules, [c + '/pages']: fixture.pages, [c + '/pages/welcome']: fixture.pages[0],
+    [c + '/assignments']: fixture.assignments, [c + '/assignment_groups']: fixture.assignment_groups,
+    [c + '/quizzes']: fixture.quizzes, [c + '/quizzes/31/questions']: fixture.quizzes[0].questions,
+    [c + '/discussion_topics']: fixture.discussion_topics, [c + '/files']: fixture.files,
+    [c + '/outcome_group_links']: fixture.outcomes.map(outcome => ({ outcome })),
+  };
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url, 'http://localhost');
+    if (url.pathname === '/login/oauth2/auth') {
+      const back = new URL(url.searchParams.get('redirect_uri'));
+      back.searchParams.set('code', 'good-code');
+      back.searchParams.set('state', url.searchParams.get('state'));
+      res.writeHead(302, { Location: back.href }).end();
+      return;
+    }
+    if (url.pathname === '/login/oauth2/token') {
+      let body = '';
+      req.on('data', chunk => { body += chunk; });
+      req.on('end', () => {
+        const ok = req.method === 'DELETE' || new URLSearchParams(body).get('code') === 'good-code';
+        res.writeHead(ok ? 200 : 400, { 'Content-Type': 'application/json' }).end(JSON.stringify(ok ? { access_token: 'tok-1' } : {}));
+      });
+      return;
+    }
+    if (req.headers.authorization !== 'Bearer tok-1') { res.writeHead(401).end('{}'); return; }
+    const route = routes[url.pathname];
+    if (!route) { res.writeHead(404).end('{}'); return; }
+    res.writeHead(200, { 'Content-Type': 'application/json' }).end('while(1);' + JSON.stringify(route));
+  });
+  return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server)));
+}
+
+test('institutional Canvas connection: connect, choose a course, import', { skip: !playwright, timeout: 90000 }, async () => {
+  const canvas = await fakeCanvas();
+  const canvasOrigin = `http://localhost:${canvas.address().port}`;
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-ui-'));
+  const app = await startApp(dataDir, {
+    HAX_CANVAS_INSTITUTIONS: JSON.stringify([{ id: 'state-u', name: 'State University', base_url: canvasOrigin,
+      client_id: '1700001', client_secret_env: 'CANVAS_SECRET_STATE' }]),
+    CANVAS_SECRET_STATE: 'secret-value',
+  });
+  const browser = await playwright.chromium.launch();
+  try {
+    const page = await browser.newPage();
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.goto(`${ORIGIN}/mentor`);
+    await page.locator('#cc-canvas-card').waitFor({ state: 'visible' });
+    await page.click('#cc-canvas-go');
+    await page.waitForURL(`${ORIGIN}/mentor`);
+    await page.locator('#cc-canvas-pick').waitFor({ state: 'visible' });
+    assert.match(await page.locator('#cc-canvas-course').textContent(), /Biology 101: Cells · Fall 2026/);
+    await page.click('#cc-canvas-import');
+    await page.locator('#cc-course').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#cc-course-title').textContent(), 'Biology 101: Cells');
+    assert.match(await page.locator('#cc-course-meta').textContent(), /Canvas \(connected\)/);
+    assert.deepEqual(errors, []);
+  } finally {
+    await browser.close();
+    app.kill();
+    canvas.close();
   }
 });

@@ -23,7 +23,7 @@ class WorkspaceConflict(RuntimeError):
     """A revision, approval or workflow precondition was not satisfied."""
 
 
-SOURCE_TYPES = frozenset(("blank", "api", "imscc", "prepared", "export", "extension", "documents"))
+SOURCE_TYPES = frozenset(("blank", "api", "imscc", "prepared", "export", "extension", "documents", "canvas"))
 INTAKE_CHUNK_TABLE = (
     "CREATE TABLE IF NOT EXISTS mentor_intake_chunks ("
     "upload_id TEXT NOT NULL, owner TEXT NOT NULL, workspace_id TEXT NOT NULL, idx INTEGER NOT NULL, "

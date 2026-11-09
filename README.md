@@ -15,13 +15,15 @@ Design: [`docs/superpowers/specs/2026-11-09-course-consultant.md`](docs/superpow
 1. **Choose an AI model.** Course Consultant uses the instructor's own AI
    account: connect OpenRouter in one click, or enter an OpenAI, Anthropic or
    Gemini key. The service never pays for or resells AI.
-2. **Bring in the course**, one of three ways:
+2. **Bring in the course**, one of four ways:
    - **Upload a Canvas export.** The browser reads only the export's text and
      structure. Videos and other media never leave the instructor's computer,
      so multi-gigabyte exports become a few megabytes.
-   - **Use the browser extension** (`extension/`) to send the live course
-     from Canvas using the instructor's existing sign-in. No token and no
-     admin approval needed.
+   - **Use the browser extension** (`extension/`, Chrome, Edge and Firefox)
+     to send the live course from Canvas using the instructor's existing
+     sign-in. No token and no admin approval needed.
+   - **Connect to Canvas** when the instructor's institution has registered
+     Course Consultant (OAuth developer key): sign in, choose a course.
    - **Start from documents**: a syllabus, or a description of the course.
 3. **Review the course map**: how the grade is actually weighted, graded work
    by week, rubric coverage, outcomes and which items address them, resources.
@@ -30,8 +32,14 @@ Design: [`docs/superpowers/specs/2026-11-09-course-consultant.md`](docs/superpow
    instructor can jump). It asks before advising, then offers two or three
    options with trade-offs, citing the course itself and a named principle.
    Returning instructors see where they left off.
-5. **Proposed changes** collect as the conversation goes. Accepting them and
-   generating revised documents (syllabus, assignments, rubrics) is Phase 2-3.
+5. **Plan.** Accept, edit, defer or reject each proposed change. AI drafts the
+   Course Improvement Plan (vision, revised outcomes, student AI policy, open
+   questions) from the consultation and the accepted changes; the instructor
+   edits it and downloads it as Word or HTML.
+6. **Revised documents.** Generate a revised syllabus, assignments and
+   rubrics that carry out the accepted changes; preview, edit and approve
+   each, then download approved documents as Word + HTML (with the plan) or
+   as a HAX site package.
 
 ## Privacy
 - Grades, submissions, student discussion replies and class lists are never
@@ -55,6 +63,9 @@ Design: [`docs/superpowers/specs/2026-11-09-course-consultant.md`](docs/superpow
 | Student-information stripping | `python/privacy_strip.py` |
 | Course map and AI outcome alignment | `python/course_map.py` |
 | Consultation engine | `python/consultation.py` |
+| Improvement plan (decisions, AI draft, Word/HTML) | `python/improvement_plan.py` |
+| Revised documents (syllabus, assignment, rubric; exports) | `python/revised_documents.py` |
+| Institutional Canvas connection (OAuth2, server-side reader) | `python/canvas_oauth.py`, `python/canvas_collect.py` |
 | AI providers (OpenAI, Anthropic, Gemini, OpenRouter, gateways) | `python/ai_client.py`, `python/model_capabilities.py`, `python/provider_models.py` |
 | Web app and API | `python/app/mentor_routes.py`, `python/app/templates/consultant.html`, `python/app/static/consultant.js` |
 | Storage (Postgres in the cloud, SQLite in development) | `python/mentor_store.py`, `python/hosted_data.py` |
@@ -72,6 +83,17 @@ from its catalog; nothing is silently truncated.
 | `POST /intake/documents` | Documents and/or a description |
 | `GET /course-map`, `POST /course-map/align` | Course map; AI outcome alignment |
 | `GET /consult`, `POST /consult`, `POST /consult/settings` | Consultation state, a turn (`mode: opening` or `message`), topic/advice style |
+| `POST /consult/proposals/<id>` | Instructor decision on a proposal (accept, reject, defer, reopen; optional edits) |
+| `GET/PUT /plan`, `POST /plan/draft`, `GET /plan/export?format=docx\|html` | Improvement plan |
+| `GET /documents`, `POST /documents/generate`, `PUT/DELETE /documents/<id>` | Revised documents |
+| `GET /documents/<id>/export?format=docx\|html`, `GET /documents/export?format=zip\|hax` | Downloads (approved only for packages) |
+| `POST /intake/canvas` | Import a course through the institutional Canvas connection |
+
+Institutional Canvas connection (under `/mentor/api/canvas`): `institutions`,
+`connect`, `exchange`, `courses`, `disconnect`. Configure participating
+institutions with `HAX_CANVAS_INSTITUTIONS` (JSON; see `python/canvas_oauth.py`)
+and one client-secret environment variable per institution. The redirect URI
+to register in Canvas is `https://<your-origin>/mentor/canvas/callback`.
 
 ## Development
 Python 3.12 and Node 22.
@@ -98,10 +120,10 @@ newer Anthropic SDKs than `anthropic==0.86.0` break the client.
 
 ### Browser extension release
 ```bash
-npm run build:extension -- --origin https://your-course-consultant-site
+npm run build:extension -- --origin https://your-course-consultant-site                    # Chrome, Edge
+npm run build:extension -- --origin https://your-course-consultant-site --browser firefox  # Firefox
 ```
-Produces `dist/extension/` and a Chrome Web Store zip with the origin set and
-the test hook removed.
+See [`extension/README.md`](extension/README.md).
 
 ## Deployment
 Vercel (Python + Node functions) with Neon Postgres and Neon Auth email
@@ -118,9 +140,11 @@ required by OpenRouter for PKCE).
 - **Upload size.** Slim packages (up to 48 MiB) and extension bundles (up to
   16 MiB) are sent in pieces under 4 MB, because hosting platforms cap request
   size, and assembled server-side.
-- **Phase 2-3 not built yet:** accepting/editing proposals, the Course
-  Improvement Plan document, and generating revised documents. The earlier
-  draft-and-build wizard remains at `/mentor/legacy` until then.
-- The legacy hosted raw-upload pipeline (Blob multipart, Sandbox preparation)
-  and local HAX build modules are still in the repository for that wizard;
-  they are not used by Course Consultant and will be removed in Phase 3.
+- **Firefox** is validated by build checks and the bridge hand-off tested in
+  Chromium, not in Firefox itself; run `npx web-ext lint` and try it in
+  Firefox before publishing.
+- **Institutional connection** is OAuth2 only; LTI 1.3 (launching from inside
+  Canvas) needs an institution's registration to build and test.
+- The earlier draft-and-build wizard remains at `/mentor/legacy`, with its
+  hosted raw-upload pipeline and local HAX build modules. Course Consultant
+  does not use them; remove them once nobody relies on the old wizard.

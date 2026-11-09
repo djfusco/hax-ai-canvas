@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Connecting Canvas{% endblock %}
+{% block content %}
+<section class="handoff">
+  <h1>Connecting to Canvas</h1>
+  <p id="canvas-status" role="status" aria-live="polite">Finishing the connection…</p>
+  <p id="canvas-error" role="alert" class="banner banner-warn" hidden></p>
+  <p><a href="{{ url_for('mentor.page') }}">Back to Course Consultant</a></p>
+</section>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='canvas-callback.js') }}"></script>
+{% endblock %}

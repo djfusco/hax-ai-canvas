@@ -296,7 +296,7 @@ def create_mentor_blueprint(root_provider):
     @bp.before_request
     def browser_identity():
         from mentor_credentials import CredentialVault, private_key
-        if request.endpoint == "mentor.openrouter_callback":
+        if request.endpoint in ("mentor.openrouter_callback", "mentor.canvas_callback"):
             # Reached by a cross-site redirect from openrouter.ai, which does not
             # carry our SameSite=Strict cookies. Never mint or replace an identity
             # here; the page finishes the exchange with a same-site request.
@@ -319,6 +319,7 @@ def create_mentor_blueprint(root_provider):
             from local_accounts import auth_url
             g.auth_url = auth_url(root())
             g.auth_origin = request.host_url.rstrip("/")
+        g.mentor_key = key
         signer = URLSafeTimedSerializer(key.decode(), salt="faculty-mentor-browser")
         identity = None
         try:
@@ -616,6 +617,100 @@ def create_mentor_blueprint(root_provider):
         result = jsonify({"ok": True, "provider": "openrouter"})
         result.delete_cookie("openrouter_pkce", path="/mentor")
         return result
+
+    # ── institutional Canvas connection (OAuth2) ──────────────────────────────
+
+    def canvas_institutions():
+        from canvas_oauth import CanvasConfigError, institutions
+        try:
+            return institutions()
+        except CanvasConfigError as exc:
+            current_app.logger.error("Canvas institution configuration: %s", exc)
+            return {}
+
+    def canvas_session():
+        """(institution, token) for this user's connected Canvas, or raise."""
+        from canvas_oauth import TOKEN_COOKIE, open_token
+        opened = open_token(g.mentor_key, g.owner, request.cookies.get(TOKEN_COOKIE, ""))
+        configured = canvas_institutions()
+        if not opened or opened[0] not in configured:
+            raise ValueError("Connect to Canvas first.")
+        return configured[opened[0]], opened[1]
+
+    @bp.get("/api/canvas/institutions")
+    def canvas_list():
+        from canvas_oauth import TOKEN_COOKIE, open_token
+        opened = open_token(g.mentor_key, g.owner, request.cookies.get(TOKEN_COOKIE, ""))
+        return jsonify({"institutions": [{"id": i["id"], "name": i["name"]} for i in canvas_institutions().values()],
+                        "connected": opened[0] if opened else None})
+
+    @bp.post("/api/canvas/connect")
+    def canvas_connect():
+        from canvas_oauth import STATE_COOKIE, authorize_url
+        institution = canvas_institutions().get(payload().get("institution"))
+        if not institution:
+            raise ValueError("Choose your institution.")
+        state = secrets.token_urlsafe(32)
+        response = jsonify({"url": authorize_url(institution, app_origin() + "/mentor/canvas/callback", state)})
+        response.set_cookie(STATE_COOKIE, g.mentor_signer.dumps({"state": state, "owner": g.owner,
+                                                                 "institution": institution["id"]}),
+                            max_age=600, path="/mentor", httponly=True,
+                            secure=hosted_mode() or request.is_secure, samesite="Strict")
+        return response
+
+    @bp.get("/canvas/callback")
+    def canvas_callback():
+        return render_template("canvas_callback.html")
+
+    @bp.post("/api/canvas/exchange")
+    def canvas_exchange():
+        from canvas_oauth import STATE_COOKIE, TOKEN_COOKIE, TOKEN_SECONDS, exchange_code, seal_token
+        data = payload()
+        code, state = data.get("code"), data.get("state")
+        try:
+            pending = g.mentor_signer.loads(request.cookies.get(STATE_COOKIE, ""), max_age=600)
+        except (BadSignature, SignatureExpired):
+            pending = None
+        if (not isinstance(pending, dict) or pending.get("owner") != g.owner or not isinstance(state, str)
+                or not hmac.compare_digest(state, pending.get("state", ""))):
+            raise ValueError("This Canvas connection was not started here or has expired. Try again.")
+        if not isinstance(code, str) or not re.fullmatch(r"[A-Za-z0-9_.~-]{4,512}", code):
+            raise ValueError("Canvas returned an invalid authorization code. Try again.")
+        institution = canvas_institutions().get(pending.get("institution"))
+        if not institution:
+            raise ValueError("This institution is no longer configured.")
+        token = exchange_code(institution, code, app_origin() + "/mentor/canvas/callback",
+                              transport=current_app.config.get("CANVAS_TRANSPORT"))
+        response = jsonify({"ok": True, "institution": institution["id"]})
+        response.delete_cookie(STATE_COOKIE, path="/mentor")
+        response.set_cookie(TOKEN_COOKIE, seal_token(g.mentor_key, g.owner, institution["id"], token),
+                            max_age=TOKEN_SECONDS, path="/mentor", httponly=True,
+                            secure=hosted_mode() or request.is_secure, samesite="Strict")
+        return response
+
+    @bp.get("/api/canvas/courses")
+    def canvas_courses():
+        from canvas_collect import CanvasClient, CollectError, list_courses
+        institution, token = canvas_session()
+        canvas = CanvasClient(institution["base_url"], token, transport=current_app.config.get("CANVAS_TRANSPORT"))
+        try:
+            return jsonify({"courses": list_courses(canvas), "institution": institution["name"]})
+        except CollectError as exc:
+            return jsonify({"error": str(exc) + (" Reconnect to Canvas." if exc.status == 401 else "")}), 502
+        finally:
+            canvas.close()
+
+    @bp.post("/api/canvas/disconnect")
+    def canvas_disconnect():
+        from canvas_oauth import TOKEN_COOKIE, revoke
+        try:
+            institution, token = canvas_session()
+            revoke(institution, token, transport=current_app.config.get("CANVAS_TRANSPORT"))
+        except ValueError:
+            pass
+        response = jsonify({"ok": True})
+        response.delete_cookie(TOKEN_COOKIE, path="/mentor")
+        return response
 
     @bp.delete("/api/credentials/<provider>")
     def forget_credentials(provider):
@@ -1100,6 +1195,36 @@ def create_mentor_blueprint(root_provider):
         privacy = {key: privacy[key] for key in ("counts", "total", "notes")}
         workspace = store().save_course_model(g.owner, workspace_id, revision, model, privacy)
         return jsonify(public(workspace))
+
+    @bp.post("/api/workspaces/<workspace_id>/intake/canvas")
+    def intake_canvas(workspace_id):
+        """Read a course through the institutional Canvas connection and import it."""
+        from canvas_api_import import BundleError, import_api_bundle
+        from canvas_collect import CanvasClient, CollectError, collect
+        from privacy_strip import strip_course
+        data = payload()
+        workspace = store().get(g.owner, workspace_id)
+        if workspace.get("active_job"):
+            return jsonify({"error": "Wait for the active job before replacing the course."}), 409
+        revision = data.get("revision")
+        instructor = data.get("instructor_name", "")
+        if not isinstance(instructor, str) or len(instructor) > 200:
+            raise ValueError("The instructor name is too long.")
+        institution, token = canvas_session()
+        canvas = CanvasClient(institution["base_url"], token, transport=current_app.config.get("CANVAS_TRANSPORT"))
+        try:
+            bundle = collect(canvas, str(data.get("course_id", "")))
+        except CollectError as exc:
+            return jsonify({"error": str(exc)}), 502
+        finally:
+            canvas.close()
+        try:
+            model = import_api_bundle(bundle, source="canvas")
+        except BundleError as exc:
+            raise ValueError(str(exc)) from None
+        model, privacy = strip_course(model, [instructor] if instructor.strip() else ())
+        privacy = {key: privacy[key] for key in ("counts", "total", "notes")}
+        return jsonify(public(store().save_course_model(g.owner, workspace_id, revision, model, privacy)))
 
     @bp.post("/api/workspaces/<workspace_id>/intake/chunks")
     def intake_chunk(workspace_id):

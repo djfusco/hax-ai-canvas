@@ -36,7 +36,7 @@ MAX_ID = 200
 ITEM_KINDS = frozenset((
     "page", "assignment", "quiz", "discussion", "file", "external_link", "external_tool",
 ))
-SOURCES = frozenset(("export", "extension", "documents"))
+SOURCES = frozenset(("export", "extension", "documents", "canvas"))
 MATERIAL_ROLES = frozenset(("reference", "policy", "student"))
 
 

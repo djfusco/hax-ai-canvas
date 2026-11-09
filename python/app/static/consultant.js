@@ -388,6 +388,35 @@
     form.append('upload_id', uploadId);
     await afterImport(await api(`/mentor/api/workspaces/${state.workspace.id}/intake/export`, { method: 'POST', form }));
   }));
+  // Institutional Canvas connection (only when an administrator configured it).
+  async function loadCanvas() {
+    const info = await api('/mentor/api/canvas/institutions').catch(() => ({ institutions: [] }));
+    $('cc-canvas-card').hidden = !info.institutions.length;
+    if (!info.institutions.length) return;
+    $('cc-institution').replaceChildren(...info.institutions.map(i => el('option', { value: i.id, text: i.name })));
+    $('cc-canvas-connect').hidden = Boolean(info.connected);
+    $('cc-canvas-pick').hidden = !info.connected;
+    if (info.connected) {
+      const { courses } = await api('/mentor/api/canvas/courses');
+      $('cc-canvas-course').replaceChildren(...courses.map(c => el('option', { value: String(c.id),
+        text: [c.name, c.term].filter(Boolean).join(' · ') })));
+      $('cc-canvas-import').disabled = !courses.length;
+    }
+  }
+  $('cc-canvas-go').addEventListener('click', () => run('Opening Canvas…', async () => {
+    const { url } = await api('/mentor/api/canvas/connect', { method: 'POST', json: { institution: $('cc-institution').value } });
+    window.location.assign(url);
+  }));
+  $('cc-canvas-import').addEventListener('click', () => run('Reading your course from Canvas… this can take a minute', async () => {
+    await afterImport(await api(`/mentor/api/workspaces/${state.workspace.id}/intake/canvas`, { method: 'POST', json: {
+      course_id: $('cc-canvas-course').value, revision: state.workspace.revision,
+      instructor_name: $('cc-instructor').value.trim() } }));
+  }));
+  $('cc-canvas-disconnect').addEventListener('click', () => run('Disconnecting…', async () => {
+    await api('/mentor/api/canvas/disconnect', { method: 'POST', json: {} });
+    await loadCanvas();
+  }));
+
   $('cc-docs-form').addEventListener('submit', event => {
     event.preventDefault();
     run('Reading your documents…', async () => {
@@ -415,7 +444,8 @@
     const course = state.workspace.course;
     const map = state.map;
     $('cc-course-title').textContent = course.title;
-    const sourceLabel = { export: 'Canvas export', extension: 'Canvas (extension)', documents: 'Your documents' }[course.source] || course.source;
+    const sourceLabel = { export: 'Canvas export', extension: 'Canvas (extension)', canvas: 'Canvas (connected)',
+      documents: 'Your documents' }[course.source] || course.source;
     const counts = course.counts || {};
     $('cc-course-meta').textContent = [sourceLabel, map.course.code, map.course.term,
       ['pages', 'assignments', 'quizzes', 'discussions'].filter(k => counts[k]).map(k => `${counts[k]} ${k}`).join(', ')]
@@ -783,7 +813,9 @@
       history.replaceState(null, '', location.pathname);
     }
     await loadModels().catch(error => showError(error.message));
+    if (new URLSearchParams(location.search).get('canvas') === 'connected') history.replaceState(null, '', location.pathname);
     await loadWorkspaces();
+    await loadCanvas().catch(error => showError(error.message));
   }
 
   run('Loading…', start);

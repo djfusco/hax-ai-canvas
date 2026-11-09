@@ -403,9 +403,11 @@ class _Adapter:
                     outcome["item_ids"].append(item_id)
 
 
-def import_api_bundle(bundle) -> dict:
-    """Return a validated course model built from an extension bundle."""
+def import_api_bundle(bundle, source="extension") -> dict:
+    """Return a validated course model built from a Canvas API bundle."""
     try:
-        return cm.validate_course(_Adapter(bundle).run())
+        model = _Adapter(bundle).run()
+        model["provenance"]["source"] = source
+        return cm.validate_course(model)
     except cm.CourseModelError as exc:
         raise BundleError(f"The course could not be imported: {exc}") from None
