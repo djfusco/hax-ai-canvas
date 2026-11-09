@@ -366,9 +366,22 @@
     const { file, scan } = state.scan;
     const include = [...$('cc-docs-list').querySelectorAll('input:checked')].map(i => i.value);
     const { blob, summary } = await SlimExport.buildSlimPackage(file, scan, { includeDocuments: include });
-    status(`Uploading ${bytes(summary.slimBytes)} (from a ${bytes(summary.archiveBytes)} export)…`);
+    // Send in pieces under 4 MB: hosting platforms cap request size.
+    const piece = 3.5 * 1024 * 1024;
+    const total = Math.max(1, Math.ceil(blob.size / piece));
+    const uploadId = [...crypto.getRandomValues(new Uint8Array(16))].map(b => b.toString(16).padStart(2, '0')).join('');
+    for (let index = 0; index < total; index++) {
+      status(`Uploading ${bytes(summary.slimBytes)} (from a ${bytes(summary.archiveBytes)} export): part ${index + 1} of ${total}…`);
+      const chunk = new FormData();
+      chunk.append('upload_id', uploadId);
+      chunk.append('index', String(index));
+      chunk.append('total', String(total));
+      chunk.append('chunk', blob.slice(index * piece, (index + 1) * piece), 'part');
+      await api(`/mentor/api/workspaces/${state.workspace.id}/intake/chunks`, { method: 'POST', form: chunk });
+    }
+    status('Importing your course…');
     const form = intakeForm();
-    form.append('package', blob, 'course-slim.zip');
+    form.append('upload_id', uploadId);
     await afterImport(await api(`/mentor/api/workspaces/${state.workspace.id}/intake/export`, { method: 'POST', form }));
   }));
   $('cc-docs-form').addEventListener('submit', event => {

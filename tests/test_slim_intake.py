@@ -161,6 +161,50 @@ class SlimIntakeTests(unittest.TestCase):
                                  content_type="multipart/form-data", headers={"X-Mentor-CSRF": self.csrf})
         self.assertEqual(empty.status_code, 400)
 
+    def chunk(self, upload_id, index, total, data, client=None, csrf=None, expected=200):
+        response = (client or self.client).post(
+            f"/mentor/api/workspaces/{self.workspace['id']}/intake/chunks",
+            data={"upload_id": upload_id, "index": str(index), "total": str(total),
+                  "chunk": (io.BytesIO(data), "part")},
+            content_type="multipart/form-data", headers={"X-Mentor-CSRF": csrf or self.csrf})
+        self.assertEqual(response.status_code, expected, response.get_data(as_text=True))
+
+    def assembled(self, upload_id, expected=200):
+        response = self.client.post(self.url, data={"upload_id": upload_id, "revision": str(self.workspace["revision"])},
+                                    content_type="multipart/form-data", headers={"X-Mentor-CSRF": self.csrf})
+        self.assertEqual(response.status_code, expected, response.get_data(as_text=True))
+        return response.json
+
+    def test_chunked_upload(self):
+        data = slim_package()
+        upload_id = "a" * 32
+        size = len(data) // 3 + 1
+        for index in (2, 0, 1):  # order of arrival does not matter
+            self.chunk(upload_id, index, 3, data[index * size:(index + 1) * size])
+        result = self.assembled(upload_id)
+        self.assertEqual(result["course"]["counts"]["assignments"], 3)
+        self.assertIn("incomplete", self.assembled(upload_id, expected=400)["error"])  # pieces are consumed
+
+    def test_chunked_upload_rejections(self):
+        data = slim_package()
+        self.chunk("b" * 32, 0, 2, data[:100])
+        self.assertIn("incomplete", self.assembled("b" * 32, expected=400)["error"])
+        self.chunk("not-hex", 0, 1, data, expected=400)
+        self.chunk("c" * 32, 0, 99, data, expected=400)
+        self.chunk("c" * 32, 3, 2, data, expected=400)
+        other = web.app.test_client()
+        csrf = other.get("/mentor/api/session").json["csrf"]
+        self.chunk("d" * 32, 0, 1, data, client=other, csrf=csrf, expected=404)
+        # Pieces from another workspace are not assembled here.
+        second = self.client.post("/mentor/api/workspaces", json={"title": "Other"},
+                                  headers={"X-Mentor-CSRF": self.csrf}).json
+        response = self.client.post(f"/mentor/api/workspaces/{second['id']}/intake/chunks",
+                                    data={"upload_id": "e" * 32, "index": "0", "total": "1",
+                                          "chunk": (io.BytesIO(data), "part")},
+                                    content_type="multipart/form-data", headers={"X-Mentor-CSRF": self.csrf})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("incomplete", self.assembled("e" * 32, expected=400)["error"])
+
     def test_other_browser_cannot_import(self):
         other = web.app.test_client()
         csrf = other.get("/mentor/api/session").json["csrf"]

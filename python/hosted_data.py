@@ -18,7 +18,7 @@ from cryptography.fernet import Fernet
 from mentor_credentials import CredentialVault
 from mentor_materials import EXTENSIONS, MAX_FILE_BYTES, ROLES, _name
 from mentor_store import (
-    COURSE_MODEL_TABLE, MentorStore, WorkspaceConflict, WorkspaceNotFound, _now, _object, _revision,
+    COURSE_MODEL_TABLE, INTAKE_CHUNK_TABLE, MentorStore, WorkspaceConflict, WorkspaceNotFound, _now, _object, _revision,
 )
 
 
@@ -83,6 +83,7 @@ class PostgresMentorStore(_Postgres, MentorStore):
                 "ON mentor_workspaces(owner)"
             )
             conn.execute(COURSE_MODEL_TABLE)
+            conn.execute(INTAKE_CHUNK_TABLE)
 
     def _connection(self):
         return self._session()

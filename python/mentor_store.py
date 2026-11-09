@@ -7,7 +7,7 @@ Free text is instructor content: callers must never put credentials into it.
 """
 
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import re
@@ -24,6 +24,13 @@ class WorkspaceConflict(RuntimeError):
 
 
 SOURCE_TYPES = frozenset(("blank", "api", "imscc", "prepared", "export", "extension", "documents"))
+INTAKE_CHUNK_TABLE = (
+    "CREATE TABLE IF NOT EXISTS mentor_intake_chunks ("
+    "upload_id TEXT NOT NULL, owner TEXT NOT NULL, workspace_id TEXT NOT NULL, idx INTEGER NOT NULL, "
+    "total INTEGER NOT NULL, data BYTEA NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(upload_id, idx))"
+)
+MAX_INTAKE_CHUNK = 4 * 1024 * 1024 - 64 * 1024  # stays under hosting request limits with form overhead
+MAX_INTAKE_CHUNKS = 16
 COURSE_MODEL_TABLE = (
     "CREATE TABLE IF NOT EXISTS mentor_course_models ("
     "workspace_id TEXT PRIMARY KEY, owner TEXT NOT NULL, model TEXT NOT NULL, "
@@ -97,6 +104,7 @@ class MentorStore:
                 "ON mentor_workspaces(owner)"
             )
             conn.execute(COURSE_MODEL_TABLE)
+            conn.execute(INTAKE_CHUNK_TABLE)
 
     @contextmanager
     def _connection(self):
@@ -311,6 +319,41 @@ class MentorStore:
                 raise WorkspaceConflict("The course changed while outcomes were being mapped. Try again.")
             state["source"]["alignment"] = alignment
         return self._change(owner, id, transition)
+
+    def put_intake_chunk(self, owner, id, upload_id, index, total, data):
+        """Hold one piece of an uploaded slim package until it is assembled."""
+        if not isinstance(upload_id, str) or not re.fullmatch(r"[a-f0-9]{32}", upload_id):
+            raise ValueError("Invalid upload.")
+        if type(total) is not int or not 1 <= total <= MAX_INTAKE_CHUNKS or type(index) is not int or not 0 <= index < total:
+            raise ValueError("The course package is too large to upload.")
+        if not isinstance(data, (bytes, bytearray)) or not data or len(data) > MAX_INTAKE_CHUNK:
+            raise ValueError("Invalid upload piece.")
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        with self._transaction() as conn:
+            self._load(conn, owner, id)
+            conn.execute("DELETE FROM mentor_intake_chunks WHERE created_at < ?", (cutoff,))
+            conn.execute(
+                "INSERT INTO mentor_intake_chunks (upload_id, owner, workspace_id, idx, total, data, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (upload_id, idx) DO UPDATE SET "
+                "owner = excluded.owner, workspace_id = excluded.workspace_id, total = excluded.total, "
+                "data = excluded.data, created_at = excluded.created_at",
+                (upload_id, owner, id, index, total, bytes(data), _now()),
+            )
+
+    def take_intake_upload(self, owner, id, upload_id):
+        """Assemble and remove an uploaded package; all pieces must be present."""
+        if not isinstance(upload_id, str) or not re.fullmatch(r"[a-f0-9]{32}", upload_id):
+            raise ValueError("Invalid upload.")
+        with self._transaction() as conn:
+            self._load(conn, owner, id)
+            rows = conn.execute(
+                "SELECT idx, total, data FROM mentor_intake_chunks "
+                "WHERE upload_id = ? AND owner = ? AND workspace_id = ? ORDER BY idx",
+                (upload_id, owner, id)).fetchall()
+            conn.execute("DELETE FROM mentor_intake_chunks WHERE upload_id = ?", (upload_id,))
+        if not rows or [r[0] for r in rows] != list(range(rows[0][1])) or any(r[1] != rows[0][1] for r in rows):
+            raise ValueError("The course upload was incomplete. Try importing again.")
+        return b"".join(bytes(r[2]) for r in rows)
 
     def get_course_model(self, owner, id):
         """Return the stored course model, or None if the workspace has none."""

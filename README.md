@@ -91,7 +91,8 @@ Development mode stores data in SQLite under `python/mentor_data/`. Load
 python3 -m unittest discover -s tests          # Python
 npm test                                        # JS, incl. real-Chromium UI and extension tests
 ```
-Browser tests use Playwright's Chromium and a scripted fake AI provider; no
+Set `CC_TEST_POSTGRES_DSN` to a disposable PostgreSQL database to also run
+the storage tests against real Postgres. Browser tests use Playwright's Chromium and a scripted fake AI provider; no
 test makes network or paid AI calls. Install the pinned `requirements.txt`:
 newer Anthropic SDKs than `anthropic==0.86.0` break the client.
 
@@ -114,9 +115,10 @@ required by OpenRouter for PKCE).
 - **Not yet tested against real Canvas.** Export parsing and the extension's
   API calls follow Canvas's formats and documentation; validate with real
   courses (see the Phase 1 plan, Task 12), especially New Quizzes.
-- **Hosted upload size.** Vercel limits request bodies to about 4.5 MB. Most
-  slim packages are smaller; larger ones need the slim upload to go through
-  Vercel Blob (planned).
+- **Upload size.** Slim packages are sent in pieces under 4 MB (hosting
+  platforms cap request size) and assembled server-side, up to 48 MiB. The
+  extension's bundle is sent in one request; very large live courses may
+  exceed the hosting limit and should use the export path for now.
 - **Phase 2-3 not built yet:** accepting/editing proposals, the Course
   Improvement Plan document, and generating revised documents. The earlier
   draft-and-build wizard remains at `/mentor/legacy` until then.

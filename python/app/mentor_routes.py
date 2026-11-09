@@ -1070,20 +1070,28 @@ def create_mentor_blueprint(root_provider):
         except ValueError:
             raise ValueError("Reload the workspace and try again.") from None
         upload = request.files.get("package")
-        if not upload:
+        upload_id = request.form.get("upload_id")
+        if not upload and not upload_id:
             raise ValueError("Choose a Canvas course export to import.")
         instructor = request.form.get("instructor_name", "")
         if len(instructor) > 200:
             raise ValueError("The instructor name is too long.")
         with tempfile.TemporaryDirectory(prefix="slim-intake-") as temp:
             path = Path(temp) / "package.zip"
-            count = 0
-            with path.open("wb") as output:
-                while chunk := upload.stream.read(1024 * 1024):
-                    count += len(chunk)
-                    if count > MAX_SLIM_BYTES:
-                        raise ValueError("The slimmed course package exceeds 48 MiB.")
-                    output.write(chunk)
+            if upload_id:
+                # Assembled from pieces sent to /intake/chunks (hosting caps request size).
+                data = store().take_intake_upload(g.owner, workspace_id, upload_id)
+                if len(data) > MAX_SLIM_BYTES:
+                    raise ValueError("The slimmed course package exceeds 48 MiB.")
+                path.write_bytes(data)
+            else:
+                count = 0
+                with path.open("wb") as output:
+                    while chunk := upload.stream.read(1024 * 1024):
+                        count += len(chunk)
+                        if count > MAX_SLIM_BYTES:
+                            raise ValueError("The slimmed course package exceeds 48 MiB.")
+                        output.write(chunk)
             try:
                 model = import_slim(path)
             except SlimImportError as exc:
@@ -1092,6 +1100,20 @@ def create_mentor_blueprint(root_provider):
         privacy = {key: privacy[key] for key in ("counts", "total", "notes")}
         workspace = store().save_course_model(g.owner, workspace_id, revision, model, privacy)
         return jsonify(public(workspace))
+
+    @bp.post("/api/workspaces/<workspace_id>/intake/chunks")
+    def intake_chunk(workspace_id):
+        from mentor_store import MAX_INTAKE_CHUNK
+        try:
+            index, total = int(request.form.get("index", "")), int(request.form.get("total", ""))
+        except ValueError:
+            raise ValueError("Invalid upload piece.") from None
+        piece = request.files.get("chunk")
+        if not piece:
+            raise ValueError("Invalid upload piece.")
+        data = piece.stream.read(MAX_INTAKE_CHUNK + 1)
+        store().put_intake_chunk(g.owner, workspace_id, request.form.get("upload_id"), index, total, data)
+        return jsonify({"received": index})
 
     @bp.post("/api/workspaces/<workspace_id>/intake/extension")
     def intake_extension(workspace_id):
