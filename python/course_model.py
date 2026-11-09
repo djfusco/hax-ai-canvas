@@ -57,6 +57,7 @@ def empty_course(source: str, title: str = "Untitled course") -> dict:
         "rubrics": {},
         "quizzes": {},
         "outcomes": [],
+        "question_banks": [],
         "media_inventory": [],
         "materials": [],
         "provenance": {"source": source, "imported_at": None, "counts": {}, "warnings": []},
@@ -286,6 +287,23 @@ def validate_course(model: dict) -> dict:
             _num(question.get("points"), f"{q_field}.points")
     if question_total > MAX_QUIZ_QUESTIONS:
         _fail("quizzes", f"exceed the limit of {MAX_QUIZ_QUESTIONS} questions in total")
+
+    bank_questions = 0
+    for index, bank in enumerate(_list(model.get("question_banks", []), "question_banks", MAX_RUBRICS)):
+        field = f"question_banks[{index}]"
+        _dict(bank, field)
+        _id(bank.get("id"), f"{field}.id")
+        _str(bank.get("title"), f"{field}.title", MAX_TITLE)
+        questions = _list(bank.get("questions", []), f"{field}.questions", MAX_QUIZ_QUESTIONS)
+        bank_questions += len(questions)
+        for q_index, question in enumerate(questions):
+            q_field = f"{field}.questions[{q_index}]"
+            _dict(question, q_field)
+            _str(question.get("text"), f"{q_field}.text", MAX_TEXT)
+            _str(question.get("type"), f"{q_field}.type", 100)
+            _num(question.get("points"), f"{q_field}.points")
+    if bank_questions > MAX_QUIZ_QUESTIONS:
+        _fail("question_banks", f"exceed the limit of {MAX_QUIZ_QUESTIONS} questions in total")
 
     outcomes = _list(model.get("outcomes"), "outcomes", MAX_OUTCOMES)
     outcome_ids = set()

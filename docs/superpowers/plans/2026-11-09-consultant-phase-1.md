@@ -305,3 +305,54 @@ create `web/intake.js`
 
 Tasks 3 and 6 are browser work and can proceed in parallel with 8-10 once
 1 and 5 are done.
+
+---
+
+## Status (2026-11-09)
+
+Tasks 1-11 are implemented and tested. Task 12 is done to the extent possible
+without an instructor's own course; see below.
+
+### Task 12 results
+- **Real Canvas exports.** The 32 Canvas/Common Cartridge fixture archives
+  from Instructure's own test suite were run through browser slimming, import,
+  privacy stripping and the course map
+  ([report](../validation/2026-11-09-canvas-fixtures.md)). 27 import; the 5
+  rejections are 4 archives that are not course exports and 1 deliberately
+  malformed manifest. This found and fixed six real-world problems:
+  1. an empty `course_settings/media_tracks.xml` (Canvas writes these) failed
+     the whole import;
+  2. a manifest declared UTF-16 but encoded as UTF-8 failed to parse;
+  3. courses re-zipped inside a folder, with macOS `__MACOSX`/`.DS_Store`
+     entries, were rejected;
+  4. archives made on Windows (backslash paths, in names and references)
+     were rejected;
+  5. Canvas quiz questions in `non_cc_assessments/*.xml.qti` were never read,
+     so real quizzes imported with no questions;
+  6. question banks (named and unfiled) were ignored; they are now in the
+     course model and the course map.
+- **Over 4 GiB.** A virtual 5 GiB ZIP64 export with course text beyond the
+  4 GiB mark slims correctly while reading about 1 KB and never touching the
+  video.
+- **Scale.** A 500-item course (80 rubric-graded assignments, 200 quiz
+  questions, 30 videos) imports, strips and maps in about half a second, and
+  consultation prompts fit both a 32k-token fallback model and a large model.
+- **PostgreSQL.** Course models, chunked uploads and consultation state were
+  run against PostgreSQL 16 (`tests/test_postgres_consultant.py`).
+
+### Still to verify with real courses
+- An instructor's own large export, through the deployed site.
+- The browser extension against a live Canvas instance (the hand-off is tested
+  in real Chromium; the Canvas API calls are tested against a fake Canvas).
+- New Quizzes content in exports and through the extension.
+
+Run `node scripts/validate_exports.cjs <folder> --report report.md` on any
+folder of exports; it reports counts only and uploads nothing.
+
+### Deviations from the plan
+- Task 4: instead of a Vercel Blob fallback, uploads are always sent in pieces
+  under 4 MB and assembled server-side (simpler, works on any host).
+- Task 11: the earlier wizard moved to `/mentor/legacy` rather than being
+  deleted, because Phase 3 reuses its drafting and approval flow. The legacy
+  hosted raw-upload pipeline and local HAX build modules remain until then.
+- Added a documents-only intake route and question banks (found in Task 12).

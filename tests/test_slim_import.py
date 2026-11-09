@@ -276,6 +276,44 @@ class SlimImportTests(unittest.TestCase):
         with self.assertRaisesRegex(slim_import.SlimImportError, "readable ZIP"):
             slim_import.import_slim(self.path)
 
+    # Real-world cases found by running Canvas's own export fixtures (Task 12).
+    def test_empty_metadata_file_and_mislabelled_encoding(self):
+        entries = text_entries()
+        entries["course_settings/media_tracks.xml"] = ""
+        entries["imsmanifest.xml"] = '<?xml version="1.0" encoding="UTF-16" ?>\n' + MANIFEST
+        model = self.build(entries)
+        self.assertEqual(model["provenance"]["counts"]["assignments"], 3)
+
+    def test_backslash_references(self):
+        entries = text_entries()
+        entries["imsmanifest.xml"] = MANIFEST.replace('href="gessay/essay.html"', 'href="gessay\\essay.html"')
+        model = self.build(entries)
+        self.assertIn("Essay", [i["title"] for i in model["items"]])
+
+    def test_canvas_native_quiz_questions_and_banks(self):
+        native = QTI.replace("Which is a cell part?", "Native: which is a cell part?").replace(
+            "</section>", '<item ident="q3" title="Extra"><itemmetadata><qtimetadata><qtimetadatafield>'
+            "<fieldlabel>question_type</fieldlabel><fieldentry>true_false_question</fieldentry>"
+            "</qtimetadatafield></qtimetadata></itemmetadata><presentation><material><mattext>Cells divide.</mattext>"
+            "</material></presentation></item></section>")
+        bank = ('<questestinterop xmlns="http://www.imsglobal.org/xsd/ims_qtiasiv1p2"><objectbank ident="bank1">'
+                "<qtimetadata><qtimetadatafield><fieldlabel>bank_title</fieldlabel><fieldentry>Chapter 3 pool</fieldentry>"
+                "</qtimetadatafield></qtimetadata>" + QTI.split("<section ident=\"s\">")[1].split("</section>")[0]
+                + "</objectbank></questestinterop>")
+        unfiled = ('<questestinterop xmlns="http://www.imsglobal.org/xsd/ims_qtiasiv1p2"><item ident="u1" title="Q">'
+                   "<presentation><material><mattext>Unfiled question?</mattext></material></presentation></item>"
+                   "</questestinterop>")
+        model = self.build({**text_entries(), "non_cc_assessments/gquiz.xml.qti": native,
+                            "non_cc_assessments/bank1.xml.qti": bank, "non_cc_assessments/loose.xml.qti": unfiled})
+        quiz = next(q for i, q in model["quizzes"].items())
+        texts = [q["text"] for q in quiz["questions"]]
+        self.assertEqual(len(texts), 3, "native questions replace, not duplicate, the CC copy")
+        self.assertIn("Native: which is a cell part?", texts)
+        banks = {b["title"]: b for b in model["question_banks"]}
+        self.assertEqual(len(banks["Chapter 3 pool"]["questions"]), 2)
+        self.assertEqual(banks["Unfiled questions"]["questions"][0]["text"], "Unfiled question?")
+        self.assertEqual(model["provenance"]["counts"]["question_banks"], 2)
+
     def test_minimal_course_without_settings(self):
         model = self.build({
             "imsmanifest.xml": MANIFEST.replace("Biology 101", "Tiny"),

@@ -115,27 +115,32 @@
   async function readCentralDirectory(file) {
     const size = file.size;
     if (size < 22) throw new SlimExportError('This file is not a Canvas course export (.imscc ZIP).');
-    // The end record is normally the last 22 bytes; read a small tail first and
-    // widen to the maximum comment length only if needed, so media near the
-    // end of the archive is not touched.
-    let tail, view, eocd = -1;
-    for (const tailLength of [Math.min(size, 1024), Math.min(size, 22 + 65535 + 20)]) {
-      tail = await readRange(file, size - tailLength, size);
-      view = new DataView(tail.buffer);
+    // The end record is normally exactly the last 22 bytes (no archive comment).
+    // Read only that first; scan for a comment only if needed, so media near the
+    // end of the archive is never touched.
+    let eocdAt = -1, view = null;
+    for (const tailLength of [Math.min(size, 22), Math.min(size, 22 + 65535)]) {
+      const tail = await readRange(file, size - tailLength, size);
+      const tv = new DataView(tail.buffer);
       for (let i = tail.length - 22; i >= 0; i--) {
-        if (u32(view, i) === 0x06054b50) { eocd = i; break; }
+        if (u32(tv, i) === 0x06054b50 && i + 22 + u16(tv, i + 20) === tail.length) {
+          eocdAt = size - tailLength + i;
+          view = new DataView(tail.buffer, i, 22);
+          break;
+        }
       }
-      if (eocd >= 0 || tailLength === size) break;
+      if (eocdAt >= 0 || tailLength === size) break;
     }
-    if (eocd < 0) throw new SlimExportError('This file is not a Canvas course export (.imscc ZIP).');
-    let count = u16(view, eocd + 10);
-    let cdSize = u32(view, eocd + 12);
-    let cdOffset = u32(view, eocd + 16);
+    if (eocdAt < 0) throw new SlimExportError('This file is not a Canvas course export (.imscc ZIP).');
+    let count = u16(view, 10);
+    let cdSize = u32(view, 12);
+    let cdOffset = u32(view, 16);
     if (count === 0xFFFF || cdSize === 0xFFFFFFFF || cdOffset === 0xFFFFFFFF) {
-      // ZIP64: the locator sits 20 bytes before the classic end record.
-      const locator = eocd - 20;
-      if (locator < 0 || u32(view, locator) !== 0x07064b50) throw new SlimExportError('ZIP64 archive is malformed.');
-      const recordOffset = u64(view, locator + 8);
+      // ZIP64: a 20-byte locator sits just before the classic end record.
+      const locatorBytes = eocdAt >= 20 ? await readRange(file, eocdAt - 20, eocdAt) : new Uint8Array(0);
+      const lv = new DataView(locatorBytes.buffer);
+      if (locatorBytes.length < 20 || u32(lv, 0) !== 0x07064b50) throw new SlimExportError('ZIP64 archive is malformed.');
+      const recordOffset = u64(lv, 8);
       const record = await readRange(file, recordOffset, recordOffset + 56);
       const rv = new DataView(record.buffer);
       if (record.length < 56 || u32(rv, 0) !== 0x06064b50) throw new SlimExportError('ZIP64 archive is malformed.');
@@ -164,7 +169,9 @@
       const externalAttrs = u32(cv, at + 38);
       let localOffset = u32(cv, at + 42);
       const nameBytes = cd.subarray(at + 46, at + 46 + nameLength);
-      const name = (flags & 0x800 ? utf8 : (/[\x80-\xff]/.test(latin1.decode(nameBytes)) ? utf8 : latin1)).decode(nameBytes);
+      const rawName = (flags & 0x800 ? utf8 : (/[\x80-\xff]/.test(latin1.decode(nameBytes)) ? utf8 : latin1)).decode(nameBytes);
+      // Archives made on Windows may use backslashes; normalize before the safety check.
+      const name = rawName.replace(/\\/g, '/').replace(/\/{2,}/g, '/');
       let extra = at + 46 + nameLength;
       const extraEnd = extra + extraLength;
       while (extra + 4 <= extraEnd) {
@@ -182,10 +189,19 @@
       const isDir = name.endsWith('/');
       const isLink = ((externalAttrs >>> 16) & 0xF000) === 0xA000;
       if (!safePath(name) || isLink) throw new SlimExportError('The archive contains an unsafe path.');
-      if (!isDir) entries.push({name, flags, method, crc, compressed, uncompressed, localOffset});
+      // macOS metadata (__MACOSX/, ._files, .DS_Store) is never course content.
+      const base = name.slice(name.lastIndexOf('/') + 1);
+      if (isDir || name.startsWith('__MACOSX/') || base === '.DS_Store' || base.startsWith('._')) continue;
+      entries.push({name, flags, method, crc, compressed, uncompressed, localOffset});
     }
     if (!entries.some(e => e.name === 'imsmanifest.xml')) {
-      throw new SlimExportError('This ZIP is not a Canvas course export: imsmanifest.xml is missing.');
+      // A course re-zipped inside one folder: treat that folder as the root.
+      const manifests = entries.filter(e => /^[^/]+\/imsmanifest\.xml$/.test(e.name));
+      const prefix = manifests.length === 1 ? manifests[0].name.slice(0, -'imsmanifest.xml'.length) : null;
+      if (!prefix || entries.some(e => !e.name.startsWith(prefix))) {
+        throw new SlimExportError('This ZIP is not a Canvas course export: imsmanifest.xml is missing.');
+      }
+      for (const entry of entries) entry.name = entry.name.slice(prefix.length);
     }
     return entries;
   }

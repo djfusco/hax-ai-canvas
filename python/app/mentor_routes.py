@@ -1133,9 +1133,12 @@ def create_mentor_blueprint(root_provider):
         except ValueError:
             raise ValueError("Reload the workspace and try again.") from None
         upload = request.files.get("bundle")
-        if not upload:
+        upload_id = request.form.get("upload_id")
+        if not upload and not upload_id:
             raise ValueError("No course was received from the extension.")
-        data = upload.stream.read(MAX_BUNDLE_BYTES + 1)
+        # Large bundles arrive in pieces through /intake/chunks (hosting caps request size).
+        data = (store().take_intake_upload(g.owner, workspace_id, upload_id) if upload_id
+                else upload.stream.read(MAX_BUNDLE_BYTES + 1))
         if len(data) > MAX_BUNDLE_BYTES:
             raise ValueError("The course from the extension exceeds 16 MiB.")
         try:

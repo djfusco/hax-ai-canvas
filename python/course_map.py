@@ -233,6 +233,8 @@ def build_course_map(model, alignment=None):
             "by_type": dict(Counter(e["type"] for e in graded)),
             "with_rubric": sum(1 for e in graded if e["rubric"]),
             "high_stakes": [e["title"] for e in graded if (e["grade_share"] or 0) >= 15],
+            "question_banks": [{"title": b["title"], "questions": len(b["questions"])}
+                               for b in model.get("question_banks", [])],
             "undated": undated,
         },
         "workload": workload,

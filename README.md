@@ -115,10 +115,9 @@ required by OpenRouter for PKCE).
 - **Not yet tested against real Canvas.** Export parsing and the extension's
   API calls follow Canvas's formats and documentation; validate with real
   courses (see the Phase 1 plan, Task 12), especially New Quizzes.
-- **Upload size.** Slim packages are sent in pieces under 4 MB (hosting
-  platforms cap request size) and assembled server-side, up to 48 MiB. The
-  extension's bundle is sent in one request; very large live courses may
-  exceed the hosting limit and should use the export path for now.
+- **Upload size.** Slim packages (up to 48 MiB) and extension bundles (up to
+  16 MiB) are sent in pieces under 4 MB, because hosting platforms cap request
+  size, and assembled server-side.
 - **Phase 2-3 not built yet:** accepting/editing proposals, the Course
   Improvement Plan document, and generating revised documents. The earlier
   draft-and-build wizard remains at `/mentor/legacy` until then.

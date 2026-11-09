@@ -155,6 +155,19 @@ class ExtensionIntakeTests(unittest.TestCase):
         self.assertEqual(result["course"]["privacy"]["counts"]["names"], 1)
         self.assertEqual(result["source_type"], "extension")
 
+    def test_chunked_bundle(self):
+        data = json.dumps(bundle()).encode()
+        half = len(data) // 2
+        for index, part in enumerate((data[:half], data[half:])):
+            response = self.client.post(f"/mentor/api/workspaces/{self.workspace['id']}/intake/chunks", data={
+                "upload_id": "9" * 32, "index": str(index), "total": "2", "chunk": (io.BytesIO(part), "part"),
+            }, content_type="multipart/form-data", headers={"X-Mentor-CSRF": self.csrf})
+            self.assertEqual(response.status_code, 200)
+        response = self.client.post(self.url, data={"upload_id": "9" * 32, "revision": str(self.workspace["revision"])},
+                                    content_type="multipart/form-data", headers={"X-Mentor-CSRF": self.csrf})
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        self.assertEqual(response.json["course"]["source"], "extension")
+
     def test_rejections(self):
         self.assertIn("not valid JSON", self.post(b"{nope", expected=400)["error"])
         self.assertIn("unsupported version", self.post(json.dumps({"version": 9}).encode(), expected=400)["error"])

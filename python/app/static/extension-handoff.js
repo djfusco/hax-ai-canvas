@@ -82,10 +82,25 @@
             body: JSON.stringify({ title: (preview.course || 'Canvas course').slice(0, 200) }),
           });
         }
+        // Send in pieces under 4 MB: hosting platforms cap request size.
+        const blob = new Blob([JSON.stringify(received.bundle)], { type: 'application/json' });
+        const piece = 3.5 * 1024 * 1024;
+        const total = Math.max(1, Math.ceil(blob.size / piece));
+        const uploadId = [...crypto.getRandomValues(new Uint8Array(16))].map(b => b.toString(16).padStart(2, '0')).join('');
+        for (let index = 0; index < total; index++) {
+          status(`Uploading part ${index + 1} of ${total}…`);
+          const chunk = new FormData();
+          chunk.append('upload_id', uploadId);
+          chunk.append('index', String(index));
+          chunk.append('total', String(total));
+          chunk.append('chunk', blob.slice(index * piece, (index + 1) * piece), 'part');
+          await json(`/mentor/api/workspaces/${encodeURIComponent(workspace.id)}/intake/chunks`, {
+            method: 'POST', headers: { 'X-Mentor-CSRF': csrf }, body: chunk });
+        }
         const form = new FormData();
         form.append('revision', String(workspace.revision));
         form.append('instructor_name', $('handoff-instructor').value.trim());
-        form.append('bundle', new Blob([JSON.stringify(received.bundle)], { type: 'application/json' }), 'course.json');
+        form.append('upload_id', uploadId);
         const result = await json(`/mentor/api/workspaces/${encodeURIComponent(workspace.id)}/intake/extension`, {
           method: 'POST', headers: { 'X-Mentor-CSRF': csrf }, body: form,
         });

@@ -144,7 +144,7 @@ class _Cartridge:
             raise IMSCCImportError("Archive is missing imsmanifest.xml.")
         # Validate all XML, including unknown metadata, without retaining trees.
         for name in self.entries:
-            if name.lower().endswith(".xml"):
+            if name.lower().endswith(".xml") and self.entries[name].file_size:
                 self.xml(name)
 
     def chunks(self, name, limit):
@@ -166,11 +166,21 @@ class _Cartridge:
         return b"".join(self.chunks(name, MAX_ENTRY_BYTES)).decode("utf-8-sig", errors="replace")
 
     def xml(self, name):
+        data = b"".join(self.chunks(name, MAX_XML_BYTES))
+        if not data.strip():
+            # Canvas exports can contain empty metadata files (e.g. media_tracks.xml).
+            from xml.etree.ElementTree import Element
+            return Element("empty")
         try:
-            root = SafeET.fromstring(
-                b"".join(self.chunks(name, MAX_XML_BYTES)),
-                forbid_dtd=True, forbid_entities=True, forbid_external=True,
-            )
+            try:
+                root = SafeET.fromstring(data, forbid_dtd=True, forbid_entities=True, forbid_external=True)
+            except ParseError:
+                # Some exports declare UTF-16 but contain UTF-8 without a byte-order mark.
+                declaration = re.match(rb"<\?xml[^>]*encoding=[\"']utf-16[\"'][^>]*\?>", data, re.I)
+                if not declaration or data.startswith((b"\xff\xfe", b"\xfe\xff")):
+                    raise
+                root = SafeET.fromstring(data[declaration.end():], forbid_dtd=True,
+                                         forbid_entities=True, forbid_external=True)
             stack = [(root, 1)]
             while stack:
                 node, depth = stack.pop()
@@ -186,8 +196,8 @@ class _Cartridge:
         if parsed.scheme or parsed.netloc:
             self.warn(f"External resource not imported: {href}")
             return None
-        decoded = unquote(parsed.path)
-        if "\\" in decoded or decoded.startswith("/") or ":" in decoded:
+        decoded = unquote(parsed.path).replace("\\", "/")  # Windows-made packages
+        if decoded.startswith("/") or ":" in decoded:
             self.warn(f"Unsafe resource reference ignored: {href}")
             return None
         name = posixpath.normpath(posixpath.join(posixpath.dirname(base), decoded))
@@ -268,8 +278,14 @@ class _Cartridge:
         description = ""
         meta = None
         usable_sources = []
+        # Canvas keeps full question data in non_cc_assessments/<id>.xml.qti. When it
+        # exists, read questions from it rather than the reduced CC copy.
+        native = [p for p in paths if p.lower().endswith(".qti")]
         for path in paths:
-            if not path.lower().endswith(".xml"):
+            lower = path.lower()
+            if not lower.endswith((".xml", ".qti")):
+                continue
+            if native and lower.endswith(".xml") and not lower.endswith("assessment_meta.xml"):
                 continue
             root = self.xml(path)
             if _local(root.tag) in ("quiz", "assessment_meta") or path.endswith("assessment_meta.xml"):
@@ -507,8 +523,12 @@ class _Cartridge:
                 kind = "assignment"
             elif "webcontent" in resource_type and any(p.lower().endswith((".html", ".htm")) for p in paths):
                 kind = "page"
+            if kind == "quiz":
+                native = f"non_cc_assessments/{identifier}.xml.qti"
+                if native in self.entries and native not in paths:
+                    paths.append(native)
             if kind:
-                content_paths = [p for p in paths if p.lower().endswith((".html", ".htm", ".xml"))]
+                content_paths = [p for p in paths if p.lower().endswith((".html", ".htm", ".xml", ".qti"))]
                 if kind in ("page", "assignment") and html_path:
                     content_paths = [p for p in content_paths if p == html_path
                                      or (p.lower().endswith(".xml")

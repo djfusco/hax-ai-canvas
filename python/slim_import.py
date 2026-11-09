@@ -41,6 +41,10 @@ MATERIAL_SUFFIXES = (".pdf", ".docx", ".pptx", ".txt", ".md", ".html", ".csv")
 FILEBASE = re.compile(r"(?:\$|%24)IMS(?:-|_)CC(?:-|_)FILEBASE(?:\$|%24)/([^\"'?#\s>]+)", re.IGNORECASE)
 
 
+def item_title(identifier):
+    return "Question bank " + identifier[-8:]
+
+
 class SlimImportError(ValueError):
     """The slim package cannot be imported; the message is safe to show."""
 
@@ -152,6 +156,7 @@ class _SlimImporter:
         self._quiz_settings()
         self._modules()
         self._outcome_links()
+        self._question_banks()
         _link_media(model)
         self._materials()
         counts = {
@@ -163,6 +168,7 @@ class _SlimImporter:
             "rubrics": len(model["rubrics"]),
             "outcomes": len(model["outcomes"]),
             "media": len(model["media_inventory"]),
+            "question_banks": len(model["question_banks"]),
             "materials": len(model["materials"]),
         }
         warnings = [_clip(w, 1000) for w in self.cartridge.warnings]
@@ -423,6 +429,47 @@ class _SlimImporter:
                 outcome = outcomes.get(criterion.get("outcome_id"))
                 if outcome is not None and item_id not in outcome["item_ids"]:
                     outcome["item_ids"].append(item_id)
+
+    def _question_banks(self):
+        """Canvas question banks (QTI objectbank), usually in non_cc_assessments/."""
+        total = 0
+        for path, info in self.cartridge.entries.items():
+            if not path.lower().endswith((".qti", ".xml")) or not info.file_size or path.startswith("course_settings/"):
+                continue
+            if len(self.model["question_banks"]) >= cm.MAX_RUBRICS:
+                break
+            head = self.archive.open(info).read(4096)
+            unfiled = (path.startswith("non_cc_assessments/") and path not in self.cartridge.consumed
+                       and b"<assessment" not in head and b"<item" in head)
+            if b"objectbank" not in head and not unfiled:
+                continue
+            root = self.cartridge.xml(path)
+            banks = _nodes(root, "objectbank") or ([root] if unfiled else [])
+            for bank in banks:
+                title = ""
+                for field in _nodes(bank, "qtimetadatafield"):
+                    if _text(field, "fieldlabel") == "bank_title":
+                        title = _text(field, "fieldentry")
+                questions = []
+                for item in _nodes(bank, "item"):
+                    if total >= cm.MAX_QUIZ_QUESTIONS:
+                        break
+                    fields = {_text(f, "fieldlabel"): _text(f, "fieldentry") for f in _nodes(item, "qtimetadatafield")}
+                    presentation = next(iter(_nodes(item, "presentation")), item)
+                    prompt = next((_text(m, "mattext") for m in _nodes(presentation, "material")), "")
+                    if not prompt.strip():
+                        continue
+                    total += 1
+                    questions.append({"text": _clip(prompt.strip(), cm.MAX_TEXT),
+                                      "type": _clip(fields.get("question_type", "qti"), 100),
+                                      "points": _float(fields.get("points_possible"))})
+                ident = bank.get("ident") or path
+                if bank is root and unfiled:
+                    title = title or "Unfiled questions"
+                self.model["question_banks"].append({
+                    "id": "bank-" + re.sub(r"[^A-Za-z0-9_.:-]", "-", ident)[:150],
+                    "title": _clip(title or item_title(ident), cm.MAX_TITLE), "questions": questions,
+                })
 
     def _materials(self):
         from mentor_materials import MaterialError, extract_material
