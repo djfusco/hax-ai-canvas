@@ -1026,6 +1026,45 @@ def create_mentor_blueprint(root_provider):
         workspace = store().save_course_model(g.owner, workspace_id, revision, model, privacy)
         return jsonify(public(workspace))
 
+    @bp.post("/api/workspaces/<workspace_id>/intake/extension")
+    def intake_extension(workspace_id):
+        """Import the live course collected by the Course Consultant browser extension.
+
+        The page receives the bundle from the extension and uploads it as a
+        multipart file with the instructor's own session; the extension never
+        holds Course Consultant credentials.
+        """
+        from canvas_api_import import MAX_BUNDLE_BYTES, BundleError, import_api_bundle
+        from privacy_strip import strip_course
+        workspace = store().get(g.owner, workspace_id)
+        if workspace.get("active_job"):
+            return jsonify({"error": "Wait for the active job before replacing the course."}), 409
+        try:
+            revision = int(request.form.get("revision", ""))
+        except ValueError:
+            raise ValueError("Reload the workspace and try again.") from None
+        upload = request.files.get("bundle")
+        if not upload:
+            raise ValueError("No course was received from the extension.")
+        data = upload.stream.read(MAX_BUNDLE_BYTES + 1)
+        if len(data) > MAX_BUNDLE_BYTES:
+            raise ValueError("The course from the extension exceeds 16 MiB.")
+        try:
+            bundle = json.loads(data.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            raise ValueError("The extension sent data that is not valid JSON.") from None
+        try:
+            model = import_api_bundle(bundle)
+        except BundleError as exc:
+            raise ValueError(str(exc)) from None
+        instructor = request.form.get("instructor_name", "")
+        if len(instructor) > 200:
+            raise ValueError("The instructor name is too long.")
+        model, privacy = strip_course(model, [instructor] if instructor.strip() else ())
+        privacy = {key: privacy[key] for key in ("counts", "total", "notes")}
+        workspace = store().save_course_model(g.owner, workspace_id, revision, model, privacy)
+        return jsonify(public(workspace))
+
     @bp.post("/api/workspaces/<workspace_id>/materials")
     def add_material(workspace_id):
         workspace = store().get(g.owner, workspace_id)

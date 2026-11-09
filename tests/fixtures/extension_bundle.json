@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "course": {
+    "id": 101, "name": "Biology 101: Cells", "course_code": "BIO-101",
+    "term": {"name": "Fall 2026"}, "apply_assignment_group_weights": true,
+    "syllabus_body": "<p>Office hours Tuesday. Textbook: Campbell Biology.</p>"
+  },
+  "late_policy": {"id": 9, "course_id": 101, "late_submission_deduction_enabled": true,
+                  "late_submission_deduction": 10.0, "late_submission_interval": "day"},
+  "assignment_groups": [
+    {"id": 1, "name": "Essays", "position": 1, "group_weight": 40.0},
+    {"id": 2, "name": "Labs", "position": 2, "group_weight": 30.0},
+    {"id": 3, "name": "Quizzes", "position": 3, "group_weight": 30.0}
+  ],
+  "outcomes": [
+    {"id": 501, "title": "Construct a scientific argument", "description": "<p>Use evidence.</p>", "mastery_points": 3},
+    {"id": 502, "title": "Use lab equipment safely", "mastery_points": 2}
+  ],
+  "pages": [
+    {"page_id": 11, "url": "welcome", "title": "Welcome", "published": true, "front_page": true,
+     "body": "<p>Welcome to cells.</p><a href=\"/courses/101/files/901/download\">Reading</a><video src=\"/courses/101/files/900/preview\"></video>"}
+  ],
+  "quizzes": [
+    {"id": 31, "title": "Cell quiz", "description": "<p>Check understanding.</p>", "quiz_type": "assignment",
+     "time_limit": 20, "allowed_attempts": 2, "points_possible": 10.0, "assignment_id": 204, "published": true,
+     "questions": [
+       {"question_text": "Which is a cell part?", "question_type": "multiple_choice_question", "points_possible": 2.0},
+       {"question_text": "Explain osmosis.", "question_type": "essay_question", "points_possible": 8.0}
+     ]}
+  ],
+  "new_quizzes": [
+    {"assignment_id": 205, "items": [
+      {"points_possible": 5, "entry": {"item_body": "<p>Label the mitochondrion.</p>", "interaction_type_slug": "hot-spot"}}
+    ]}
+  ],
+  "assignments": [
+    {"id": 201, "name": "Essay", "description": "<p>Argue a position on cell theory.</p>", "points_possible": 20.0,
+     "due_at": "2026-09-10T23:59:00Z", "submission_types": ["online_upload"], "grading_type": "points",
+     "assignment_group_id": 1, "peer_reviews": true, "group_category_id": null, "allowed_attempts": -1, "published": true,
+     "rubric_settings": {"id": 77, "title": "Essay rubric", "points_possible": 20.0},
+     "rubric": [
+       {"id": "_1", "points": 12.0, "description": "Thesis and evidence", "long_description": "Claims are supported",
+        "outcome_id": 501,
+        "ratings": [{"description": "Strong", "points": 12.0}, {"description": "Weak", "points": 4.0}]},
+       {"id": "_2", "points": 8.0, "description": "Writing", "ratings": [{"description": "Clear", "points": 8.0}]}
+     ]},
+    {"id": 202, "name": "Lab", "description": "<p>Microscope lab report.</p>", "points_possible": 15.0,
+     "due_at": "2026-09-17T23:59:00Z", "submission_types": ["online_upload"], "grading_type": "points",
+     "assignment_group_id": 2, "group_category_id": 44, "allowed_attempts": 3, "published": true},
+    {"id": 203, "name": "Project", "description": "<p>Final project.</p>", "points_possible": 30.0,
+     "submission_types": ["online_upload"], "grading_type": "points", "assignment_group_id": 1, "published": true},
+    {"id": 204, "name": "Cell quiz", "points_possible": 10.0, "due_at": "2026-09-05T23:59:00Z",
+     "submission_types": ["online_quiz"], "quiz_id": 31, "assignment_group_id": 3, "published": true},
+    {"id": 205, "name": "Organelle check", "points_possible": 5.0, "submission_types": ["external_tool"],
+     "is_quiz_lti_assignment": true, "assignment_group_id": 3, "published": true},
+    {"id": 206, "name": "Debate cells", "points_possible": 5.0, "submission_types": ["discussion_topic"],
+     "discussion_topic": {"id": 61}, "assignment_group_id": 1, "published": true}
+  ],
+  "discussion_topics": [
+    {"id": 61, "title": "Debate cells", "message": "<p>Is a virus alive?</p>", "published": true,
+     "entries": [{"message": "STUDENT REPLY SHOULD NEVER BE READ"}]},
+    {"id": 62, "title": "Announcement", "message": "<p>Class cancelled</p>", "is_announcement": true}
+  ],
+  "modules": [
+    {"id": 1, "name": "Week 1", "position": 1, "require_sequential_progress": true, "prerequisite_module_ids": [],
+     "items": [
+       {"id": 1001, "type": "Page", "title": "Welcome", "page_url": "welcome", "completion_requirement": {"type": "must_view"}},
+       {"id": 1002, "type": "Assignment", "title": "Essay", "content_id": 201},
+       {"id": 1003, "type": "Quiz", "title": "Cell quiz", "content_id": 31, "completion_requirement": {"type": "min_score", "min_score": 7}},
+       {"id": 1004, "type": "ExternalUrl", "title": "NCBI", "external_url": "https://www.ncbi.nlm.nih.gov/"},
+       {"id": 1005, "type": "SubHeader", "title": "Readings"}
+     ]},
+    {"id": 2, "name": "Week 2", "position": 2, "prerequisite_module_ids": [1],
+     "items": [
+       {"id": 2001, "type": "Assignment", "title": "Lab", "content_id": 202},
+       {"id": 2002, "type": "Assignment", "title": "Project", "content_id": 203},
+       {"id": 2003, "type": "Assignment", "title": "Organelle check", "content_id": 205},
+       {"id": 2004, "type": "Discussion", "title": "Debate cells", "content_id": 61}
+     ]}
+  ],
+  "files": [
+    {"id": 900, "display_name": "lecture one.mp4", "size": 4000000000, "content-type": "video/mp4"},
+    {"id": 901, "display_name": "reading.pdf", "size": 2000000, "content-type": "application/pdf"}
+  ],
+  "submissions": [{"score": 99, "user_id": 5}],
+  "warnings": []
+}
