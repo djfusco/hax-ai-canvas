@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+{% block title %}Course Consultant{% endblock %}
+{% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='consultant.css') }}">{% endblock %}
+{% block content %}
+<div class="cc" id="cc">
+  <p id="cc-error" class="cc-banner cc-banner-error" role="alert" hidden></p>
+  <p id="cc-status" class="cc-status" role="status" aria-live="polite"></p>
+
+  <!-- Sign in (cloud) -->
+  <section id="cc-signin" class="cc-card cc-narrow" hidden aria-labelledby="cc-signin-title">
+    <h1 id="cc-signin-title">Sign in to Course Consultant</h1>
+    <form id="cc-invite-form" hidden>
+      <label for="cc-invite">Invitation code</label>
+      <input id="cc-invite" autocomplete="one-time-code" required>
+      <button type="submit" class="cc-btn">Continue</button>
+    </form>
+    <form id="cc-email-form" hidden>
+      <label for="cc-email">Email</label>
+      <input id="cc-email" type="email" autocomplete="email" required>
+      <button type="submit" class="cc-btn">Email me a code</button>
+    </form>
+    <form id="cc-code-form" hidden>
+      <label for="cc-code">Six-digit code</label>
+      <input id="cc-code" inputmode="numeric" pattern="[0-9]{6}" autocomplete="one-time-code" required>
+      <button type="submit" class="cc-btn">Sign in</button>
+    </form>
+  </section>
+
+  <div id="cc-app" hidden>
+    <!-- Workspace and AI bar -->
+    <div class="cc-bar">
+      <div class="cc-bar-group">
+        <label for="cc-workspace" class="cc-sr">Course</label>
+        <select id="cc-workspace"></select>
+        <button id="cc-new" type="button" class="cc-btn cc-btn-quiet">New course</button>
+      </div>
+      <button id="cc-ai-toggle" type="button" class="cc-chip" aria-expanded="false" aria-controls="cc-ai">
+        <span class="cc-dot" id="cc-ai-dot"></span><span id="cc-ai-label">Choose an AI model</span>
+      </button>
+    </div>
+
+    <!-- AI provider and model -->
+    <section id="cc-ai" class="cc-card" hidden aria-labelledby="cc-ai-title">
+      <h2 id="cc-ai-title">AI model</h2>
+      <p class="cc-muted">Course Consultant uses your own AI account. You pay your provider directly; we never charge for AI.</p>
+      <div class="cc-providers" role="radiogroup" aria-label="AI provider">
+        <button type="button" class="cc-provider" data-provider="openrouter" role="radio">
+          <strong>OpenRouter</strong><span>One account, every major model. Easiest.</span></button>
+        <button type="button" class="cc-provider" data-provider="anthropic" role="radio">
+          <strong>Anthropic</strong><span>Claude models with your API key.</span></button>
+        <button type="button" class="cc-provider" data-provider="openai" role="radio">
+          <strong>OpenAI</strong><span>GPT models with your API key.</span></button>
+        <button type="button" class="cc-provider" data-provider="gemini" role="radio">
+          <strong>Google Gemini</strong><span>Gemini models with your API key.</span></button>
+      </div>
+      <div id="cc-ai-connect" hidden>
+        <div id="cc-openrouter-connect" hidden>
+          <button id="cc-openrouter" type="button" class="cc-btn">Connect with OpenRouter</button>
+          <p class="cc-muted">You'll approve access on openrouter.ai and come straight back. You can set a spending limit there.</p>
+        </div>
+        <form id="cc-key-form" hidden>
+          <label for="cc-key">API key</label>
+          <input id="cc-key" type="password" autocomplete="off" required>
+          <label class="cc-check"><input id="cc-remember" type="checkbox"> Remember on this browser for 30 days</label>
+          <button type="submit" class="cc-btn">Save key</button>
+        </form>
+      </div>
+      <div id="cc-models" hidden>
+        <label for="cc-model">Model</label>
+        <div class="cc-row">
+          <select id="cc-model"></select>
+          <button id="cc-model-refresh" type="button" class="cc-btn cc-btn-quiet">Refresh list</button>
+        </div>
+        <p id="cc-model-note" class="cc-muted"></p>
+        <div class="cc-row">
+          <button id="cc-model-use" type="button" class="cc-btn">Use this model</button>
+          <button id="cc-forget" type="button" class="cc-btn cc-btn-quiet">Disconnect this provider</button>
+        </div>
+      </div>
+    </section>
+
+    <nav class="cc-tabs" role="tablist" aria-label="Course Consultant">
+      <button role="tab" id="tab-course" aria-controls="view-course" aria-selected="true" type="button">1 · Your course</button>
+      <button role="tab" id="tab-consult" aria-controls="view-consult" aria-selected="false" type="button">2 · Consultation</button>
+      <button role="tab" id="tab-plan" aria-controls="view-plan" aria-selected="false" type="button">3 · Proposed changes <span id="cc-plan-count" class="cc-count" hidden></span></button>
+    </nav>
+
+    <!-- 1. Course -->
+    <section id="view-course" role="tabpanel" aria-labelledby="tab-course">
+      <div id="cc-intake">
+        <h1>Bring in your course</h1>
+        <p class="cc-muted">Choose one. Course Consultant reads text and structure only. Before saving, it removes likely
+          student information such as emails and names in class posts.</p>
+        <div class="cc-grid">
+          <article class="cc-card">
+            <h2>Upload a Canvas export</h2>
+            <p>In Canvas: <em>Settings → Export Course Content → Course</em>. Even multi-gigabyte exports work: videos and
+              other media stay on your computer and are only listed by name.</p>
+            <details class="cc-help"><summary>Make a smaller export</summary>
+              <p>Choose <em>Select specific content</em>, then untick <em>Files</em>. The export is quicker to make and download.</p></details>
+            <label for="cc-export" class="cc-btn cc-file">Choose export (.imscc)</label>
+            <input id="cc-export" type="file" accept=".imscc,.zip" class="cc-sr">
+            <div id="cc-slim" hidden>
+              <progress id="cc-slim-progress" max="1" value="0"></progress>
+              <p id="cc-slim-text" class="cc-muted"></p>
+              <fieldset id="cc-docs" hidden><legend>Also include these documents as text? (optional)</legend>
+                <div id="cc-docs-list"></div></fieldset>
+              <button id="cc-slim-import" type="button" class="cc-btn" hidden>Import course</button>
+              <button id="cc-slim-cancel" type="button" class="cc-btn cc-btn-quiet">Cancel</button>
+            </div>
+          </article>
+          <article class="cc-card">
+            <h2>Use the browser extension</h2>
+            <p>Send the live course straight from Canvas: no export or download. It reads course content only, after you
+              click and review it.</p>
+            <ol class="cc-steps"><li>Install the Course Consultant extension for Chrome or Edge.</li>
+              <li>Open your course in Canvas and click the extension.</li>
+              <li>Review, then <em>Send to Course Consultant</em>.</li></ol>
+          </article>
+          <article class="cc-card">
+            <h2>Start from documents</h2>
+            <p>No Canvas course? Add your syllabus or describe the course.</p>
+            <form id="cc-docs-form">
+              <label for="cc-docs-title">Course title</label>
+              <input id="cc-docs-title" maxlength="200">
+              <label for="cc-docs-files">Documents (PDF, Word, PowerPoint, text)</label>
+              <input id="cc-docs-files" type="file" multiple accept=".pdf,.docx,.pptx,.txt,.md,.csv,.html">
+              <label for="cc-docs-notes">Or describe the course</label>
+              <textarea id="cc-docs-notes" rows="4" maxlength="60000"></textarea>
+              <button type="submit" class="cc-btn">Use these</button>
+            </form>
+          </article>
+        </div>
+        <details class="cc-help cc-instructor"><summary>Your name (optional)</summary>
+          <label for="cc-instructor">So it isn't mistaken for a student's name when removing student information</label>
+          <input id="cc-instructor" maxlength="200" autocomplete="name"></details>
+      </div>
+
+      <div id="cc-course" hidden>
+        <div class="cc-head">
+          <div><h1 id="cc-course-title"></h1><p id="cc-course-meta" class="cc-muted"></p></div>
+          <button id="cc-replace" type="button" class="cc-btn cc-btn-quiet">Replace course</button>
+        </div>
+        <p id="cc-privacy" class="cc-banner"></p>
+        <div id="cc-map"></div>
+        <div class="cc-row"><button id="cc-start-consult" type="button" class="cc-btn">Start the consultation</button></div>
+      </div>
+    </section>
+
+    <!-- 2. Consultation -->
+    <section id="view-consult" role="tabpanel" aria-labelledby="tab-consult" hidden>
+      <div class="cc-consult">
+        <aside class="cc-side" aria-label="Topics">
+          <h2>Topics</h2>
+          <ol id="cc-topics" class="cc-topics"></ol>
+          <label for="cc-directness">Advice style</label>
+          <select id="cc-directness">
+            <option value="gentle">Gentle: mostly questions</option>
+            <option value="balanced">Balanced</option>
+            <option value="direct">Direct: clear recommendations</option>
+          </select>
+        </aside>
+        <div class="cc-chat">
+          <div id="cc-messages" class="cc-messages" aria-live="polite"></div>
+          <div id="cc-begin" class="cc-card cc-narrow" hidden>
+            <p>The consultant will start with a short snapshot of your course, then ask about your students and goals.</p>
+            <button id="cc-begin-btn" type="button" class="cc-btn">Begin</button>
+          </div>
+          <form id="cc-composer" class="cc-composer" hidden>
+            <label for="cc-message" class="cc-sr">Your message</label>
+            <textarea id="cc-message" rows="3" maxlength="6000" placeholder="Reply to the consultant…" required></textarea>
+            <button type="submit" class="cc-btn">Send</button>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. Proposed changes -->
+    <section id="view-plan" role="tabpanel" aria-labelledby="tab-plan" hidden>
+      <h1>Proposed changes</h1>
+      <p class="cc-muted">Ideas from your consultation, each with its reasoning. Accepting and editing changes, and turning
+        them into revised documents, are coming next.</p>
+      <div id="cc-proposals"></div>
+    </section>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='slim-export.js') }}"></script>
+<script src="{{ url_for('static', filename='consultant.js') }}"></script>
+{% endblock %}

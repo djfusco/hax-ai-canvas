@@ -423,6 +423,11 @@ def create_mentor_blueprint(root_provider):
     @bp.route("")
     @bp.route("/")
     def page():
+        return render_template("consultant.html")
+
+    @bp.get("/legacy")
+    def legacy_page():
+        # The earlier draft-and-build wizard, kept until Phase 3 replaces it.
         return render_template("mentor.html")
 
     @bp.get("/import/extension")
@@ -1122,6 +1127,59 @@ def create_mentor_blueprint(root_provider):
         instructor = request.form.get("instructor_name", "")
         if len(instructor) > 200:
             raise ValueError("The instructor name is too long.")
+        model, privacy = strip_course(model, [instructor] if instructor.strip() else ())
+        privacy = {key: privacy[key] for key in ("counts", "total", "notes")}
+        workspace = store().save_course_model(g.owner, workspace_id, revision, model, privacy)
+        return jsonify(public(workspace))
+
+    @bp.post("/api/workspaces/<workspace_id>/intake/documents")
+    def intake_documents(workspace_id):
+        """Start from documents only (e.g. a syllabus), with no Canvas course."""
+        import course_model as cm
+        from mentor_materials import MaterialError, extract_material
+        from privacy_strip import strip_course
+        workspace = store().get(g.owner, workspace_id)
+        if workspace.get("active_job"):
+            return jsonify({"error": "Wait for the active job before replacing the course."}), 409
+        try:
+            revision = int(request.form.get("revision", ""))
+        except ValueError:
+            raise ValueError("Reload the workspace and try again.") from None
+        title = request.form.get("title", "").strip()[:cm.MAX_TITLE] or workspace["title"]
+        uploads = [f for f in request.files.getlist("documents") if f and f.filename][:10]
+        notes = request.form.get("notes", "").strip()
+        if not uploads and not notes:
+            raise ValueError("Add a syllabus or other course document, or describe the course.")
+        model = cm.empty_course("documents", title)
+        with tempfile.TemporaryDirectory(prefix="documents-intake-") as temp:
+            for index, upload in enumerate(uploads, 1):
+                path = Path(temp) / f"document-{index}{Path(secure_filename(upload.filename)).suffix.lower()}"
+                count = 0
+                with path.open("wb") as output:
+                    while chunk := upload.stream.read(65536):
+                        count += len(chunk)
+                        if count > 10 * 1024 * 1024:
+                            raise ValueError("Each document must be 10 MiB or smaller.")
+                        output.write(chunk)
+                try:
+                    material = extract_material(path, upload.filename, "reference")
+                except MaterialError as exc:
+                    raise ValueError(f"{upload.filename[:100]}: {exc}") from None
+                model["materials"].append({"id": f"material-{index}", "name": material["name"][:cm.MAX_TITLE],
+                                           "role": "reference", "text": material["text"]})
+        if notes:
+            if len(notes) > cm.MAX_MATERIAL_CHARS:
+                raise ValueError("The course description is too long.")
+            model["materials"].append({"id": "material-notes", "name": "Instructor's description",
+                                       "role": "reference", "text": notes})
+        syllabus = next((m for m in model["materials"] if "syllabus" in m["name"].lower()), None)
+        if syllabus:
+            from html import escape
+            model["course"]["syllabus_html"] = "<pre>" + escape(syllabus["text"][:200000]) + "</pre>"
+        from datetime import datetime as _dt, timezone as _tz
+        model["provenance"].update(imported_at=_dt.now(_tz.utc).isoformat(timespec="seconds"),
+                                   counts={"materials": len(model["materials"])})
+        instructor = request.form.get("instructor_name", "")[:200]
         model, privacy = strip_course(model, [instructor] if instructor.strip() else ())
         privacy = {key: privacy[key] for key in ("counts", "total", "notes")}
         workspace = store().save_course_model(g.owner, workspace_id, revision, model, privacy)

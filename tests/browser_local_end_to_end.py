@@ -326,7 +326,7 @@ class LocalEndToEndTest(unittest.TestCase):
                 page.on("response", lambda response: chunks.append(response.json()["offset"])
                         if response.request.method == "PUT"
                         and "/api/local-uploads/" in response.url else None)
-                page.goto(url + "/mentor")
+                page.goto(url + "/mentor/legacy")
                 page.wait_for_function("busy === false")
                 session = page.request.get(url + "/mentor/api/session").json()
                 self.assertTrue(session["local_hax"])

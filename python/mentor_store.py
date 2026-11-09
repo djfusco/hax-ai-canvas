@@ -23,7 +23,7 @@ class WorkspaceConflict(RuntimeError):
     """A revision, approval or workflow precondition was not satisfied."""
 
 
-SOURCE_TYPES = frozenset(("blank", "api", "imscc", "prepared", "export", "extension"))
+SOURCE_TYPES = frozenset(("blank", "api", "imscc", "prepared", "export", "extension", "documents"))
 COURSE_MODEL_TABLE = (
     "CREATE TABLE IF NOT EXISTS mentor_course_models ("
     "workspace_id TEXT PRIMARY KEY, owner TEXT NOT NULL, model TEXT NOT NULL, "

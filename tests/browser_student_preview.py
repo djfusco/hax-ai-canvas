@@ -82,7 +82,7 @@ with tempfile.TemporaryDirectory(prefix="student-preview-") as temp, patch.dict(
                         route.abort()
                 context.route("**/*", guard)
                 main = context.new_page()
-                main.goto(origin + "/mentor")
+                main.goto(origin + "/mentor/legacy")
                 main.wait_for_function("busy === false")
                 main.locator("#workspace-list").select_option(work["id"])
                 main.wait_for_function("busy === false")

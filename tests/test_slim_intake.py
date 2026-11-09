@@ -140,6 +140,27 @@ class SlimIntakeTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIsNone(self.stored_model())
 
+    def test_documents_only_intake(self):
+        url = f"/mentor/api/workspaces/{self.workspace['id']}/intake/documents"
+        response = self.client.post(url, data={
+            "documents": (io.BytesIO(b"BIO 101 Syllabus. Objectives: explain osmosis. Contact me at prof@school.edu"),
+                          "Syllabus.txt"),
+            "notes": "A large intro course; students struggle with lab reports.",
+            "title": "Biology 101", "revision": str(self.workspace["revision"]),
+        }, content_type="multipart/form-data", headers={"X-Mentor-CSRF": self.csrf})
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        course = response.json["course"]
+        self.assertEqual((course["source"], course["title"], course["counts"]["materials"]), ("documents", "Biology 101", 2))
+        self.assertGreaterEqual(course["privacy"]["counts"]["emails"], 1)
+        model = self.stored_model()
+        self.assertNotIn("prof@school.edu", json.dumps(model))
+        self.assertIn("explain osmosis", model["course"]["syllabus_html"])
+        course_map = self.client.get(f"/mentor/api/workspaces/{self.workspace['id']}/course-map").json
+        self.assertEqual(course_map["assessment_summary"]["graded_items"], 0)
+        empty = self.client.post(url, data={"revision": str(response.json["revision"])},
+                                 content_type="multipart/form-data", headers={"X-Mentor-CSRF": self.csrf})
+        self.assertEqual(empty.status_code, 400)
+
     def test_other_browser_cannot_import(self):
         other = web.app.test_client()
         csrf = other.get("/mentor/api/session").json["csrf"]

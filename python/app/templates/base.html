@@ -3,8 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{% block title %}Course Mentor{% endblock %}</title>
+  <title>{% block title %}Course Consultant{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  {% block head %}{% endblock %}
 </head>
 <body>
 
@@ -13,16 +14,17 @@
     <div class="brand">
       <span class="brand-icon">🎓</span>
       <div>
-        <div class="brand-name">Course Mentor</div>
-        <div class="brand-sub">AI-Assisted HAX Course Builder</div>
+        <div class="brand-name">Course Consultant</div>
+        <div class="brand-sub">Redesign your course with a pedagogical partner</div>
       </div>
     </div>
     <nav class="main-nav">
-      <a href="{{ url_for('mentor.page') }}" class="nav-link {% if request.blueprint == 'mentor' %}active{% endif %}">My Courses</a>
+      <a href="{{ url_for('mentor.page') }}" class="nav-link {% if request.endpoint == 'mentor.page' %}active{% endif %}">My Courses</a>
       {% if not is_hosted %}
       <details class="nav-advanced">
         <summary class="nav-link">Advanced ▾</summary>
         <div class="nav-dropdown">
+          <a href="{{ url_for('mentor.legacy_page') }}" class="nav-link">Earlier draft &amp; build wizard</a>
           <a href="{{ url_for('index') }}"  class="nav-link {% if request.endpoint == 'index' %}active{% endif %}">Requirements</a>
           <a href="{{ url_for('setup') }}"  class="nav-link {% if request.endpoint == 'setup' %}active{% endif %}">Configuration</a>
           <a href="{{ url_for('run_page') }}" class="nav-link {% if request.endpoint in ('run_page','run_start','stream') %}active{% endif %}">Legacy Run</a>
@@ -40,11 +42,8 @@
 </main>
 
 <footer class="app-footer">
-  {% if is_hosted %}
-  <p>Faculty Mentor beta · Private hosted processing · AI requests use your selected provider · Raw uploads are deleted after verified preparation.</p>
-  {% else %}
-  <p>Course Mentor &nbsp;·&nbsp; Running locally at <a href="http://127.0.0.1:5050">127.0.0.1:5050</a> &nbsp;·&nbsp; File imports stay local; AI processing uses your selected provider.</p>
-  {% endif %}
+  <p>Course Consultant · Course excerpts you discuss are sent to the AI provider you choose, after likely student
+    information is removed · Grades, submissions and student replies are never imported.</p>
 </footer>
 
 {% block scripts %}{% endblock %}
