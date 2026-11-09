@@ -60,13 +60,14 @@
     return body;
   }
 
-  async function run(label, task) {
-    if (state.busy) return;
+  /** Run one task at a time with a status line. Resolves true on success. */
+  async function run(label, task, done = '') {
+    if (state.busy) return false;
     state.busy = true;
     showError('');
     status(label);
     document.body.setAttribute('aria-busy', 'true');
-    try { await task(); status(''); } catch (error) { status(''); showError(error.message); } finally {
+    try { await task(); status(done); return true; } catch (error) { status(''); showError(error.message); return false; } finally {
       state.busy = false;
       document.body.removeAttribute('aria-busy');
     }
@@ -298,11 +299,12 @@
 
   async function refreshCourse() {
     const course = state.workspace.course;
-    $('cc-intake').hidden = Boolean(course);
-    $('cc-course').hidden = !course;
     state.map = course ? await api(`/mentor/api/workspaces/${state.workspace.id}/course-map`) : null;
     state.consult = await api(`/mentor/api/workspaces/${state.workspace.id}/consult`);
     if (course) renderCourse();
+    // Reveal only after rendering, so the panel never shows half-filled.
+    $('cc-intake').hidden = Boolean(course);
+    $('cc-course').hidden = !course;
     renderPlanCount();
     if (state.tab === 'consult') renderConsult();
     if (state.tab === 'plan') await loadPlan();
@@ -674,8 +676,7 @@
         outcomes: lines('cc-plan-outcomes').map(text => ({ text, note: notes[text] || '' })),
         open_questions: lines('cc-plan-questions') } });
       renderPlan();
-      status('Plan saved.');
-    });
+    }, 'Plan saved.');
   });
 
   // ── revised documents ────────────────────────────────────────────────────
