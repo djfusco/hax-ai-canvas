@@ -297,6 +297,21 @@ class MentorStore:
             self._write(conn, owner, state)
         return state
 
+    def save_course_alignment(self, owner, id, imported_at, alignment):
+        """Attach a proposed outcome alignment to the current course model.
+
+        ``imported_at`` must match the stored course, so a proposal computed for
+        a course that was since replaced is rejected rather than misapplied.
+        """
+        alignment = _object(alignment)
+
+        def transition(state):
+            summary = (state.get("source") or {}).get("course_model")
+            if not summary or summary.get("imported_at") != imported_at:
+                raise WorkspaceConflict("The course changed while outcomes were being mapped. Try again.")
+            state["source"]["alignment"] = alignment
+        return self._change(owner, id, transition)
+
     def get_course_model(self, owner, id):
         """Return the stored course model, or None if the workspace has none."""
         with self._connection() as conn:

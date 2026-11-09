@@ -90,6 +90,32 @@ class SlimIntakeTests(unittest.TestCase):
         # The raw package is never persisted.
         self.assertFalse(list(self.root.rglob("*.zip")))
 
+    def test_course_map_endpoint(self):
+        base = f"/mentor/api/workspaces/{self.workspace['id']}/course-map"
+        self.assertEqual(self.client.get(base).status_code, 404)
+        self.upload(slim_package())
+        course_map = self.client.get(base).json
+        self.assertEqual(course_map["course"]["title"], "Biology 101: Cells")
+        self.assertTrue(course_map["grading"]["weighted_groups"])
+        self.assertEqual(course_map["assessment_summary"]["with_rubric"], 1)
+
+    def test_alignment_is_tied_to_the_imported_course(self):
+        from mentor_store import WorkspaceConflict
+        import sqlite3
+        result = self.upload(slim_package())
+        store = MentorStore(self.root / "workspaces.sqlite")
+        with sqlite3.connect(self.root / "workspaces.sqlite") as conn:
+            owner = conn.execute("SELECT owner FROM mentor_workspaces").fetchone()[0]
+        alignment = {"version": 1, "status": "proposed", "alignments": [], "syllabus_outcomes": []}
+        with self.assertRaises(WorkspaceConflict):
+            store.save_course_alignment(owner, self.workspace["id"], "stale", alignment)
+        store.save_course_alignment(owner, self.workspace["id"], result["course"]["imported_at"], alignment)
+        base = f"/mentor/api/workspaces/{self.workspace['id']}/course-map"
+        self.assertEqual(self.client.get(base).json["alignment_status"], "proposed")
+        self.workspace = result
+        self.upload(slim_package())  # re-import clears the old proposal
+        self.assertEqual(self.client.get(base).json["alignment_status"], "rubric_only")
+
     def test_reimport_replaces_course(self):
         first = self.upload(slim_package())
         self.workspace = first

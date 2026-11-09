@@ -1069,6 +1069,15 @@ def create_mentor_blueprint(root_provider):
         workspace = store().save_course_model(g.owner, workspace_id, revision, model, privacy)
         return jsonify(public(workspace))
 
+    @bp.get("/api/workspaces/<workspace_id>/course-map")
+    def course_map_view(workspace_id):
+        from course_map import build_course_map
+        workspace = store().get(g.owner, workspace_id)
+        model = store().get_course_model(g.owner, workspace_id)
+        if model is None:
+            return jsonify({"error": "Import a course first."}), 404
+        return jsonify(build_course_map(model, (workspace.get("source") or {}).get("alignment")))
+
     @bp.post("/api/workspaces/<workspace_id>/materials")
     def add_material(workspace_id):
         workspace = store().get(g.owner, workspace_id)
