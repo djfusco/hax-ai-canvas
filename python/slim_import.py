@@ -142,6 +142,7 @@ class _SlimImporter:
         title, _, _ = self.cartridge.parse()
         model = cm.empty_course("export", _clip(title_hint or title, cm.MAX_TITLE))
         self.model = model
+        model["media_inventory"] = self.inventory
         self._items()
         self._course_settings()
         self._groups()
@@ -151,6 +152,7 @@ class _SlimImporter:
         self._quiz_settings()
         self._modules()
         self._outcome_links()
+        _link_media(model)
         self._materials()
         counts = {
             "pages": sum(1 for i in model["items"] if i["kind"] == "page"),
@@ -451,8 +453,6 @@ def import_slim(path, title_hint=None) -> dict:
         with zipfile.ZipFile(path) as archive:
             importer = _SlimImporter(archive, workdir)
             model = importer.run(title_hint)
-            model["media_inventory"] = importer.inventory
-            _link_media(model)
         for item in model["items"]:
             item.pop("source_path", None)
         return cm.validate_course(model)

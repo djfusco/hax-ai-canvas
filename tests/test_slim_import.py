@@ -249,6 +249,7 @@ class SlimImportTests(unittest.TestCase):
         self.assertFalse([w for w in model["provenance"]["warnings"] if "Missing archive reference" in w])
         self.assertFalse([w for w in model["provenance"]["warnings"] if "no usable bundled files" in w])
         self.assertEqual(model["provenance"]["counts"]["assignments"], 3)
+        self.assertEqual(model["provenance"]["counts"]["media"], 2)
         self.assertEqual(model["provenance"]["source"], "export")
 
     def test_full_export_inventories_media_without_reading_it(self):
