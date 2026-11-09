@@ -64,8 +64,8 @@ The instructor picks their normal Canvas `.imscc` export on the website.
    size) so the consultant knows they exist.
 5. The browser suggests small documents (PDF, DOCX, PPTX) that assignments
    or pages link to, and the instructor can tick them for inclusion as text.
-6. The browser runs the student-information strip (section 7), then uploads
-   a slim course package, typically 1-20 MB.
+6. The browser uploads a slim course package, typically 1-20 MB. The server
+   strips student information (section 7) before storing anything.
 
 This replaces the hosted beta's Blob multipart upload, Sandbox preparation
 and Workflow chain for course intake.
@@ -75,7 +75,7 @@ and Workflow chain for course intake.
 small export in the first place. Slimming handles anything that slips
 through.
 
-### Path 2: Browser extension (next)
+### Path 2: Chrome extension (Phase 1)
 A Chrome/Edge extension (Firefox later) that reads the **live** course while
 the instructor is logged into Canvas, using their existing session. No token,
 no admin approval. Designed for trust:
@@ -291,14 +291,16 @@ and approval flow. Exports:
 ## 11. Phases
 
 **Phase 1: Intake and consultation core**
+(Plan: `docs/superpowers/plans/2026-11-09-consultant-phase-1.md`)
 - Browser-side export slimming + slim upload; export guidance panel.
 - Importer: slim mode + full metadata (rubrics, weights, outcomes, module
   requirements, settings).
 - Student-information stripping.
 - Course map.
 - Topic-based consultation with validated state, session summaries.
+- Chrome extension (section 2, Path 2) and its import adapter.
 - OpenRouter provider.
-- Test with real large exports, including New Quizzes.
+- Test with real large exports and the extension, including New Quizzes.
 
 **Phase 2: Improvement Plan**
 - Plan model, propose/accept flow, plan view, Word/HTML export.
@@ -307,8 +309,8 @@ and approval flow. Exports:
 - Generate revised syllabus, assignments and rubrics from accepted changes.
 - HAX site package download.
 
-**Phase 4: Browser extension**
-- Chrome/Edge extension (section 2, Path 2), then Firefox.
+**Phase 4: More browsers**
+- Firefox (and Safari if demand) versions of the extension.
 
 **Later: Institutional connection**
 - OAuth developer key or LTI 1.3 for adopting institutions.
