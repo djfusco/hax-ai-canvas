@@ -1,12 +1,14 @@
 {
   "name": "hax-ai-canvas",
   "version": "1.0.13",
-  "description": "AI-powered Canvas course to HAX site builder — local web app for instructors",
+  "description": "Course Consultant: AI-assisted pedagogical consultation for Canvas courses (cloud app, browser extension)",
   "scripts": {
     "build": "node scripts/build-hosted.cjs",
     "build:hosted": "node scripts/build-hosted.cjs",
     "test:upload": "node --test tests-js/*.test.cjs",
-    "check:hosted": "python3 scripts/check_hosted.py"
+    "check:hosted": "python3 scripts/check_hosted.py",
+    "test": "node --test tests-js/*.test.cjs",
+    "build:extension": "node scripts/build-extension.cjs"
   },
   "dependencies": {
     "@haxtheweb/create": "26.8.1",
@@ -18,19 +20,6 @@
   "overrides": {
     "js-yaml": "4.3.2"
   },
-  "bin": {
-    "hax-ai-canvas": "bin/index.js"
-  },
-  "files": [
-    "bin/index.js",
-    "python/*.py",
-    "python/requirements.txt",
-    "python/app/*.py",
-    "python/app/static/*.css",
-    "python/app/static/*.js",
-    "python/app/templates/*.html",
-    "README.md"
-  ],
   "engines": {
     "node": ">=22.0.0"
   },
@@ -47,5 +36,6 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/djfusco/hax-ai-canvas.git"
-  }
+  },
+  "private": true
 }

@@ -160,7 +160,8 @@ class HostedApiTests(unittest.TestCase):
         for path in ("/setup", "/run", "/history", "/import"):
             self.assertEqual(self.get(path).status_code, 404)
         response = self.get("/mentor")
-        self.assertIn(b"hosted-upload.js", response.data)
+        self.assertIn(b"consultant.js", response.data)
+        self.assertIn(b"hosted-upload.js", self.get("/mentor/legacy").data)
         cookie = response.headers.get("Set-Cookie", "")
         self.assertIn("Secure", cookie)
         self.assertIn("HttpOnly", cookie)
