@@ -86,8 +86,11 @@ class _HTMLMetadata(HTMLParser):
 
 
 class _Cartridge:
-    def __init__(self, archive, output, course_id):
+    def __init__(self, archive, output, course_id, *, slim=False, inventory=()):
         self.archive = archive
+        # Slim packages omit media by design; inventory paths are expected-missing.
+        self.slim = slim
+        self.inventory = set(inventory)
         self.output = output
         self.course_id = course_id
         self.entries = {}
@@ -192,7 +195,8 @@ class _Cartridge:
             self.warn(f"Unsafe resource reference ignored: {href}")
             return None
         if name not in self.entries:
-            self.warn(f"Missing archive reference: {name}")
+            if not (self.slim and name in self.inventory):
+                self.warn(f"Missing archive reference: {name}")
             return None
         return name
 
@@ -311,6 +315,7 @@ class _Cartridge:
                     "question_type": fields.get("question_type", "qti_text"),
                     "answers": answers,
                     "source_identifier": node.get("ident") or node.get("identifier"),
+                    **({"points_possible": fields.get("points_possible")} if self.slim else {}),
                 })
                 usable_sources.append(path)
         self.warn(f"Partial quiz coverage ({identifier}): question text/choices only; grading, feedback, banks, interactions and full quiz fidelity are not preserved.")
@@ -365,6 +370,8 @@ class _Cartridge:
         return self.add(kind, html_path or (xml_paths[0] if xml_paths else identifier), data, paths)
 
     def assets(self):
+        if self.slim:
+            return
         for path, info in self.entries.items():
             if path in self.consumed or path == "imsmanifest.xml":
                 continue
@@ -464,6 +471,8 @@ class _Cartridge:
                 self.warn(f"External LTI/web link resource not imported: {identifier}")
                 continue
             if not paths:
+                if self.slim and "webcontent" in resource_type:
+                    continue  # Media resource omitted from the slim package.
                 self.warn(f"Resource has no usable bundled files: {identifier}")
                 continue
             for path in list(paths):
