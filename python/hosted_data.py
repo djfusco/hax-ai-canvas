@@ -18,7 +18,7 @@ from cryptography.fernet import Fernet
 from mentor_credentials import CredentialVault
 from mentor_materials import EXTENSIONS, MAX_FILE_BYTES, ROLES, _name
 from mentor_store import (
-    MentorStore, WorkspaceConflict, WorkspaceNotFound, _now, _object, _revision,
+    COURSE_MODEL_TABLE, MentorStore, WorkspaceConflict, WorkspaceNotFound, _now, _object, _revision,
 )
 
 
@@ -82,6 +82,7 @@ class PostgresMentorStore(_Postgres, MentorStore):
                 "CREATE INDEX IF NOT EXISTS mentor_workspaces_owner "
                 "ON mentor_workspaces(owner)"
             )
+            conn.execute(COURSE_MODEL_TABLE)
 
     def _connection(self):
         return self._session()

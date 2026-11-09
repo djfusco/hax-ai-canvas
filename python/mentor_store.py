@@ -23,7 +23,12 @@ class WorkspaceConflict(RuntimeError):
     """A revision, approval or workflow precondition was not satisfied."""
 
 
-SOURCE_TYPES = frozenset(("blank", "api", "imscc", "prepared"))
+SOURCE_TYPES = frozenset(("blank", "api", "imscc", "prepared", "export", "extension"))
+COURSE_MODEL_TABLE = (
+    "CREATE TABLE IF NOT EXISTS mentor_course_models ("
+    "workspace_id TEXT PRIMARY KEY, owner TEXT NOT NULL, model TEXT NOT NULL, "
+    "updated_at TEXT NOT NULL)"
+)
 _SECRET_FIELDS = frozenset((
     "apikey", "token", "accesstoken", "refreshtoken", "canvastoken",
     "password", "secret", "clientsecret", "authorization", "cookie",
@@ -91,6 +96,7 @@ class MentorStore:
                 "CREATE INDEX IF NOT EXISTS mentor_workspaces_owner "
                 "ON mentor_workspaces(owner)"
             )
+            conn.execute(COURSE_MODEL_TABLE)
 
     @contextmanager
     def _connection(self):
@@ -252,6 +258,54 @@ class MentorStore:
                 if key in source:
                     state[key] = source[key]
         return self._edit_input(owner, id, revision, edit)
+
+    def save_course_model(self, owner, id, revision, model, privacy):
+        """Store a validated, privacy-stripped course model as the workspace source.
+
+        The model lives in its own table (it can be several MiB); the workspace
+        state keeps only a summary. Replacing the course invalidates downstream
+        work like any other input change.
+        """
+        import course_model as cm
+        cm.validate_course(model)
+        privacy = _object(privacy)
+        source_type = model["provenance"]["source"]
+        if source_type not in SOURCE_TYPES:
+            raise ValueError("Invalid source type.")
+        encoded = json.dumps(model, allow_nan=False)
+        summary = {
+            "title": model["course"]["title"], "source": source_type,
+            "imported_at": model["provenance"].get("imported_at"),
+            "counts": model["provenance"].get("counts", {}),
+            "warnings": model["provenance"].get("warnings", [])[:20],
+            "warning_count": len(model["provenance"].get("warnings", [])),
+            "privacy": privacy,
+        }
+        with self._transaction() as conn:
+            state = self._load(conn, owner, id)
+            self._exact(state, revision)
+            self._idle(state)
+            state["source"] = {"source_type": source_type, "course_model": summary}
+            state["source_type"] = source_type
+            self._invalidate(state)
+            conn.execute(
+                "INSERT INTO mentor_course_models (workspace_id, owner, model, updated_at) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT (workspace_id) DO UPDATE SET "
+                "owner = excluded.owner, model = excluded.model, updated_at = excluded.updated_at",
+                (id, owner, encoded, _now()),
+            )
+            self._write(conn, owner, state)
+        return state
+
+    def get_course_model(self, owner, id):
+        """Return the stored course model, or None if the workspace has none."""
+        with self._connection() as conn:
+            self._load(conn, owner, id)
+            row = conn.execute(
+                "SELECT model FROM mentor_course_models WHERE owner = ? AND workspace_id = ?",
+                (owner, id),
+            ).fetchone()
+        return json.loads(row[0]) if row else None
 
     def save_brief(self, owner, id, brief, revision):
         _text(brief, "brief", empty=True)

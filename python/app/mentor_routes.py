@@ -200,6 +200,9 @@ def create_mentor_blueprint(root_provider):
     def public(workspace):
         result = {k: v for k, v in workspace.items()
                   if k not in ("owner", "export_dir", "source", "local_upload")}
+        course_summary = (workspace.get("source") or {}).get("course_model")
+        if course_summary:
+            result["course"] = course_summary
         if result.get("artifact"):
             result["artifact"] = {k: v for k, v in result["artifact"].items()
                                   if k not in ("path", "preview_dir", "blob_path")}
@@ -982,6 +985,46 @@ def create_mentor_blueprint(root_provider):
         except Exception:
             shutil.rmtree(base, ignore_errors=True)
             raise
+
+    @bp.post("/api/workspaces/<workspace_id>/intake/export")
+    def intake_export(workspace_id):
+        """Import a browser-slimmed Canvas export into the workspace's course model.
+
+        The package is processed in a temporary directory and never stored:
+        import, privacy strip and validation all happen before saving.
+        """
+        from slim_import import MAX_SLIM_BYTES, SlimImportError, import_slim
+        from privacy_strip import strip_course
+        workspace = store().get(g.owner, workspace_id)
+        if workspace.get("active_job"):
+            return jsonify({"error": "Wait for the active job before replacing the course."}), 409
+        try:
+            revision = int(request.form.get("revision", ""))
+        except ValueError:
+            raise ValueError("Reload the workspace and try again.") from None
+        upload = request.files.get("package")
+        if not upload:
+            raise ValueError("Choose a Canvas course export to import.")
+        instructor = request.form.get("instructor_name", "")
+        if len(instructor) > 200:
+            raise ValueError("The instructor name is too long.")
+        with tempfile.TemporaryDirectory(prefix="slim-intake-") as temp:
+            path = Path(temp) / "package.zip"
+            count = 0
+            with path.open("wb") as output:
+                while chunk := upload.stream.read(1024 * 1024):
+                    count += len(chunk)
+                    if count > MAX_SLIM_BYTES:
+                        raise ValueError("The slimmed course package exceeds 48 MiB.")
+                    output.write(chunk)
+            try:
+                model = import_slim(path)
+            except SlimImportError as exc:
+                raise ValueError(str(exc)) from None
+        model, privacy = strip_course(model, [instructor] if instructor.strip() else ())
+        privacy = {key: privacy[key] for key in ("counts", "total", "notes")}
+        workspace = store().save_course_model(g.owner, workspace_id, revision, model, privacy)
+        return jsonify(public(workspace))
 
     @bp.post("/api/workspaces/<workspace_id>/materials")
     def add_material(workspace_id):
