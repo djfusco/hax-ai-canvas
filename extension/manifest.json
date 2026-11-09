@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Course Consultant: Send Canvas Course",
+  "short_name": "Course Consultant",
+  "version": "0.1.0",
+  "description": "Send the Canvas course you are viewing to Course Consultant. Reads course content only, when you click, after you review it.",
+  "permissions": ["activeTab", "scripting"],
+  "action": {
+    "default_title": "Send this course to Course Consultant",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "externally_connectable": {
+    "matches": ["http://127.0.0.1/*", "http://localhost/*"]
+  },
+  "minimum_chrome_version": "116"
+}

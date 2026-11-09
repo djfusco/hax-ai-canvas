@@ -420,6 +420,10 @@ def create_mentor_blueprint(root_provider):
     def page():
         return render_template("mentor.html")
 
+    @bp.get("/import/extension")
+    def import_from_extension():
+        return render_template("import_extension.html")
+
     @bp.get("/api/session")
     def session_info():
         return jsonify({"csrf": g.csrf, "credentials": g.vault.status(g.owner) if g.authenticated else [],

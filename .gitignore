@@ -31,3 +31,4 @@ python/app/static/hosted-upload.js
 .version
 .pip_installed
 .venv/
+dist/

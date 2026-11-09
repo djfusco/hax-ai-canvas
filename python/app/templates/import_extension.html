@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Import course from extension{% endblock %}
+{% block content %}
+<section class="handoff" aria-labelledby="handoff-title">
+  <h1 id="handoff-title">Import your course</h1>
+  <p id="handoff-status" role="status" aria-live="polite">Receiving the course from the Course Consultant extension…</p>
+  <div id="handoff-review" hidden>
+    <p>Course: <strong id="handoff-course"></strong></p>
+    <p id="handoff-counts"></p>
+    <label for="handoff-workspace">Import into</label>
+    <select id="handoff-workspace"><option value="">A new workspace</option></select>
+    <label for="handoff-instructor">Your name, so it isn't mistaken for a student's (optional)</label>
+    <input id="handoff-instructor" maxlength="200" autocomplete="name">
+    <p class="hint">Before saving, we remove likely student information such as emails and names in class posts.
+      Replacing an existing workspace's course resets its later steps.</p>
+    <button id="handoff-import" type="button" class="btn btn-primary">Import course</button>
+  </div>
+  <p id="handoff-error" role="alert" class="banner banner-warn" hidden></p>
+  <p id="handoff-done" hidden>Imported. <a href="{{ url_for('mentor.page') }}">Continue to Course Consultant</a></p>
+</section>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='extension-handoff.js') }}"></script>
+{% endblock %}

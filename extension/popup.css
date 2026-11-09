@@ -1,0 +1,17 @@
+:root { --fg: #1f2328; --muted: #5a6370; --accent: #1f5fbf; --bg: #ffffff; --warn: #8a5300; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg: #e6e8eb; --muted: #a2a9b3; --accent: #7aa7ff; --bg: #1c1f24; --warn: #e3b05b; }
+}
+body { font: 14px/1.45 system-ui, sans-serif; color: var(--fg); background: var(--bg); width: 340px; margin: 0; padding: 14px 16px; }
+h1 { font-size: 16px; margin: 0 0 10px; }
+p { margin: 0 0 10px; }
+.promise { padding-left: 18px; margin: 0 0 12px; color: var(--muted); }
+.hint { color: var(--muted); font-size: 12px; }
+button { font: inherit; border: 0; border-radius: 6px; padding: 8px 14px; background: var(--accent); color: #fff; cursor: pointer; }
+button.secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+.actions { display: flex; gap: 8px; margin-top: 12px; }
+dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 0 0 10px; }
+dt { color: var(--muted); }
+dd { margin: 0; font-variant-numeric: tabular-nums; }
+#items { max-height: 160px; overflow: auto; padding-left: 18px; color: var(--muted); }
+.warnings { padding-left: 18px; color: var(--warn); }

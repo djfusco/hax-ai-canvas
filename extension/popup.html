@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Course Consultant</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <h1>Course Consultant</h1>
+
+  <section id="not-course" hidden>
+    <p>Open one of your courses in Canvas, then click this button again.</p>
+  </section>
+
+  <section id="start" hidden>
+    <p>Read <strong>this course's content</strong> so Course Consultant can help you improve it.</p>
+    <ul class="promise">
+      <li>Pages, assignments, rubrics, quizzes, discussion prompts, modules, outcomes and the file list.</li>
+      <li>Never grades, submissions, student replies or class lists.</li>
+      <li>Nothing is sent until you review it and click Send.</li>
+    </ul>
+    <button id="collect" type="button">Read this course</button>
+  </section>
+
+  <section id="working" hidden>
+    <p>Reading your course: <span id="step">starting</span>…</p>
+    <p class="hint">You can close this window; reading continues.</p>
+  </section>
+
+  <section id="review" hidden>
+    <p>Ready to send <strong id="course-name"></strong>:</p>
+    <dl id="counts"></dl>
+    <details>
+      <summary>See item titles</summary>
+      <ul id="items"></ul>
+    </details>
+    <ul id="warnings" class="warnings"></ul>
+    <div class="actions">
+      <button id="send" type="button">Send to Course Consultant</button>
+      <button id="discard" type="button" class="secondary">Discard</button>
+    </div>
+  </section>
+
+  <section id="failed" hidden>
+    <p id="error" role="alert"></p>
+    <button id="retry" type="button" class="secondary">Try again</button>
+  </section>
+
+  <script src="popup.js"></script>
+</body>
+</html>
