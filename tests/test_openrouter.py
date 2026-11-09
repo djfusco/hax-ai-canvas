@@ -140,6 +140,26 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(str(seen[0].url), "https://openrouter.ai/api/v1/models")
 
 
+class RobustDiscoveryTests(unittest.TestCase):
+    def test_unusual_entries_are_skipped_and_large_catalogs_fit(self):
+        catalog = {"data": [
+            {"id": "~anthropic/claude-latest", "name": "Alias with tilde"},
+            {"id": None, "name": "No id"},
+            "not an object",
+            {"id": "x" * 300},
+        ] + [dict(CATALOG_ENTRY, id=f"vendor/model-{n}") for n in range(700)]}
+        with guard():
+            result = discover_models("openrouter", {"api_key": "sk-or-fixture"},
+                                     transport=httpx.MockTransport(lambda r: httpx.Response(200, json=catalog)))
+        self.assertEqual(len(result["models"]), 700)
+
+    def test_all_unreadable_is_a_clear_error(self):
+        from provider_models import ModelDiscoveryError
+        with guard(), self.assertRaisesRegex(ModelDiscoveryError, "could not be read"):
+            discover_models("openrouter", {"api_key": "k"},
+                            transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"data": [{"id": None}]})))
+
+
 class ConnectFlowTests(unittest.TestCase):
     def setUp(self):
         import app as web

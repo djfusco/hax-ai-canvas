@@ -1,9 +1,13 @@
 """Bounded model catalogs; never issue inference or transmit course content."""
+import logging
 import os
 import re
 import time
 from urllib.parse import urlsplit
 from model_capabilities import resolve_capabilities
+
+
+logger = logging.getLogger(__name__)
 
 
 class ModelDiscoveryError(ValueError):
@@ -47,6 +51,41 @@ def _pricing(item):
     return result
 
 
+def _catalog_entry(provider, item, key, seen):
+    """One catalog row as a model choice, None to leave it out, or ValueError if unreadable."""
+    if not isinstance(item, dict):
+        raise ValueError("not an object")
+    identifier = item.get("name", "") if provider == "gemini" else item.get("id", "")
+    if not isinstance(identifier, str):
+        raise ValueError("no identifier")
+    if provider == "gemini":
+        identifier = identifier.removeprefix("models/")
+        methods = item.get("supportedGenerationMethods", [])
+        if not isinstance(methods, list) or "generateContent" not in methods:
+            return None
+    identifier = model_id(identifier)
+    if key in identifier:
+        return None
+    if provider != "nebula" and re.search(
+            r"(embed|whisper|tts|image|audio|realtime|moderation|dall-e|video|sora)", identifier, re.I):
+        return None
+    if item.get("lifecycle") == "retired" or identifier in seen:
+        return None
+    capabilities = resolve_capabilities(provider, identifier, item)
+    if provider == "openrouter" and capabilities["status"] == "unsupported":
+        return None
+    seen.add(identifier)
+    label = item.get("displayName", item.get("display_name", item.get("name", identifier)
+                     if provider == "openrouter" else identifier))
+    if not isinstance(label, str):
+        label = identifier
+    label = label.replace(key, "[credential removed]")
+    return {"id": identifier, "name": "".join(c for c in label[:160] if c.isprintable()),
+            "compatibility": "unverified" if provider in ("openai", "nebula") else "text",
+            **({"pricing": _pricing(item)} if provider == "openrouter" else {}),
+            "capabilities": capabilities}
+
+
 def discover_models(provider, saved, *, transport=None):
     import httpx
     key = saved["api_key"]
@@ -67,6 +106,9 @@ def discover_models(provider, saved, *, transport=None):
     else:
         raise ValueError("Unsupported AI provider.")
     result, seen, cursors = [], set(), set()
+    skipped = 0
+    # OpenRouter lists every major provider's models in one catalog.
+    max_models = 1500 if provider == "openrouter" else 500
     params = ({"pageSize": 100} if provider == "gemini"
               else {} if provider in ("openai", "openrouter") else {"limit": 100})
     # OpenRouter returns its whole catalog, with descriptions, in one response.
@@ -93,42 +135,27 @@ def discover_models(provider, saved, *, transport=None):
                     import json
                     data = json.loads(content)
                 rows = data.get("models" if provider == "gemini" else "data")
-                if not isinstance(rows, list) or len(rows) > 1000:
+                if not isinstance(rows, list) or len(rows) > 3000:
                     raise ModelDiscoveryError("Provider returned an invalid or oversized catalog.")
                 for item in rows:
-                    if not isinstance(item, dict):
-                        raise ValueError()
-                    identifier = item.get("name", "") if provider == "gemini" else item.get("id", "")
-                    if provider == "gemini":
-                        identifier = identifier.removeprefix("models/")
-                        methods = item.get("supportedGenerationMethods", [])
-                        if not isinstance(methods, list) or "generateContent" not in methods:
-                            continue
-                    identifier = model_id(identifier)
-                    if key in identifier:
+                    # One malformed or unusual entry must not fail the whole catalog.
+                    try:
+                        entry = _catalog_entry(provider, item, key, seen)
+                    except ValueError:
+                        skipped += 1
                         continue
-                    if provider == "openrouter" and resolve_capabilities(
-                            provider, identifier, item)["status"] == "unsupported":
+                    if entry is None:
                         continue
-                    if provider != "nebula" and re.search(
-                            r"(embed|whisper|tts|image|audio|realtime|moderation|dall-e|video|sora)", identifier, re.I):
-                        continue
-                    if item.get("lifecycle") == "retired" or identifier in seen:
-                        continue
-                    seen.add(identifier)
-                    label = item.get("displayName", item.get("display_name", item.get("name", identifier)
-                                     if provider == "openrouter" else identifier))
-                    if not isinstance(label, str):
-                        label = identifier
-                    label = label.replace(key, "[credential removed]")
-                    result.append({"id": identifier, "name": "".join(c for c in label[:160] if c.isprintable()),
-                                   "compatibility": "unverified" if provider in ("openai", "nebula") else "text",
-                                   **({"pricing": _pricing(item)} if provider == "openrouter" else {}),
-                                   "capabilities": resolve_capabilities(provider, identifier, item)})
-                    if len(result) > 500:
-                        raise ModelDiscoveryError("More than 500 text-model candidates were returned. Narrow the provider catalog.")
+                    result.append(entry)
+                    if len(result) > max_models:
+                        raise ModelDiscoveryError(
+                            f"More than {max_models} text-model candidates were returned. Narrow the provider catalog.")
                 cursor = data.get("nextPageToken") if provider == "gemini" else data.get("last_id") if data.get("has_more") else None
                 if not cursor:
+                    if skipped:
+                        logger.warning("Model discovery skipped %d unreadable %s catalog entries", skipped, provider)
+                    if not result and skipped:
+                        raise ModelDiscoveryError("The provider's model list could not be read. Please retry later.")
                     return {"models": result, "manual_allowed": provider == "nebula",
                             "warning": "Catalog listing is not a guarantee of inference permission or request compatibility."}
                 if not isinstance(cursor, str) or len(cursor) > 512 or cursor in cursors:
@@ -138,5 +165,7 @@ def discover_models(provider, saved, *, transport=None):
             raise ModelDiscoveryError("Provider catalog exceeded the page limit.")
     except ModelDiscoveryError:
         raise
-    except Exception:
+    except Exception as exc:
+        # Log the error type only; messages can contain provider data.
+        logger.warning("Model discovery for %s failed: %s", provider, type(exc).__name__)
         raise ModelDiscoveryError("Model discovery failed. Check the provider configuration and retry.") from None
