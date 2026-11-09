@@ -1294,6 +1294,172 @@ def create_mentor_blueprint(root_provider):
         workspace = store().finish_consult(g.owner, workspace_id, state, turn)
         return jsonify(consult_view(workspace))
 
+    # ── improvement plan and revised documents (Phases 2-3) ───────────────────
+
+    def plan_view(workspace):
+        import improvement_plan as ip
+        consult_state = workspace.get("consultation") or {}
+        return {"plan": workspace.get("plan") or ip.new_plan(),
+                "proposals": consult_state.get("proposals", []),
+                "consulted": bool(consult_state.get("turns")),
+                "busy": bool(workspace.get("consult_busy"))}
+
+    def documents_view(workspace):
+        import revised_documents as rd
+        model = store().get_course_model(g.owner, workspace["id"])
+        documents = workspace.get("documents") or []
+        return {"documents": documents,
+                "targets": rd.targets(model, workspace.get("consultation")) if model else [],
+                "busy": bool(workspace.get("consult_busy"))}
+
+    def ai_step(workspace_id, data, work):
+        """Run one AI step under the consultation lease; return the saved workspace."""
+        resolved = provider_values(data)
+        if resolved[1] is None:
+            raise ValueError("Choose an AI provider and model first.")
+        workspace = store().begin_consult(g.owner, workspace_id)
+        ai = None
+        try:
+            ai = client(data, resolved)
+            fields = work(workspace, ai)
+        except ValueError as exc:
+            store().release_consult(g.owner, workspace_id)
+            return None, (jsonify({"error": redact(str(exc))[:500]}), 502)
+        except Exception:
+            store().release_consult(g.owner, workspace_id)
+            raise
+        finally:
+            if ai is not None:
+                ai.close()
+        return store().save_consultant_fields(g.owner, workspace_id, release=True, **fields), None
+
+    def course_inputs(workspace):
+        from course_map import build_course_map
+        model = store().get_course_model(g.owner, workspace["id"])
+        if model is None:
+            raise WorkspaceConflict("Import a course first.")
+        return model, build_course_map(model, (workspace.get("source") or {}).get("alignment"))
+
+    @bp.post("/api/workspaces/<workspace_id>/consult/proposals/<proposal_id>")
+    def decide_proposal(workspace_id, proposal_id):
+        import improvement_plan as ip
+        data = payload()
+        workspace = store().get(g.owner, workspace_id)
+        try:
+            state = ip.decide(workspace.get("consultation"), proposal_id, data.get("status"),
+                              {k: data[k] for k in ("title", "change", "rationale") if k in data})
+        except ip.PlanError as exc:
+            raise ValueError(str(exc)) from None
+        return jsonify(plan_view(store().save_consultant_fields(g.owner, workspace_id, consultation=state)))
+
+    @bp.get("/api/workspaces/<workspace_id>/plan")
+    def plan_get(workspace_id):
+        return jsonify(plan_view(store().get(g.owner, workspace_id)))
+
+    @bp.put("/api/workspaces/<workspace_id>/plan")
+    def plan_put(workspace_id):
+        import improvement_plan as ip
+        workspace = store().get(g.owner, workspace_id)
+        try:
+            plan = ip.edit_plan(workspace.get("plan"), payload())
+        except ip.PlanError as exc:
+            raise ValueError(str(exc)) from None
+        return jsonify(plan_view(store().save_consultant_fields(g.owner, workspace_id, plan=plan)))
+
+    @bp.post("/api/workspaces/<workspace_id>/plan/draft")
+    def plan_draft(workspace_id):
+        import improvement_plan as ip
+
+        def work(workspace, ai):
+            model, course_map = course_inputs(workspace)
+            return {"plan": ip.draft_plan(workspace.get("plan") or ip.new_plan(), model, course_map,
+                                          workspace.get("consultation"), ai)}
+        workspace, error = ai_step(workspace_id, payload(), work)
+        return error or jsonify(plan_view(workspace))
+
+    @bp.get("/api/workspaces/<workspace_id>/plan/export")
+    def plan_export(workspace_id):
+        import improvement_plan as ip
+        workspace = store().get(g.owner, workspace_id)
+        plan = workspace.get("plan") or ip.new_plan()
+        title = ((workspace.get("source") or {}).get("course_model") or {}).get("title") or workspace["title"]
+        if request.args.get("format") == "docx":
+            body = ip.render_docx(title, plan, workspace.get("consultation"))
+            return file_response(body, ip.safe_filename("Improvement plan " + title, ".docx"),
+                            "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        return file_response(ip.render_html(title, plan, workspace.get("consultation")).encode(),
+                        ip.safe_filename("Improvement plan " + title, ".html"), "text/html; charset=utf-8")
+
+    def file_response(body, filename, mimetype):
+        from flask import Response
+        response = Response(body, mimetype=mimetype)
+        response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+        response.headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'"
+        return response
+
+    @bp.get("/api/workspaces/<workspace_id>/documents")
+    def documents_get(workspace_id):
+        return jsonify(documents_view(store().get(g.owner, workspace_id)))
+
+    @bp.post("/api/workspaces/<workspace_id>/documents/generate")
+    def documents_generate(workspace_id):
+        import revised_documents as rd
+        data = payload()
+
+        def work(workspace, ai):
+            model, course_map = course_inputs(workspace)
+            document = rd.generate(data.get("kind"), model, course_map, workspace.get("consultation"),
+                                   workspace.get("plan"), ai, item_id=data.get("item_id"))
+            return {"documents": rd.add(workspace.get("documents"), document)}
+        workspace, error = ai_step(workspace_id, data, work)
+        return error or jsonify(documents_view(workspace))
+
+    @bp.route("/api/workspaces/<workspace_id>/documents/<document_id>", methods=["PUT", "DELETE"])
+    def documents_change(workspace_id, document_id):
+        import revised_documents as rd
+        workspace = store().get(g.owner, workspace_id)
+        try:
+            documents = (rd.remove(workspace.get("documents"), document_id) if request.method == "DELETE"
+                         else rd.edit(workspace.get("documents"), document_id, payload()))
+        except rd.DocumentError as exc:
+            raise ValueError(str(exc)) from None
+        return jsonify(documents_view(store().save_consultant_fields(g.owner, workspace_id, documents=documents)))
+
+    @bp.get("/api/workspaces/<workspace_id>/documents/<document_id>/export")
+    def document_export(workspace_id, document_id):
+        import revised_documents as rd
+        from improvement_plan import safe_filename
+        workspace = store().get(g.owner, workspace_id)
+        document = next((d for d in workspace.get("documents") or [] if d["id"] == document_id), None)
+        if document is None:
+            return jsonify({"error": "That document no longer exists."}), 404
+        if request.args.get("format") == "docx":
+            return file_response(rd.to_docx(document), safe_filename(document["title"], ".docx"),
+                            "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        return file_response(rd.standalone_html(document).encode(), safe_filename(document["title"], ".html"),
+                        "text/html; charset=utf-8")
+
+    @bp.get("/api/workspaces/<workspace_id>/documents/export")
+    def documents_package(workspace_id):
+        import improvement_plan as ip
+        import revised_documents as rd
+        workspace = store().get(g.owner, workspace_id)
+        title = ((workspace.get("source") or {}).get("course_model") or {}).get("title") or workspace["title"]
+        documents = workspace.get("documents") or []
+        try:
+            if request.args.get("format") == "hax":
+                with tempfile.TemporaryDirectory(prefix="hax-package-") as temp:
+                    result = rd.hax_package(workspace_id, title, documents, Path(temp) / "site")
+                    body = Path(result["path"]).read_bytes()
+                return file_response(body, ip.safe_filename(title + " HAX site", ".zip"), "application/zip")
+            plan = workspace.get("plan") or ip.new_plan()
+            plan_files = [("Improvement plan.html", ip.render_html(title, plan, workspace.get("consultation"))),
+                          ("Improvement plan.docx", ip.render_docx(title, plan, workspace.get("consultation")))]
+            return file_response(rd.zip_package(title, documents, plan_files),
+                            ip.safe_filename(title + " revised documents", ".zip"), "application/zip")
+        except rd.DocumentError as exc:
+            raise ValueError(str(exc)) from None
+
     @bp.post("/api/workspaces/<workspace_id>/course-map/align")
     def course_map_align(workspace_id):
         from course_map import CourseMapError, build_course_map, propose_alignment

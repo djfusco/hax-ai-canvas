@@ -433,6 +433,21 @@ class MentorStore:
             state["consult_busy"] = None
         return self._change(owner, id, transition)
 
+    def save_consultant_fields(self, owner, id, *, release=False, **fields):
+        """Save plan/documents/consultation fields; optionally release the AI lease."""
+        allowed = {"consultation", "plan", "documents"}
+        if not set(fields) <= allowed:
+            raise ValueError("Invalid consultant field.")
+        values = {key: _object({"value": value})["value"] for key, value in fields.items()}
+
+        def transition(state):
+            if not release and state.get("consult_busy"):
+                raise WorkspaceConflict("The consultant is still working. Wait a moment.")
+            state.update(values)
+            if release:
+                state["consult_busy"] = None
+        return self._change(owner, id, transition)
+
     def release_consult(self, owner, id):
         return self._change(owner, id, lambda state: state.update(consult_busy=None))
 
