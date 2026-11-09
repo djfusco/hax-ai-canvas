@@ -3,7 +3,11 @@
  * closing, and hands the finished bundle only to the Course Consultant page
  * (origin checked) that asks for it. Holds no Course Consultant credentials.
  */
-importScripts('config.js', 'collect.js');
+// Chrome runs this as a service worker; Firefox loads config.js and collect.js
+// as background scripts listed before this file.
+if (typeof importScripts === 'function') importScripts('config.js', 'collect.js');
+const ext = globalThis.browser || globalThis.chrome; // Firefox: promise-based browser.*
+const HANDOFF = self.COURSE_CONSULTANT_HANDOFF || 'external'; // 'external' (Chrome) or 'bridge' (Firefox)
 
 const state = { status: 'idle', tabId: null, progress: null, preview: null, error: null, bundle: null };
 
@@ -25,11 +29,12 @@ async function collectFromTab(tab) {
   if (!target) throw new Error('Open a course in Canvas, then click the extension again.');
   Object.assign(state, { status: 'collecting', tabId: tab.id, progress: 'starting', preview: null, error: null, bundle: null });
   // activeTab grants access to this tab only, only after the instructor's click.
-  await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['collect.js'] });
-  const [result] = await chrome.scripting.executeScript({
+  await ext.scripting.executeScript({ target: { tabId: tab.id }, files: ['collect.js'] });
+  const [result] = await ext.scripting.executeScript({
     target: { tabId: tab.id },
     func: async (origin, courseId) => {
-      const report = step => chrome.runtime.sendMessage({ type: 'progress', step }).catch(() => {});
+      const api = globalThis.browser || globalThis.chrome;
+      const report = step => Promise.resolve(api.runtime.sendMessage({ type: 'progress', step })).catch(() => {});
       try {
         return { bundle: await self.CourseCollector.collect({ origin, courseId, onProgress: report }) };
       } catch (error) {
@@ -45,25 +50,42 @@ async function collectFromTab(tab) {
   state.status = 'ready';
 }
 
-chrome.runtime.onMessage.addListener((message, sender, reply) => {
-  if (sender.id !== chrome.runtime.id) return false;
+ext.runtime.onMessage.addListener((message, sender, reply) => {
+  if (sender.id !== ext.runtime.id) return false;
   if (message.type === 'progress') {
     if (sender.tab && sender.tab.id === state.tabId) state.progress = message.step;
     return false;
   }
   if (message.type === 'state') { reply(publicState()); return false; }
   if (message.type === 'collect') {
-    chrome.tabs.get(message.tabId).then(collectFromTab).catch(error => {
+    ext.tabs.get(message.tabId).then(collectFromTab).catch(error => {
       Object.assign(state, { status: 'error', error: error.message, bundle: null });
     });
     reply(publicState());
     return false;
   }
+  if (message.type === 'bridge-get-bundle' || message.type === 'bridge-imported') {
+    // Only the bridge content script on the Course Consultant import page may ask.
+    let origin = null;
+    try { origin = new URL(sender.url || (sender.tab && sender.tab.url) || '').origin; } catch (_) { /* invalid */ }
+    if (HANDOFF !== 'bridge' || origin !== self.COURSE_CONSULTANT_ORIGIN) {
+      reply({ error: 'This site is not Course Consultant.' });
+      return false;
+    }
+    if (message.type === 'bridge-imported') {
+      Object.assign(state, { status: 'idle', tabId: null, progress: null, preview: null, error: null, bundle: null });
+      reply({ ok: true });
+    } else {
+      reply(state.status === 'ready' ? { bundle: state.bundle, preview: state.preview }
+        : { error: 'No course is waiting. Use the extension in Canvas first.' });
+    }
+    return false;
+  }
   if (message.type === 'send') {
     if (state.status !== 'ready') { reply({ error: 'Read the course first.' }); return false; }
     const url = new URL('/mentor/import/extension', self.COURSE_CONSULTANT_ORIGIN);
-    url.searchParams.set('ext', chrome.runtime.id);
-    chrome.tabs.create({ url: url.href });
+    url.searchParams.set(HANDOFF === 'bridge' ? 'bridge' : 'ext', HANDOFF === 'bridge' ? '1' : ext.runtime.id);
+    ext.tabs.create({ url: url.href });
     reply({ ok: true });
     return false;
   }
@@ -76,7 +98,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
 });
 
 // Only the configured Course Consultant origin may receive the course.
-chrome.runtime.onMessageExternal.addListener((message, sender, reply) => {
+if (ext.runtime.onMessageExternal) ext.runtime.onMessageExternal.addListener((message, sender, reply) => {
   if (!sender.origin || sender.origin !== self.COURSE_CONSULTANT_ORIGIN) {
     reply({ error: 'This site is not Course Consultant.' });
     return false;

@@ -122,3 +122,58 @@ test('extension refuses to hand the course to another site', { skip: !playwright
     await context.close();
   }
 });
+
+test('bridge hand-off (used by Firefox) delivers the course only to the import page',
+  { skip: !playwright, timeout: 90000 }, async () => {
+    const { execFileSync } = require('node:child_process');
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-data-'));
+    const extension = fs.mkdtempSync(path.join(os.tmpdir(), 'ext-bridge-'));
+    execFileSync('node', [path.join(ROOT, 'scripts/build-extension.cjs'), '--origin', ORIGIN, '--handoff', 'bridge',
+      '--keep-test-hook', '--out', extension], { cwd: ROOT });
+    const manifest = JSON.parse(fs.readFileSync(path.join(extension, 'manifest.json'), 'utf8'));
+    assert.equal(manifest.externally_connectable, undefined);
+    assert.deepEqual(manifest.content_scripts[0].matches, ['http://127.0.0.1/mentor/import/extension*']);
+    const app = await startApp(dataDir);
+    const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-profile-'));
+    let context;
+    try {
+      context = await playwright.chromium.launchPersistentContext(profile, {
+        headless: true, channel: 'chromium',
+        args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`],
+      });
+      let [worker] = context.serviceWorkers();
+      if (!worker) worker = await context.waitForEvent('serviceworker', { timeout: 15000 });
+      const bundle = JSON.parse(fs.readFileSync(path.join(ROOT, 'tests/fixtures/extension_bundle.json'), 'utf8'));
+      await worker.evaluate(value => self.__setBundleForTest(value), bundle);
+
+      // Another page on the same site, outside the import page, gets no bridge.
+      const other = await context.newPage();
+      await other.goto(`${ORIGIN}/mentor`);
+      const reply = await other.evaluate(() => new Promise(resolve => {
+        window.addEventListener('message', e => { if (e.data && e.data.source === 'course-consultant-extension') resolve(e.data); });
+        window.postMessage({ source: 'course-consultant-page', type: 'get-bundle', nonce: 'n1' }, location.origin);
+        setTimeout(() => resolve('no answer'), 1500);
+      }));
+      assert.equal(reply, 'no answer');
+
+      const page = await context.newPage();
+      await page.goto(`${ORIGIN}/mentor/import/extension?bridge=1`);
+      await page.locator('#handoff-review').waitFor({ state: 'visible', timeout: 15000 });
+      assert.equal(await page.locator('#handoff-course').textContent(), 'Biology 101: Cells');
+      await page.click('#handoff-import');
+      await page.locator('#handoff-done').waitFor({ state: 'visible', timeout: 15000 });
+      const workspaces = await page.evaluate(async () => (await fetch('/mentor/api/workspaces')).json());
+      assert.equal(workspaces[0].course.source, 'extension');
+      // The extension cleared its copy after the import.
+      const again = await page.evaluate(() => new Promise(resolve => {
+        window.addEventListener('message', e => {
+          if (e.data && e.data.source === 'course-consultant-extension' && e.data.nonce === 'n2') resolve(e.data.response);
+        });
+        window.postMessage({ source: 'course-consultant-page', type: 'get-bundle', nonce: 'n2' }, location.origin);
+      }));
+      assert.match(again.error, /No course is waiting/);
+    } finally {
+      if (context) await context.close();
+      app.kill();
+    }
+  });

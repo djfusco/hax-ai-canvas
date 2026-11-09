@@ -18,7 +18,38 @@
     return /^[a-p]{32}$/.test(id) ? id : null;
   }
 
+  const bridged = new URLSearchParams(location.search).get('bridge') === '1';
+
+  /** Firefox: talk to the extension's bridge content script with window messages. */
+  function askBridge(message) {
+    return new Promise((resolve, reject) => {
+      const nonce = Array.from(crypto.getRandomValues(new Uint8Array(12)), b => b.toString(16).padStart(2, '0')).join('');
+      // The bridge may load after this script; re-send until it answers.
+      const post = () => window.postMessage({ source: 'course-consultant-page', type: message.type, nonce }, location.origin);
+      const retry = setInterval(post, 400);
+      const timer = setTimeout(() => {
+        clearInterval(retry);
+        window.removeEventListener('message', listen);
+        reject(new Error('The Course Consultant extension did not respond. Is it installed in this browser?'));
+      }, 10000);
+      function listen(event) {
+        const data = event.data;
+        if (event.source !== window || event.origin !== location.origin || !data
+            || data.source !== 'course-consultant-extension' || data.nonce !== nonce) return;
+        clearTimeout(timer);
+        clearInterval(retry);
+        window.removeEventListener('message', listen);
+        const response = data.response;
+        if (!response || response.error) reject(new Error((response && response.error) || 'No course was received.'));
+        else resolve(response);
+      }
+      window.addEventListener('message', listen);
+      post();
+    });
+  }
+
   function ask(id, message) {
+    if (bridged) return askBridge(message);
     return new Promise((resolve, reject) => {
       if (!(window.chrome && chrome.runtime && chrome.runtime.sendMessage)) {
         reject(new Error('The Course Consultant extension is not installed in this browser.'));
@@ -40,7 +71,7 @@
   }
 
   async function main() {
-    const id = extensionId();
+    const id = bridged ? 'bridge' : extensionId();
     if (!id) { fail('Open this page from the Course Consultant extension.'); return; }
     let received;
     try { received = await ask(id, { type: 'get-bundle' }); } catch (error) { fail(error.message); return; }

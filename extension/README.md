@@ -26,10 +26,23 @@ See [PRIVACY.md](PRIVACY.md) for exactly what it reads.
 
 ## Release
 ```bash
-node scripts/build-extension.cjs --origin https://your-course-consultant-site
+node scripts/build-extension.cjs --origin https://your-course-consultant-site                    # Chrome, Edge
+node scripts/build-extension.cjs --origin https://your-course-consultant-site --browser firefox  # Firefox 121+
 ```
-Produces `dist/extension/` and `dist/course-consultant-extension.zip` for the
-Chrome Web Store, with the origin set and the test hook removed.
+Chrome/Edge: `dist/extension/` and `dist/course-consultant-extension.zip` for
+the Chrome Web Store. Firefox: `dist/extension-firefox/` and
+`dist/course-consultant-extension-firefox.zip` for addons.mozilla.org. The
+origin is set and the test hook removed.
+
+### Firefox differences
+Firefox has no `externally_connectable`, so the Firefox build hands the course
+to the site through `bridge.js`, a content script limited to
+`/mentor/import/extension` on the configured site (it also checks the exact
+origin). The background runs as event-page scripts instead of a service
+worker, and APIs are called through the promise-based `browser.*` namespace.
+The bridge path is tested in Chromium (`--handoff bridge`); **run
+`npx web-ext lint` on the Firefox build and try it in Firefox before
+publishing**, since Firefox itself is not available in the test environment.
 
 ## Not yet verified against real Canvas
 The endpoint list and response fields follow Canvas's documented REST API.

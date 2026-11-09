@@ -36,5 +36,10 @@ posts). After the import, the extension discards its copy.
   extension's button. It cannot see your other tabs or browsing.
 - **scripting:** to run the reader in that tab after your click.
 
+**Firefox only:** Firefox cannot let a website ask an extension for data
+directly, so the Firefox version also runs a small relay (`bridge.js`) on one
+page: Course Consultant's own import page. It passes that page's two requests
+(get the waiting course, mark it imported) to the extension and nothing else.
+
 The extension does not store your Canvas or Course Consultant credentials,
 has no background access to any website, and contains no analytics.

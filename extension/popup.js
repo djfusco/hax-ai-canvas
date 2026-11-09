@@ -1,5 +1,7 @@
 'use strict';
 
+const ext = globalThis.browser || globalThis.chrome; // Firefox: promise-based browser.*
+
 const sections = ['not-course', 'start', 'working', 'review', 'failed'];
 let tabId = null;
 let timer = null;
@@ -10,7 +12,7 @@ function show(id) {
 
 function text(id, value) { document.getElementById(id).textContent = value; }
 
-function send(message) { return chrome.runtime.sendMessage(message); }
+function send(message) { return ext.runtime.sendMessage(message); }
 
 const LABELS = {
   modules: 'Modules', pages: 'Pages', assignments: 'Assignments', quizzes: 'Quizzes',
@@ -62,7 +64,7 @@ function render(state) {
 async function refresh() { render(await send({ type: 'state' })); }
 
 async function init() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const [tab] = await ext.tabs.query({ active: true, currentWindow: true });
   // The tab URL is visible here because the click granted activeTab.
   const isCourse = tab && /^https?:\/\/[^/]+\/courses\/\d+(?:\/|$)/.test(tab.url || '');
   tabId = isCourse ? tab.id : null;
