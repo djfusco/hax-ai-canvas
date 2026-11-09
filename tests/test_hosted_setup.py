@@ -96,3 +96,15 @@ class HostedSetupTests(unittest.TestCase):
         code, output = self.preflight(["--live"], lambda config: SimpleNamespace(blob=blob))
         self.assertEqual(code, 1)
         self.assertIn("Probe cleanup needs attention", output)
+
+
+class BlobOptionalTests(unittest.TestCase):
+    def test_settings_do_not_require_a_blob_token(self):
+        from cryptography.fernet import Fernet
+        from hosted_config import settings
+        env = {"DATABASE_URL": "postgresql://u:p@db.example/x", "HAX_APP_ORIGIN": "https://consultant.example.edu",
+               "HAX_AUTH_MODE": "browser-beta", "HAX_MENTOR_ENCRYPTION_KEY": Fernet.generate_key().decode()}
+        for index, name in enumerate(("HAX_SESSION_SECRET", "HAX_UPLOAD_SIGNING_SECRET", "HAX_INTERNAL_SECRET",
+                                      "HAX_BETA_ACCESS_CODE", "CRON_SECRET")):
+            env[name] = chr(ord("a") + index) * 40
+        self.assertEqual(settings(env).origin, "https://consultant.example.edu")

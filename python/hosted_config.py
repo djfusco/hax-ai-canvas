@@ -47,7 +47,10 @@ def settings(environ=None):
     mode = env.get("HAX_AUTH_MODE", "neon")
     if mode not in ("neon", "browser-beta"):
         raise HostedSetupError("HAX_AUTH_MODE must be neon or browser-beta.")
-    required = [*names.values(), "BLOB_READ_WRITE_TOKEN"]
+    # BLOB_READ_WRITE_TOKEN is used only by the legacy wizard's raw-upload
+    # pipeline, which reports its own error without it. Newer Vercel Blob
+    # stores connect without a token, and Course Consultant does not use Blob.
+    required = [*names.values()]
     if mode == "neon":
         required.append("NEON_AUTH_BASE_URL")
     missing = [name for name in required if not env.get(name)]
