@@ -121,5 +121,38 @@ class QuickVersionTests(unittest.TestCase):
                   {"provider": "openai", "instruction": "Shorter please"}, expected=502)
 
 
+class CostEstimateTests(QuickVersionTests):
+    test_quick_version_then_refine = None
+    test_revise_validation = None
+
+    def test_estimates(self):
+        quick = self.call("GET", self.base + "/estimate?action=quick&provider=openai")
+        self.assertEqual(quick["requests"][0], len(consultation.TOPICS) + 2)
+        self.assertEqual(quick["requests"][1], len(consultation.TOPICS) + 14)
+        self.assertGreater(quick["input_tokens"][0], 1000)
+        self.assertLessEqual(quick["input_tokens"][0], quick["input_tokens"][1])
+        self.assertIsNone(quick["cost_usd"])
+        self.assertIn("price per token", quick["note"])
+        bulk = self.call("GET", self.base + "/estimate?action=bulk&count=7")
+        self.assertEqual(bulk["requests"], [7, 7])
+        self.assertEqual(self.call("GET", self.base + "/estimate?action=turn")["requests"], [1, 1])
+        self.call("GET", self.base + "/estimate?action=nope", expected=400)
+
+    def test_pricing_and_reasoning(self):
+        import cost_estimate
+        from canvas_api_import import import_api_bundle
+        from course_map import build_course_map
+        model = import_api_bundle(json.loads((ROOT / "tests/fixtures/extension_bundle.json").read_text()))
+        priced = cost_estimate.estimate("plan", model=model, course_map=build_course_map(model),
+                                        consult_state=None, history=[], plan=None,
+                                        capabilities={"reasoning": True},
+                                        pricing={"input_per_million": 1.0, "output_per_million": 4.0})
+        self.assertEqual(priced["output_tokens"], [1800, 3800])
+        self.assertEqual(priced["cost_usd"][0], round((priced["input_tokens"][0] + 1800 * 4.0) / 1e6, 4))
+        self.assertEqual(priced["cost_usd"][1], round((priced["input_tokens"][1] + 3800 * 4.0) / 1e6, 4))
+        self.assertNotIn("price per token", priced["note"])
+        self.assertEqual(self.call("GET", self.base + "/estimate?action=plan")["requests"], [1, 1])
+
+
 if __name__ == "__main__":
     unittest.main()

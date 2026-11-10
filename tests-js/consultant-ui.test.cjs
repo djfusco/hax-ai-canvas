@@ -319,7 +319,8 @@ test('quick AI version, site preview and asking for changes', { skip: !playwrigh
     const page = await context.newPage();
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
-    page.on('dialog', dialog => dialog.accept());
+    const dialogs = [];
+    page.on('dialog', dialog => { dialogs.push(dialog.message()); dialog.accept(); });
     await page.goto(`${ORIGIN}/mentor`);
     await page.locator('#cc-intake').waitFor({ state: 'visible' });
     await page.click('#cc-ai-toggle');
@@ -337,6 +338,7 @@ test('quick AI version, site preview and asking for changes', { skip: !playwrigh
     // Quick AI version from the course screen.
     await page.click('#cc-quick');
     await page.locator('#view-docs').waitFor({ state: 'visible', timeout: 60000 });
+    assert.match(dialogs.at(-1), /About 8–20 AI requests and [\d,]+–[\d,]+ tokens\./, 'quick confirm shows the estimate');
     await page.waitForFunction(() => document.querySelector('#cc-status').textContent.includes('Quick AI version ready'));
     await page.locator('.cc-document .cc-tag:has-text("AI-approved")').waitFor();
     assert.equal(await page.locator('#cc-plan-count').isHidden(), true, 'no undecided changes remain');

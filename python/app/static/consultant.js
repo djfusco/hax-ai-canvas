@@ -189,6 +189,26 @@
 
   function aiReady() { return Boolean(state.provider && state.models && state.models.selected); }
 
+  function requireAiPrompt() {
+    try { requireAi(); } catch (error) { showError(error.message); }
+  }
+
+  // Approximate AI use for an action, as text for a confirm dialog.
+  async function estimateText(action, count = 1) {
+    try {
+      const params = new URLSearchParams({ action, count: String(count), provider: state.provider || '' });
+      const e = await api(`${base()}/estimate?${params}`);
+      const range = ([a, b]) => (a === b ? a.toLocaleString() : `${a.toLocaleString()}–${b.toLocaleString()}`);
+      const tokens = [e.input_tokens[0] + e.output_tokens[0], e.input_tokens[1] + e.output_tokens[1]];
+      const lines = [`About ${range(e.requests)} AI request${e.requests[1] === 1 ? '' : 's'} and ${range(tokens)} tokens.`];
+      if (e.cost_usd) lines.push(`Estimated cost: $${e.cost_usd[0].toFixed(2)}–$${e.cost_usd[1].toFixed(2)}.`);
+      lines.push(e.note);
+      return lines.join('\n');
+    } catch (error) {
+      return 'The cost estimate is not available right now.';
+    }
+  }
+
   function requireAi() {
     if (aiReady()) return true;
     $('cc-ai').hidden = false;
@@ -515,10 +535,12 @@
     state.docs = await api(ws() + '/documents');
     renderDocuments();
   }
-  $('cc-quick').addEventListener('click', () => {
+  $('cc-quick').addEventListener('click', async () => {
+    if (!aiReady()) { requireAiPrompt(); return; }
+    const cost = await estimateText('quick');
     if (!window.confirm('Create the quick AI version?\n\nThe AI will answer the consultation itself, accept its own proposed '
-      + 'changes (labelled AI-decided), draft the plan and write revised documents. This makes roughly 10-25 requests '
-      + 'on your AI account and takes a few minutes. You can change any part afterwards.')) return;
+      + 'changes (labelled AI-decided), draft the plan and write revised documents. It takes a few minutes and '
+      + 'you can change any part afterwards.\n\n' + cost)) return;
     run('Starting the quick AI version…', quickVersion,
       'Quick AI version ready. Preview the course site, then refine anything: consult further, change decisions, or ask for changes to any document.');
   });
@@ -982,7 +1004,9 @@
     const instruction = $('cc-bulk-instruction').value.trim();
     if (!instruction) { showError('Write the instruction first.'); return; }
     if (!ids.length) { showError('Choose at least one page.'); return; }
-    if (ids.length > 3 && !window.confirm(`Revise ${ids.length} pages? This makes ${ids.length} requests on your AI account.`)) return;
+    if (!aiReady()) { requireAiPrompt(); return; }
+    estimateText('bulk', ids.length).then(cost => {
+    if (ids.length > 1 && !window.confirm(`Revise ${ids.length} pages?\n\n${cost}`)) return;
     run('Revising pages…', async () => {
       requireAi();
       for (const [index, id] of ids.entries()) {
@@ -992,6 +1016,7 @@
       }
       renderDocuments();
     }, `Revised ${ids.length} page${ids.length === 1 ? '' : 's'}. Review and approve each draft below.`);
+  });
   });
 
   $('cc-generate').addEventListener('click', () => run('Writing the document… this can take a minute', async () => {

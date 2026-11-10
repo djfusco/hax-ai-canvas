@@ -1667,6 +1667,32 @@ def create_mentor_blueprint(root_provider):
         workspace, error = ai_step(workspace_id, data, work)
         return error or jsonify(documents_view(workspace))
 
+    @bp.get("/api/workspaces/<workspace_id>/estimate")
+    def cost_estimate(workspace_id):
+        import cost_estimate as ce
+        from course_map import build_course_map
+        workspace = store().get(g.owner, workspace_id)
+        model = store().get_course_model(g.owner, workspace_id)
+        if model is None:
+            return jsonify({"error": "Import a course first."}), 404
+        provider = request.args.get("provider", "")
+        saved = g.vault.get(g.owner, provider) if provider else None
+        pricing = capabilities = None
+        if saved and saved.get("model"):
+            row = next((m for m in (saved.get("catalog") or {}).get("models", [])
+                        if m.get("id") == saved["model"]), {})
+            pricing, capabilities = row.get("pricing"), saved.get("capabilities") or row.get("capabilities")
+        try:
+            count = int(request.args.get("count", "1"))
+        except ValueError:
+            count = 1
+        course_map = build_course_map(model, (workspace.get("source") or {}).get("alignment"))
+        history = [m for m in workspace.get("messages", []) if m.get("kind") == "consult"]
+        return jsonify(ce.estimate(request.args.get("action", ""), model=model, course_map=course_map,
+                                   consult_state=workspace.get("consultation"), history=history,
+                                   plan=workspace.get("plan"), count=count, capabilities=capabilities,
+                                   pricing=pricing))
+
     @bp.get("/api/workspaces/<workspace_id>/accessibility")
     def accessibility_report(workspace_id):
         import accessibility
