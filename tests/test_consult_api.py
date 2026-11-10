@@ -119,6 +119,18 @@ class ConsultApiTests(unittest.TestCase):
         self.post(self.base + "/consult", {"mode": "opening", "provider": "openai"}, expected=409)
         self.post(self.base + "/consult/settings", {"directness": "direct"}, expected=409)
 
+    def test_advance_route(self):
+        self.import_course()
+        self.post(self.base + "/consult", {"mode": "advance", "provider": "openai"}, expected=400)  # not started
+        self.ai(reply("Snapshot."), reply("Moving to outcomes: what should students be able to do?"))
+        self.post(self.base + "/consult", {"mode": "opening", "provider": "openai"})
+        view = self.post(self.base + "/consult", {"mode": "advance", "provider": "openai"})
+        self.assertEqual(view["state"]["current_topic"], "outcomes")
+        self.assertEqual(view["state"]["topics"]["purpose"]["status"], "covered")
+        self.assertEqual(view["messages"][-2]["content"],
+                         "I'm done with Purpose and learners. Let's move on to Outcomes.")
+        self.assertFalse(view["busy"])
+
     def test_settings(self):
         self.import_course()
         view = self.post(self.base + "/consult/settings", {"directness": "gentle", "topic": "assessment"})

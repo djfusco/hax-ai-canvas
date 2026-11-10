@@ -560,6 +560,9 @@
       messages.append(el('div', { class: 'cc-msg ' + (message.role === 'user' ? 'user' : 'assistant') }, richText(message.content)));
     }
     const started = consultState && consultState.turns > 0;
+    const remaining = consultState ? view.topics.filter(t => t.id !== current &&
+      ['not_started', 'in_progress'].includes(consultState.topics[t.id].status)).length : 0;
+    $('cc-next-topic').hidden = !hasCourse || !started || !remaining;
     $('cc-begin').hidden = !hasCourse || started;
     $('cc-composer').hidden = !hasCourse || !started;
   }
@@ -585,6 +588,11 @@
   }
 
   $('cc-begin-btn').addEventListener('click', () => run('Starting the consultation…', () => consultTurn({ mode: 'opening' })));
+  $('cc-next-topic').addEventListener('click', () => {
+    const label = $('cc-topics').querySelector('button[aria-current=true] span');
+    run('Moving to the next topic…', () => consultTurn({ mode: 'advance' },
+      `I'm done with ${label ? label.textContent : 'this topic'}. Let's move on.`));
+  });
   $('cc-composer').addEventListener('submit', event => {
     event.preventDefault();
     const message = $('cc-message').value.trim();

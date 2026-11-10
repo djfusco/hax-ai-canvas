@@ -146,6 +146,27 @@ class ConsultationTests(unittest.TestCase):
         with self.assertRaisesRegex(c.ConsultationError, "too small"):
             c.respond(self.state, [], model, big_map, Client(response(), limit=500), message="hi")
 
+    def test_advance_moves_on_without_more_questions(self):
+        state = c.choose_topic(self.state, "purpose")
+        state["turns"] = 2
+        state["topics"]["outcomes"]["status"] = "covered"
+        moved = c.advance(state)
+        self.assertEqual(moved["topics"]["purpose"]["status"], "covered")
+        self.assertEqual(moved["current_topic"], "assessment", "skips topics already covered")
+        self.assertEqual(moved["topics"]["assessment"]["status"], "in_progress")
+        client = Client(response(reply="Purpose is settled. On assessment: three exams carry 70%. How do you use them?"))
+        reply, final = c.respond(moved, [], self.model, self.map, client, mode="advance")
+        prompt = client.calls[0]["prompt"]
+        self.assertIn("finished with Purpose and learners", prompt)
+        self.assertIn("Do not ask anything more about Purpose and learners", prompt)
+        self.assertIn("Respect the instructor's time", client.calls[0]["system"])
+        self.assertEqual(final["current_topic"], "assessment")
+        done = c.new_state()
+        for topic in c.TOPICS:
+            done["topics"][topic]["status"] = "covered"
+        with self.assertRaisesRegex(c.ConsultationError, "covered every topic"):
+            c.advance(done)
+
     def test_directness_topic_choice_and_resume(self):
         state = c.set_directness(self.state, "direct")
         client = Client(response())

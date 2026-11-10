@@ -79,7 +79,10 @@ How you work:
 - Be warm, concise and collegial. Never condescend. Ask at most two questions at a time.
 - Record what you learn in topic_updates. Only cite evidence IDs that were supplied.
 - Only propose a change when the instructor has engaged with the topic; never mark anything accepted.
-- Never invent facts about the course. If the evidence is missing, ask."""
+- Never invent facts about the course. If the evidence is missing, ask.
+- Respect the instructor's time. When they say they are done with a topic or want to move on, stop
+  asking about it: mark it covered, keep any unanswered points in open_questions for later (do not
+  press for them), and move to the next topic."""
 
 
 class ConsultationError(ValueError):
@@ -205,7 +208,13 @@ def _build_prompt(state, history, model, course_map, mode, message, scale):
     conversation = _history(history, int(8000 * scale))
     if conversation:
         parts.append("CONVERSATION SO FAR:\n" + conversation)
-    if mode == "opening":
+    if mode == "advance":
+        previous = TOPIC_LABELS[state.get("previous_topic") or topic]
+        task = (f"The instructor has finished with {previous} and wants to move on. Do not ask anything more "
+                f"about {previous}. In one sentence acknowledge what was settled, then open the new topic, "
+                f"{TOPIC_LABELS[topic]} ({TOPIC_FOCUS[topic]}): share one or two relevant observations from the course "
+                f"map, then ask at most two questions. Keep {topic} in_progress; do not mark it covered yet.")
+    elif mode == "opening":
         task = ("This is the first session. Open with a brief, factual snapshot of the course from the course map "
                 "(structure, how the grade is weighted, notable patterns), framed as observations to confirm, not "
                 "judgments. Then ask one or two open questions about the students and what the instructor most wants "
@@ -376,7 +385,7 @@ def choose_topic(state, topic):
 
 def respond(state, history, model, course_map, client, *, mode="turn", message=None):
     """One consultation turn. Returns (reply, new_state). Raises ConsultationError."""
-    if mode not in ("opening", "turn"):
+    if mode not in ("opening", "turn", "advance"):
         raise ConsultationError("Unknown consultation mode.")
     if mode == "turn" and (not isinstance(message, str) or not 1 <= len(message.strip()) <= 6000):
         raise ConsultationError("Enter a message of 1-6000 characters.")
@@ -412,6 +421,26 @@ def respond(state, history, model, course_map, client, *, mode="turn", message=N
             raise ConsultationError(str(exc)) from None
         raise ConsultationError("The AI provider request failed. Check your key, model and connection, then retry.") from None
     return apply_response(state, raw, known, item_ids=item_ids)
+
+
+def advance(state):
+    """The instructor is done with the current topic: mark it covered and move to the next one.
+
+    Returns the new state; the caller then asks the consultant to open the new
+    topic with ``respond(..., mode="advance")``. Raises when every topic is done.
+    """
+    state = deepcopy(state)
+    current = state["current_topic"]
+    if state["topics"][current]["status"] in ("not_started", "in_progress"):
+        state["topics"][current]["status"] = "covered"
+    order = TOPICS[TOPICS.index(current) + 1:] + TOPICS[:TOPICS.index(current)]
+    following = next((t for t in order if state["topics"][t]["status"] in ("not_started", "in_progress")), None)
+    if following is None:
+        raise ConsultationError("You've covered every topic. Open the Plan tab to decide on the proposed changes.")
+    state["previous_topic"] = current
+    state["current_topic"] = following
+    state["topics"][following]["status"] = "in_progress"
+    return state
 
 
 def resume_summary(state):

@@ -150,6 +150,11 @@ test('instructor journey: model, export upload, course map, consultation, propos
       assert.match(await page.locator('#cc-topics').textContent(), /Purpose and learnerscovered/);
       assert.equal(await page.locator('#cc-topics button[aria-current=true] span').first().textContent(), 'Outcomes');
       assert.equal(await page.locator('#cc-plan-count').textContent(), '1');
+      // Done with Outcomes: move on without more questions.
+      await page.click('#cc-next-topic');
+      await page.waitForFunction(() => document.querySelectorAll('.cc-msg.assistant').length === 3);
+      assert.match(await page.locator('.cc-msg.user').last().textContent(), /I'm done with Outcomes/);
+      assert.match(await page.locator('#cc-topics').textContent(), /Outcomescovered/);
       await shot(page, '3-consultation');
 
       // Plan: decide, draft, edit

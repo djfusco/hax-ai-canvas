@@ -85,6 +85,7 @@
 .cc-consult { display: grid; grid-template-columns: 250px 1fr; gap: 16px; align-items: start; }
 @media (max-width: 760px) { .cc-consult { grid-template-columns: 1fr; } }
 .cc-side { background: var(--cc-surface); border: 1px solid var(--cc-line); border-radius: var(--cc-radius); padding: 14px; position: sticky; top: 12px; }
+.cc-wide { width: 100%; margin-bottom: 8px; }
 .cc-topics { list-style: none; padding: 0; margin: 0 0 8px; display: grid; gap: 4px; }
 .cc-topics button { width: 100%; text-align: left; font: inherit; background: none; color: var(--cc-fg); border: 0;
   border-radius: 6px; padding: 6px 8px; cursor: pointer; display: flex; justify-content: space-between; gap: 6px; }

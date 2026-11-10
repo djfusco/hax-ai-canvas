@@ -1383,8 +1383,16 @@ def create_mentor_blueprint(root_provider):
         from course_map import build_course_map
         data = payload()
         mode = data.get("mode", "turn")
-        if mode not in ("opening", "turn"):
+        if mode not in ("opening", "turn", "advance"):
             raise ValueError("Unknown consultation mode.")
+        if mode == "advance":
+            current = store().get(g.owner, workspace_id).get("consultation")
+            if not current or not current.get("turns"):
+                raise ValueError("Begin the consultation first.")
+            try:
+                consult.advance(current)  # check there is a next topic before any AI call
+            except consult.ConsultationError as exc:
+                raise ValueError(str(exc)) from None
         message = None
         if mode == "turn":
             message = str(data.get("message", "")).strip()
@@ -1401,11 +1409,16 @@ def create_mentor_blueprint(root_provider):
             state = workspace.get("consultation") or consult.new_state()
             if mode == "opening" and state.get("turns"):
                 raise ValueError("The consultation has already started.")
+            if mode == "advance":
+                previous = consult.TOPIC_LABELS[state["current_topic"]]
+                state = consult.advance(state)
+                message = f"I'm done with {previous}. Let's move on to {consult.TOPIC_LABELS[state['current_topic']]}."
             alignment = (workspace.get("source") or {}).get("alignment")
             course_map = build_course_map(model, alignment)
             history = [m for m in workspace["messages"] if m.get("kind") == "consult"]
             ai = client(data, resolved)
-            reply, state = consult.respond(state, history, model, course_map, ai, mode=mode, message=message)
+            reply, state = consult.respond(state, history, model, course_map, ai, mode=mode,
+                                           message=None if mode == "advance" else message)
         except consult.ConsultationError as exc:
             store().release_consult(g.owner, workspace_id)
             return jsonify({"error": redact(str(exc))[:500]}), 502
