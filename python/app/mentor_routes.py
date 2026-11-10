@@ -1458,6 +1458,8 @@ def create_mentor_blueprint(root_provider):
         documents = workspace.get("documents") or []
         return {"documents": documents,
                 "targets": rd.targets(model, workspace.get("consultation")) if model else [],
+                "items": [{"id": i["id"], "title": i["title"], "kind": i["kind"]} for i in (model or {}).get("items", [])
+                          if i["kind"] in rd.REVISABLE],
                 "busy": bool(workspace.get("consult_busy"))}
 
     def ai_step(workspace_id, data, work):
@@ -1517,6 +1519,16 @@ def create_mentor_blueprint(root_provider):
         workspace = store().get(g.owner, workspace_id)
         try:
             plan = ip.edit_plan(workspace.get("plan"), payload())
+        except ip.PlanError as exc:
+            raise ValueError(str(exc)) from None
+        return jsonify(plan_view(store().save_consultant_fields(g.owner, workspace_id, plan=plan)))
+
+    @bp.post("/api/workspaces/<workspace_id>/plan/restore")
+    def plan_restore(workspace_id):
+        import improvement_plan as ip
+        workspace = store().get(g.owner, workspace_id)
+        try:
+            plan = ip.restore_plan(workspace.get("plan"), payload().get("version"))
         except ip.PlanError as exc:
             raise ValueError(str(exc)) from None
         return jsonify(plan_view(store().save_consultant_fields(g.owner, workspace_id, plan=plan)))
@@ -1645,7 +1657,8 @@ def create_mentor_blueprint(root_provider):
         def work(workspace, ai):
             model, course_map = course_inputs(workspace)
             document = rd.generate(data.get("kind"), model, course_map, workspace.get("consultation"),
-                                   workspace.get("plan"), ai, item_id=data.get("item_id"))
+                                   workspace.get("plan"), ai, item_id=data.get("item_id"),
+                                   instruction=redact(data["instruction"]) if isinstance(data.get("instruction"), str) else None)
             if data.get("approve") is True:  # Quick AI version: approved on the instructor's behalf
                 document.update(status="approved", auto=True)
             if data.get("replace_id"):
@@ -1653,6 +1666,26 @@ def create_mentor_blueprint(root_provider):
             return {"documents": rd.add(workspace.get("documents"), document)}
         workspace, error = ai_step(workspace_id, data, work)
         return error or jsonify(documents_view(workspace))
+
+    @bp.get("/api/workspaces/<workspace_id>/documents/<document_id>/compare")
+    def documents_compare(workspace_id, document_id):
+        import revised_documents as rd
+        workspace = store().get(g.owner, workspace_id)
+        document = next((d for d in workspace.get("documents") or [] if d["id"] == document_id), None)
+        model = store().get_course_model(g.owner, workspace_id)
+        if document is None or model is None:
+            return jsonify({"error": "That document no longer exists."}), 404
+        return jsonify(rd.compare(document, model))
+
+    @bp.post("/api/workspaces/<workspace_id>/documents/<document_id>/restore")
+    def documents_restore(workspace_id, document_id):
+        import revised_documents as rd
+        workspace = store().get(g.owner, workspace_id)
+        try:
+            documents = rd.restore(workspace.get("documents"), document_id, payload().get("version"))
+        except rd.DocumentError as exc:
+            raise ValueError(str(exc)) from None
+        return jsonify(documents_view(store().save_consultant_fields(g.owner, workspace_id, documents=documents)))
 
     @bp.post("/api/workspaces/<workspace_id>/documents/<document_id>/revise")
     def documents_revise(workspace_id, document_id):

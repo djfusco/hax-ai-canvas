@@ -24,6 +24,13 @@ def _approved(documents, kind, item_id=None):
     return matches[-1] if matches else None
 
 
+def _latest_revision(documents, item_id):
+    """The most recently approved assignment or page revision of an item."""
+    matches = [d for d in documents or [] if d["status"] == "approved" and d["kind"] in ("assignment", "page")
+               and d.get("item_id") == item_id]
+    return max(matches, key=lambda d: d.get("updated_at") or d.get("created_at") or "", default=None)
+
+
 def _details(model, item):
     details = model["assignments"].get(item["id"])
     if not details:
@@ -72,7 +79,7 @@ def build_items(model, documents):
         if item["id"] in used:
             return
         used.add(item["id"])
-        revised = _approved(documents, "assignment", item["id"])
+        revised = _latest_revision(documents, item["id"])
         if revised:
             add(item["id"], revised["title"], TYPE[item["kind"]], _details(model, item) + revised["html"], True, module)
         else:

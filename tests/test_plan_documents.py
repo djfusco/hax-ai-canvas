@@ -163,7 +163,7 @@ class DocumentTests(unittest.TestCase):
         for raw, message in cases:
             with self.subTest(message=message), self.assertRaisesRegex(rd.DocumentError, message):
                 rd.generate("syllabus", self.model, self.map, self.state, self.plan, Client(raw))
-        with self.assertRaisesRegex(rd.DocumentError, "Choose an assignment"):
+        with self.assertRaisesRegex(rd.DocumentError, "Choose an item"):
             rd.generate("rubric", self.model, self.map, self.state, self.plan, Client(), item_id="nope")
         bad_rubric = {"title": "R", "summary_of_changes": "", "applied_proposals": [],
                       "criteria": [{"criterion": "C", "description": "", "ratings": [{"label": "A", "points": -1, "description": ""},

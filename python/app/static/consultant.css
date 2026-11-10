@@ -115,6 +115,14 @@
 .cc-ask { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; margin-top: 10px; }
 .cc-ask .cc-btn { margin: 0; }
 .cc-routes { margin-top: 8px; }
+.cc-bulk { margin-top: 16px; }
+.cc-bulk summary { cursor: pointer; }
+.cc-bulk-list { max-height: 220px; overflow: auto; border: 1px solid var(--cc-line); border-radius: 8px; margin-top: 8px; }
+.cc-bulk-list label { font-weight: 400; display: flex; gap: 8px; align-items: center; margin: 4px 0; }
+.cc-compare.cc-side-by-side { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 760px) { .cc-compare.cc-side-by-side { grid-template-columns: 1fr; } }
+.cc-version { border-top: 1px solid var(--cc-line); padding-top: 8px; margin-top: 8px; }
+.cc-version .cc-doc-frame { height: 200px; }
 .cc-proposal h3 { margin: 0; font-size: 1.05rem; }
 .cc-status-rejected { opacity: .65; }
 .cc-plan { margin-top: 16px; }

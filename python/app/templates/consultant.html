@@ -239,6 +239,11 @@
           <textarea id="cc-plan-questions" rows="3"></textarea>
           <button type="submit" class="cc-btn">Save plan</button>
         </form>
+        <div class="cc-row" id="cc-plan-history-row" hidden>
+          <label for="cc-plan-history" class="cc-sr">Earlier versions of the plan</label>
+          <select id="cc-plan-history"></select>
+          <button id="cc-plan-restore" type="button" class="cc-btn cc-btn-quiet">Restore this version</button>
+        </div>
       </article>
     </section>
 
@@ -264,6 +269,17 @@
           <button id="cc-generate" type="button" class="cc-btn">Write it</button>
         </div>
       </article>
+      <details class="cc-card cc-bulk">
+        <summary><strong>Revise pages with one instruction</strong></summary>
+        <p class="cc-muted">For example: “Add a short ‘why this matters’ introduction”, or “Use descriptive link text and
+          add headings”. Each page becomes a draft for you to review.</p>
+        <label for="cc-bulk-instruction">Instruction</label>
+        <textarea id="cc-bulk-instruction" rows="2" maxlength="4000"></textarea>
+        <div class="cc-row"><button id="cc-bulk-all" type="button" class="cc-btn cc-btn-quiet">Select all</button>
+          <button id="cc-bulk-none" type="button" class="cc-btn cc-btn-quiet">Select none</button></div>
+        <fieldset class="cc-bulk-list"><legend class="cc-sr">Pages to revise</legend><div id="cc-bulk-items"></div></fieldset>
+        <button id="cc-bulk-run" type="button" class="cc-btn">Revise selected</button>
+      </details>
       <div id="cc-documents"></div>
     </section>
   </div>

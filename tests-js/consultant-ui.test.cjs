@@ -347,6 +347,28 @@ test('quick AI version, site preview and asking for changes', { skip: !playwrigh
     await page.locator('.cc-document .cc-tag:has-text("Draft")').waitFor();
     assert.equal(await page.frameLocator('.cc-doc-frame').locator('p').first().textContent(), 'Office hours added.');
 
+    // Compare with the original syllabus: changes are highlighted.
+    await page.click('.cc-document button:has-text("Compare with original")');
+    await page.locator('.cc-document .cc-compare').waitFor();
+    assert.ok(await page.frameLocator('.cc-compare .cc-doc-frame').locator('ins').count() > 0);
+    await page.click('.cc-document button:has-text("Side by side")');
+    assert.equal(await page.locator('.cc-compare .cc-doc-frame').count(), 2);
+    await page.click('.cc-document button:has-text("Back")');
+    // History: restore the AI-approved version from before the requested change.
+    await page.click('.cc-document button:has-text("History (1)")');
+    await page.click('.cc-document .cc-version button:has-text("Restore")');
+    await page.waitForFunction(() => document.querySelector('.cc-document') &&
+      document.querySelector('.cc-document button') && [...document.querySelectorAll('.cc-document button')].some(b => b.textContent === 'History (1)'));
+    assert.equal(await page.frameLocator('.cc-document .cc-doc-frame').first().locator('p').first().textContent(), 'Essay outline due in week 1.');
+
+    // Bulk: revise a page with one instruction.
+    const before = await page.locator('.cc-document').count();
+    await page.click('.cc-bulk summary');
+    await page.fill('#cc-bulk-instruction', 'Add a short why-this-matters introduction.');
+    await page.check('#cc-bulk-items label:has-text("Welcome") input');
+    await page.click('#cc-bulk-run');
+    await page.waitForFunction(n => document.querySelectorAll('.cc-document').length === n + 1, before);
+
     // The plan shows the advisor's decisions as AI-decided, and they can be changed.
     await page.click('#tab-plan');
     await page.locator('.cc-proposal .cc-tag.ai').first().waitFor();

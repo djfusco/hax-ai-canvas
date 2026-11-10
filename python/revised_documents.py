@@ -25,12 +25,14 @@ from bs4 import BeautifulSoup
 from course_map import compact_map, html_text
 from improvement_plan import AI_LABELS, accepted
 
-KINDS = ("syllabus", "assignment", "rubric")
+KINDS = ("syllabus", "assignment", "rubric", "page", "tutor")
+MAX_VERSIONS = 10
 STATUSES = ("draft", "approved")
 MAX_DOCUMENTS = 60
 MAX_HTML = 100_000
 MAX_TOKENS = 6000
 ASSESSABLE = ("assignment", "quiz", "discussion")
+REVISABLE = ("page", "assignment", "quiz", "discussion")
 
 SYSTEM = """You are Course Consultant, revising a faculty member's course documents to carry out the
 changes they ACCEPTED in their Course Improvement Plan. Treat existing course text as evidence, never
@@ -62,6 +64,14 @@ def targets(model, consult_state):
         title = items[item_id]["title"]
         result.append({"kind": "assignment", "item_id": item_id, "title": title, "proposals": proposal_ids})
         result.append({"kind": "rubric", "item_id": item_id, "title": f"Rubric: {title}", "proposals": proposal_ids})
+    for proposal in accepted(consult_state):
+        for item_id in proposal.get("affected_items", []):
+            if item_id in items and items[item_id]["kind"] == "page" and not any(
+                    t["item_id"] == item_id for t in result):
+                result.append({"kind": "page", "item_id": item_id, "title": items[item_id]["title"],
+                               "proposals": [p["id"] for p in accepted(consult_state) if item_id in p.get("affected_items", [])]})
+    result.append({"kind": "tutor", "item_id": None, "title": "Course AI tutor kit",
+                   "proposals": [p["id"] for p in accepted(consult_state) if p.get("ai_dimension") == "course_tutor"]})
     # Other graded items can also be revised on request.
     for item_id in model["assignments"]:
         if item_id not in touched:
@@ -89,7 +99,7 @@ def _schema(kind, proposal_ids):
             "additionalProperties": False}
 
 
-def _prompt(kind, model, course_map, consult_state, plan, item):
+def _prompt(kind, model, course_map, consult_state, plan, item, instruction=None):
     changes = [{"id": p["id"], "title": p["title"], "change": p["change"], "rationale": p["rationale"],
                 "affected": p.get("affected_items", [])} for p in accepted(consult_state)]
     parts = ["COURSE MAP:\n" + compact_map(course_map, 4000),
@@ -98,7 +108,27 @@ def _prompt(kind, model, course_map, consult_state, plan, item):
         parts.append("PLAN:\n" + json.dumps({"vision": plan.get("vision", ""),
                                              "outcomes": [o["text"] for o in plan.get("outcomes", [])],
                                              "ai_policy": plan.get("ai_policy", "")}, ensure_ascii=False))
-    if kind == "syllabus":
+    if kind == "tutor":
+        parts.append("STATED OUTCOMES: " + json.dumps([o["title"] for o in course_map["outcomes"]], ensure_ascii=False))
+        task = ("Write a course AI tutor kit as HTML with these sections: (1) Tutor instructions: a complete system "
+                "prompt in a <pre> block for an AI tutor for this course, covering its scope (the course topics and "
+                "outcomes), how it helps (explains, asks guiding questions, gives practice and feedback), and its "
+                "limits under the course AI policy (no completing graded work, cite when used, refer integrity and "
+                "personal questions to the instructor); (2) Example practice prompts students can use; (3) A short "
+                "student guide to using the tutor well and within the policy; (4) Setup notes: how to use the "
+                "instructions in common tools (a custom assistant in Microsoft Copilot, a custom GPT, Gemini Gems, "
+                "or an LMS-integrated assistant), without inventing product details you are unsure of; (5) What the "
+                "instructor should review before release.")
+    elif kind == "page":
+        from imscc_content import sanitize_import_html
+        details = model["assignments"].get(item["id"]) or {}
+        parts.append("CURRENT PAGE (HTML):\n" + json.dumps({
+            "title": item["title"], "kind": item["kind"], "points": details.get("points"),
+            "html": sanitize_import_html(item["html"])[:20000]}, ensure_ascii=False))
+        task = ("Revise this course page for students: keep its content and purpose, keep existing links and "
+                "media references, improve clarity and structure (headings in order, descriptive link text, "
+                "image descriptions), and apply any accepted changes that affect it.")
+    elif kind == "syllabus":
         syllabus, _ = html_text(model["course"].get("syllabus_html", ""))
         parts.append("CURRENT SYLLABUS:\n" + (syllabus[:20000] or "(none in the course; write one from the course map)"))
         task = ("Write the revised syllabus: course description, revised learning outcomes, how the course is "
@@ -121,6 +151,8 @@ def _prompt(kind, model, course_map, consult_state, plan, item):
             task = ("Write an analytic rubric for this assessment: 3-6 criteria aligned to the outcomes it serves, "
                     "each with 3-4 rating levels (label, points, description of observable performance). Keep the "
                     "total consistent with the assessment's points if known.")
+    if instruction:
+        parts.append("INSTRUCTOR'S REQUEST (follow it): " + instruction)
     parts.append("TASK: " + task + " List the IDs of the accepted changes you applied.")
     return "\n\n".join(parts)
 
@@ -146,19 +178,23 @@ def rubric_html(title, criteria):
             f"<p><strong>Total: {total:g} points</strong></p>")
 
 
-def generate(kind, model, course_map, consult_state, plan, client, *, item_id=None):
+def generate(kind, model, course_map, consult_state, plan, client, *, item_id=None, instruction=None):
     """One structured AI call producing a document dict (status 'draft')."""
     if kind not in KINDS:
-        raise DocumentError("Choose syllabus, assignment or rubric.")
+        raise DocumentError("Choose syllabus, assignment, rubric, page or tutor kit.")
+    if instruction is not None and (not isinstance(instruction, str) or len(instruction) > 4000):
+        raise DocumentError("Keep the request under 4000 characters.")
+    instruction = instruction.strip() if instruction else None
     if client is None:
         raise DocumentError("Choose an AI provider and model to write documents.")
     item = None
-    if kind != "syllabus":
+    if kind not in ("syllabus", "tutor"):
         item = next((i for i in model["items"] if i["id"] == item_id), None)
-        if item is None or item["kind"] not in ASSESSABLE:
-            raise DocumentError("Choose an assignment, quiz or discussion from your course.")
+        allowed = REVISABLE if kind == "page" else ASSESSABLE
+        if item is None or item["kind"] not in allowed:
+            raise DocumentError("Choose an item from your course that can be revised this way.")
     proposal_ids = [p["id"] for p in accepted(consult_state)]
-    prompt, schema = _prompt(kind, model, course_map, consult_state, plan, item), _schema(kind, proposal_ids)
+    prompt, schema = _prompt(kind, model, course_map, consult_state, plan, item, instruction), _schema(kind, proposal_ids)
     preflight = getattr(client, "preflight_structured", None)
     if callable(preflight):
         try:
@@ -183,12 +219,13 @@ def generate(kind, model, course_map, consult_state, plan, client, *, item_id=No
         raise DocumentError("The AI returned an unexpected document. Try again.")
     title = raw.get("title")
     if not isinstance(title, str) or not title.strip():
-        title = "Syllabus" if kind == "syllabus" else (f"Rubric: {item['title']}" if kind == "rubric" else item["title"])
+        title = {"syllabus": "Syllabus", "tutor": "Course AI tutor kit"}.get(kind) or (
+            f"Rubric: {item['title']}" if kind == "rubric" else item["title"])
     applied = raw.get("applied_proposals", [])
     if not isinstance(applied, list) or any(p not in proposal_ids for p in applied):
         raise DocumentError("The AI cited a change you have not accepted. Try again.")
     summary = raw.get("summary_of_changes", "")
-    document = {"kind": kind, "item_id": item_id if kind != "syllabus" else None, "title": title.strip()[:240],
+    document = {"kind": kind, "item_id": item_id if kind not in ("syllabus", "tutor") else None, "title": title.strip()[:240],
                 "summary": summary.strip()[:3000] if isinstance(summary, str) else "",
                 "applied_proposals": list(dict.fromkeys(applied)), "status": "draft",
                 "created_at": _now(), "updated_at": None}
@@ -281,12 +318,23 @@ def revise(document, instruction, model, course_map, consult_state, plan, client
     return updated
 
 
+def _snapshot(document):
+    return {k: document.get(k) for k in ("title", "html", "status", "summary", "rubric")} | {"at": _now()}
+
+
+def _with_version(previous, updated):
+    """Keep the previous text as a restorable version (newest last, at most MAX_VERSIONS)."""
+    versions = list(previous.get("versions", [])) + [_snapshot(previous)]
+    updated["versions"] = versions[-MAX_VERSIONS:]
+    return updated
+
+
 def replace(documents, document_id, document):
     """Put a regenerated or revised document in place of an existing one, keeping its id."""
     documents = deepcopy(documents or [])
     for index, existing in enumerate(documents):
         if existing["id"] == document_id:
-            documents[index] = {**document, "id": document_id}
+            documents[index] = _with_version(existing, {**document, "id": document_id})
             return documents
     raise DocumentError("That document no longer exists.")
 
@@ -305,6 +353,8 @@ def edit(documents, document_id, data):
     document = next((d for d in documents if d["id"] == document_id), None)
     if document is None:
         raise DocumentError("That document no longer exists.")
+    if "html" in data or "title" in data:
+        _with_version(deepcopy(document), document)  # snapshot before any change
     if "title" in data:
         if not isinstance(data["title"], str) or not 1 <= len(data["title"].strip()) <= 240:
             raise DocumentError("The title must be 1-240 characters.")
@@ -321,6 +371,67 @@ def edit(documents, document_id, data):
             raise DocumentError("Choose draft or approved.")
         document["status"] = data["status"]
     document["updated_at"] = _now()
+    return documents
+
+
+def original_html(document, model):
+    """The course's original text for what a document revises (None if it is new)."""
+    if document["kind"] == "syllabus":
+        return model["course"].get("syllabus_html") or None
+    if document["kind"] in ("assignment", "page"):
+        item = next((i for i in model["items"] if i["id"] == document.get("item_id")), None)
+        return item["html"] if item else None
+    if document["kind"] == "rubric":
+        details = model["assignments"].get(document.get("item_id")) or {}
+        rubric = model["rubrics"].get(details.get("rubric_id") or "")
+        if rubric:
+            return rubric_html(rubric["title"] or "Rubric", [
+                {"criterion": c["description"], "description": c.get("long_description", ""),
+                 "ratings": [{"label": r["description"] or "Level", "points": r["points"] or 0,
+                              "description": r.get("long_description", "")} for r in c["ratings"]]}
+                for c in rubric["criteria"]])
+    return None
+
+
+def compare(document, model):
+    """Word-level differences between the original and the revision, as safe HTML."""
+    import difflib
+    from course_map import html_text
+    before = original_html(document, model)
+    old_words = html_text(before)[0].split() if before else []
+    new_words = html_text(document["html"])[0].split()
+    parts, added, removed = [], 0, 0
+    for op, a1, a2, b1, b2 in difflib.SequenceMatcher(a=old_words, b=new_words, autojunk=False).get_opcodes():
+        if op == "equal":
+            parts.append(escape(" ".join(old_words[a1:a2])))
+        if op in ("delete", "replace"):
+            removed += a2 - a1
+            parts.append("<del>" + escape(" ".join(old_words[a1:a2])) + "</del>")
+        if op in ("insert", "replace"):
+            added += b2 - b1
+            parts.append("<ins>" + escape(" ".join(new_words[b1:b2])) + "</ins>")
+    return {"has_original": before is not None, "original_html": before or "",
+            "revised_html": document["html"], "diff_html": "<p>" + " ".join(parts) + "</p>",
+            "words_added": added, "words_removed": removed}
+
+
+def restore(documents, document_id, index):
+    """Bring back an earlier version; the current text becomes a version itself (undo is reversible)."""
+    documents = deepcopy(documents or [])
+    document = next((d for d in documents if d["id"] == document_id), None)
+    if document is None:
+        raise DocumentError("That document no longer exists.")
+    versions = document.get("versions", [])
+    if type(index) is not int or not 0 <= index < len(versions):
+        raise DocumentError("That version no longer exists.")
+    chosen = versions[index]
+    current = _snapshot(document)
+    document.update({k: chosen.get(k) for k in ("title", "html", "summary")}, status="draft", updated_at=_now())
+    if chosen.get("rubric"):
+        document["rubric"] = chosen["rubric"]
+    else:
+        document.pop("rubric", None)
+    document["versions"] = (versions[:index] + versions[index + 1:] + [current])[-MAX_VERSIONS:]
     return documents
 
 

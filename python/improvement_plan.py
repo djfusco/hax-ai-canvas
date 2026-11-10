@@ -95,11 +95,39 @@ def _text(value, maximum, field, empty=True):
     return value.strip()
 
 
-def edit_plan(plan, data):
+PLAN_FIELDS = ("vision", "outcomes", "ai_policy", "open_questions")
+MAX_PLAN_VERSIONS = 10
+
+
+def _remember(previous, plan):
+    """Keep the previous plan text as a restorable version (if it had any content)."""
+    if previous and any(previous.get(k) for k in PLAN_FIELDS):
+        history = list(previous.get("history", [])) + [{k: deepcopy(previous.get(k)) for k in PLAN_FIELDS} | {"at": _now()}]
+        plan["history"] = history[-MAX_PLAN_VERSIONS:]
+    return plan
+
+
+def restore_plan(plan, index):
+    """Bring back an earlier plan version; the current text becomes a version itself."""
+    plan = deepcopy(plan or new_plan())
+    history = plan.get("history", [])
+    if type(index) is not int or not 0 <= index < len(history):
+        raise PlanError("That version of the plan no longer exists.")
+    chosen = history[index]
+    current = {k: deepcopy(plan.get(k)) for k in PLAN_FIELDS} | {"at": _now()}
+    plan.update({k: deepcopy(chosen.get(k)) for k in PLAN_FIELDS}, edited_at=_now())
+    plan["history"] = (history[:index] + history[index + 1:] + [current])[-MAX_PLAN_VERSIONS:]
+    return plan
+
+
+def edit_plan(plan, data, *, remember=True):
     """Apply the instructor's edits to plan sections."""
     if not isinstance(data, dict):
         raise PlanError("Expected plan sections.")
+    previous = plan
     plan = deepcopy(plan or new_plan())
+    if remember:
+        _remember(previous, plan)
     if "vision" in data:
         plan["vision"] = _text(data["vision"], MAX_VISION, "course vision")
     if "ai_policy" in data:
@@ -193,7 +221,7 @@ def draft_plan(plan, model, course_map, consult_state, client):
         outcomes = raw.get("outcomes")
         if not isinstance(outcomes, list):
             raise PlanError("The AI plan's outcomes must be a list.")
-        drafted = edit_plan(plan, {
+        drafted = edit_plan(plan, remember=True, data={
             "vision": _clean(raw.get("vision"), MAX_VISION, field="vision"),
             "outcomes": [{"text": _clean(o.get("text") if isinstance(o, dict) else None, field="outcome"),
                           "note": (o.get("note") or "")[:600] if isinstance(o.get("note"), str) else ""}

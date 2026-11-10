@@ -757,6 +757,10 @@
       : `${accepted} accepted change${accepted === 1 ? '' : 's'} will shape the plan.`
         + (plan.drafted_at ? ' Drafting again replaces the text below.' : '');
     $('cc-plan-draft').disabled = !state.plan.consulted;
+    const history = plan.history || [];
+    $('cc-plan-history-row').hidden = !history.length;
+    $('cc-plan-history').replaceChildren(...history.map((v, index) => el('option', { value: String(index),
+      text: `${new Date(v.at).toLocaleString()}: ${(v.vision || '').slice(0, 60) || 'earlier version'}` })).reverse());
     $('cc-plan-word').href = base() + '/plan/export?format=docx';
     $('cc-plan-html').href = base() + '/plan/export?format=html';
   }
@@ -767,6 +771,10 @@
     state.plan = await api(base() + '/plan/draft', { method: 'POST', json: { provider: state.provider } });
     renderPlan();
   }));
+  $('cc-plan-restore').addEventListener('click', () => run('Restoring the plan…', async () => {
+    state.plan = await api(base() + '/plan/restore', { method: 'POST', json: { version: Number($('cc-plan-history').value) } });
+    renderPlan();
+  }, 'Earlier version restored. The text it replaced is in the history too.'));
   $('cc-plan-form').addEventListener('submit', event => {
     event.preventDefault();
     const lines = id => $(id).value.split('\n').map(l => l.trim()).filter(Boolean);
@@ -790,9 +798,10 @@
   function renderDocuments() {
     const view = state.docs;
     const select = $('cc-target');
-    const kinds = { syllabus: 'Syllabus', assignment: 'Assignment', rubric: 'Rubric' };
+    const kinds = { syllabus: 'Syllabus', assignment: 'Assignment', rubric: 'Rubric', page: 'Page', tutor: 'AI tutor kit' };
     select.replaceChildren(...view.targets.map((t, index) => el('option', { value: String(index),
-      text: (t.kind === 'syllabus' ? 'Revised syllabus' : `${kinds[t.kind]}: ${t.title.replace(/^Rubric: /, '')}`)
+      text: (t.kind === 'syllabus' ? 'Revised syllabus' : t.kind === 'tutor' ? 'Course AI tutor kit (instructions for an AI tutor, student guide)'
+        : `${kinds[t.kind]}: ${t.title.replace(/^Rubric: /, '')}`)
         + (t.proposals.length ? ` (applies ${plural(t.proposals.length, 'accepted change')})` : '') })));
     $('cc-generate').disabled = !view.targets.length;
     const approved = view.documents.filter(d => d.status === 'approved').length;
@@ -801,6 +810,10 @@
     $('cc-docs-zip').href = base() + '/documents/export';
     $('cc-docs-preview').href = base() + '/site/index.html';
     $('cc-docs-hax').href = base() + '/documents/export?format=hax';
+    const checked = new Set([...$('cc-bulk-items').querySelectorAll('input:checked')].map(i => i.value));
+    $('cc-bulk-items').replaceChildren(...view.items.map(item => el('label', {},
+      el('input', { type: 'checkbox', value: item.id, checked: checked.has(item.id) }), ` ${item.title} `,
+      el('span', { class: 'cc-tag', text: item.kind }))));
     $('cc-documents').replaceChildren(...(view.documents.length ? [...view.documents].reverse().map(documentCard)
       : [el('p', { class: 'cc-banner', text: 'No documents yet. Accept changes in the plan, then write a revised syllabus, assignment or rubric.' })]));
   }
@@ -826,6 +839,9 @@
           d.status !== 'approved'
             ? el('button', { type: 'button', class: 'cc-btn', text: 'Approve', onclick: () => change(d.id, { status: 'approved' }) })
             : el('button', { type: 'button', class: 'cc-btn cc-btn-quiet', text: 'Back to draft', onclick: () => change(d.id, { status: 'draft' }) }),
+          el('button', { type: 'button', class: 'cc-btn cc-btn-quiet', text: 'Compare with original', onclick: compareView }),
+          (d.versions || []).length ? el('button', { type: 'button', class: 'cc-btn cc-btn-quiet',
+            text: `History (${d.versions.length})`, onclick: historyView }) : null,
           el('button', { type: 'button', class: 'cc-btn cc-btn-quiet', text: 'Edit HTML', onclick: edit }),
           el('button', { type: 'button', class: 'cc-btn cc-btn-quiet', text: 'Rewrite from latest plan', onclick: () => {
             if (window.confirm(`Rewrite “${d.title}” from scratch using your latest plan and accepted changes?`)) {
@@ -845,6 +861,52 @@
               renderDocuments();
             });
           } })));
+    };
+    const frameOf = (html, extra = '') => {
+      const iframe = el('iframe', { sandbox: '', title: d.title, class: 'cc-doc-frame' });
+      iframe.srcdoc = `<!doctype html><meta charset=utf-8><style>body{font:15px/1.6 system-ui;margin:12px;color:#1d2330}
+        table{border-collapse:collapse}td,th{border:1px solid #ccd;padding:6px;vertical-align:top;text-align:left}
+        ins{background:#d9f5e3;text-decoration:none}del{background:#fde2e2;color:#7a1f1f}${extra}
+        @media (prefers-color-scheme:dark){body{background:#1d2129;color:#e7eaf0}ins{background:#1f4a32}del{background:#4a1f1f;color:#ffd0d0}}</style>${html}`;
+      return iframe;
+    };
+    const compareView = () => run('Comparing…', async () => {
+      const result = await api(`${base()}/documents/${d.id}/compare`);
+      const back = el('button', { type: 'button', class: 'cc-btn cc-btn-quiet', text: 'Back', onclick: preview });
+      if (!result.has_original) {
+        card.replaceChildren(el('h2', { text: d.title }), el('p', { class: 'cc-banner',
+          text: 'This is a new document; there is no original in your course to compare with.' }), back);
+        return;
+      }
+      let mode = 'changes';
+      const holder = el('div', { class: 'cc-compare' });
+      const show = () => {
+        holder.replaceChildren(...(mode === 'changes' ? [frameOf(result.diff_html)]
+          : [el('div', {}, el('h3', { text: 'Original' }), frameOf(result.original_html)),
+             el('div', {}, el('h3', { text: 'Revised' }), frameOf(result.revised_html))]));
+        holder.classList.toggle('cc-side-by-side', mode !== 'changes');
+      };
+      show();
+      card.replaceChildren(el('div', { class: 'cc-head' }, el('h2', { text: `${d.title}: compared with the original` })),
+        el('p', { class: 'cc-muted', text: `${result.words_added} words added, ${result.words_removed} removed. `
+          + 'Highlighted: green added, red removed.' }),
+        el('div', { class: 'cc-row' },
+          el('button', { type: 'button', class: 'cc-btn cc-btn-quiet', text: 'Highlighted changes', onclick: () => { mode = 'changes'; show(); } }),
+          el('button', { type: 'button', class: 'cc-btn cc-btn-quiet', text: 'Side by side', onclick: () => { mode = 'side'; show(); } })),
+        holder, el('div', { class: 'cc-row' }, back));
+    });
+    const historyView = () => {
+      const versions = (d.versions || []).map((v, index) => ({ ...v, index })).reverse();
+      card.replaceChildren(el('h2', { text: `${d.title}: earlier versions` }),
+        el('p', { class: 'cc-muted', text: 'Restoring brings a version back as a draft; the current text is kept as a version too.' }),
+        ...versions.map(v => el('div', { class: 'cc-version' },
+          el('div', { class: 'cc-head' }, el('strong', { text: `${v.title || d.title} · ${new Date(v.at).toLocaleString()}` }),
+            el('button', { type: 'button', class: 'cc-btn cc-btn-quiet', text: 'Restore', onclick: () => run('Restoring…', async () => {
+              state.docs = await api(`${base()}/documents/${d.id}/restore`, { method: 'POST', json: { version: v.index } });
+              renderDocuments();
+            }) })),
+          frameOf(v.html || ''))),
+        el('div', { class: 'cc-row' }, el('button', { type: 'button', class: 'cc-btn cc-btn-quiet', text: 'Back', onclick: preview })));
     };
     const edit = () => {
       const title = el('input', { value: d.title, maxlength: 240, 'aria-label': 'Title' });
@@ -885,6 +947,25 @@
       renderDocuments();
     });
   }
+
+  $('cc-bulk-all').addEventListener('click', () => $('cc-bulk-items').querySelectorAll('input').forEach(i => { i.checked = true; }));
+  $('cc-bulk-none').addEventListener('click', () => $('cc-bulk-items').querySelectorAll('input').forEach(i => { i.checked = false; }));
+  $('cc-bulk-run').addEventListener('click', () => {
+    const ids = [...$('cc-bulk-items').querySelectorAll('input:checked')].map(i => i.value);
+    const instruction = $('cc-bulk-instruction').value.trim();
+    if (!instruction) { showError('Write the instruction first.'); return; }
+    if (!ids.length) { showError('Choose at least one page.'); return; }
+    if (ids.length > 3 && !window.confirm(`Revise ${ids.length} pages? This makes ${ids.length} requests on your AI account.`)) return;
+    run('Revising pages…', async () => {
+      requireAi();
+      for (const [index, id] of ids.entries()) {
+        status(`Revising page ${index + 1} of ${ids.length}…`);
+        state.docs = await api(base() + '/documents/generate', { method: 'POST',
+          json: { provider: state.provider, kind: 'page', item_id: id, instruction } });
+      }
+      renderDocuments();
+    }, `Revised ${ids.length} page${ids.length === 1 ? '' : 's'}. Review and approve each draft below.`);
+  });
 
   $('cc-generate').addEventListener('click', () => run('Writing the document… this can take a minute', async () => {
     requireAi();
