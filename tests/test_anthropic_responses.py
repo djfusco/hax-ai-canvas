@@ -11,8 +11,6 @@ import httpx
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "python"), str(ROOT / "tests")]
 from ai_client import AIClient, AIResponseError, _anthropic_request_options
-from mentor_assessment import AssessmentError, assess_design
-from test_mentor_assessment import item, payload, response_for, workspace
 
 
 class AnthropicResponseTests(unittest.TestCase):
@@ -88,24 +86,6 @@ class AnthropicResponseTests(unittest.TestCase):
         self.assertEqual(_anthropic_request_options("anthropic", "claude-sonnet-5-5", 32768, True)["max_tokens"],
                          16384, "All isolated mentor calls retain the shared application spending ceiling.")
 
-    def test_thirty_item_reasoning_scope_succeeds_with_one_request_per_item(self):
-        def content(request):
-            data = payload(json.loads(request.content)["messages"][0]["content"])
-            return [self.thinking(), {"type": "text", "text": json.dumps(response_for(data))}]
-        def stop(request):
-            body = json.loads(request.content)
-            # A synthetic provider requiring room for thinking plus a report.
-            return ("end_turn" if body["max_tokens"] >= 8192 and
-                    body.get("output_config", {}).get("effort") == "medium" else "max_tokens")
-        client, requests = self.client(content, stop=stop)
-        report = assess_design(workspace(), [item(str(index)) for index in range(30)], client, scope="baseline")
-        self.assertEqual(report["coverage"]["items_evaluated"], 30)
-        # 30 per-item assessment requests; synthesis adds more (best-effort, failure is safe)
-        item_requests = [r for r in requests
-                         if "Assess this one item" in json.loads(r.content)["messages"][0]["content"]]
-        self.assertEqual(len(item_requests), 30)
-        self.assertTrue(all(json.loads(r.content)["max_tokens"] == 11692 for r in item_requests))
-
     def test_redacted_thinking_and_multiple_text_blocks_are_combined(self):
         client, requests = self.client([
             {"type": "redacted_thinking", "data": "private-redaction-fixture"}, self.thinking(),
@@ -169,25 +149,6 @@ class AnthropicResponseTests(unittest.TestCase):
                 client.call("System", "Prompt")
         self.assertEqual(len(requests), 1)
         sleep.assert_not_called()
-
-    def test_real_sdk_thinking_response_completes_framework_assessment(self):
-        def content(request):
-            prompt = json.loads(request.content)["messages"][0]["content"]
-            result = response_for(payload(prompt))
-            return [self.thinking(), {"type": "text", "text": json.dumps(result)}]
-        client, requests = self.client(content)
-        report = assess_design(workspace(), [item()], client, scope="baseline")
-        self.assertEqual(report["coverage"]["items_evaluated"], 1)
-        self.assertNotIn("private-thinking-fixture", json.dumps(report))
-        self.assertEqual(len(requests), 1)
-
-    def test_token_limit_reaches_user_safe_assessment_error(self):
-        client, requests = self.client([self.thinking()], "max_tokens")
-        with self.assertRaisesRegex(AssessmentError, "baseline item 1 of 1.*output-token allowance") as error:
-            assess_design(workspace(), [item()], client, scope="baseline")
-        self.assertNotIn("private-thinking-fixture", str(error.exception))
-        self.assertEqual(len(requests), 1)
-
 
 if __name__ == "__main__":
     unittest.main()

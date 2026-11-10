@@ -12,8 +12,6 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "python"), str(ROOT / "python/app"), str(ROOT / "tests")]
 import app as web
 from provider_models import discover_models, ModelDiscoveryError
-from mentor_store import WorkspaceConflict
-from hosted_jobs import execute_mentor
 from hosted_config import settings
 from test_hosted_integration import fixture_environment, FakeHostedBackend
 
@@ -194,8 +192,8 @@ class ModelApiTests(unittest.TestCase):
         info = self.request("/providers/openai/models", method="GET")
         self.assertEqual(info["models"], [])
         work = self.request("/workspaces", {"title": "Fixture"}, status=201)
-        self.request("/workspaces/" + work["id"] + "/chat",
-                     {"message": "Hello", "provider": "openai"}, status=400)
+        refused = self.request("/workspaces/" + work["id"] + "/course-map/align", {"provider": "openai"}, status=400)
+        self.assertIn("model", refused["error"])
         info = self.request("/providers/openai/models/refresh", {})
         self.request("/providers/openai/model",
                      {"model": "future-text", "version": info["version"]}, method="PUT")
@@ -229,53 +227,6 @@ class ModelApiTests(unittest.TestCase):
         self.request("/providers/openai/models/refresh", {}, status=409)
         self.assertEqual(self.request("/providers/openai/models", method="GET")["models"], [])
 
-    def test_queued_model_does_not_change_with_preference(self):
-        owner = "a" * 64
-        self.service.vault.save(owner, "openai", {"api_key": "fixture-key", "model": "model-a"})
-        saved = self.service.vault.get(owner, "openai")
-        work = self.service.store.create(owner, "Fixture")
-        work = self.service.store.begin_interview(owner, work["id"], work["revision"])
-        job = work["active_job"]["id"]
-        self.service.store.pin_provider(owner, work["id"], job, "openai", "model-a", saved["version"])
-        with self.assertRaises(WorkspaceConflict):
-            self.service.store.pin_provider(owner, work["id"], job, "openai", "model-b", saved["version"])
-        self.service.store.add_message(owner, work["id"], "user", "Goals", "interview")
-        self.service.vault.update_preferences(owner, "openai", saved["version"], {"model": "model-b"})
-        with patch("ai_client.AIClient") as factory:
-            factory.return_value.call_structured = factory.return_value.call
-            factory.return_value.call.return_value = '{"reply":"What are your goals?"}'
-            outcome = execute_mentor(owner, work["id"], job, "interview", "openai", self.service)
-            self.assertEqual(outcome["status"], "completed")
-            self.assertEqual(factory.call_args.kwargs["model"], "model-a")
-
-    def test_hosted_worker_preserves_only_safe_authored_errors(self):
-        from ai_client import AIResponseError
-        from mentor_assessment import AssessmentError
-        from model_capabilities import ModelCapabilityError
-        owner = "d" * 64
-        self.service.vault.save(owner, "openai", {"api_key": "fixture-key"})
-        for error in (ModelCapabilityError("Choose a larger-context model: fixture-key"),
-                      AIResponseError("The answer exhausted its output allowance."),
-                      AssessmentError("Assessment evidence did not validate."),
-                      RuntimeError("private-upstream-fixture-key")):
-            with self.subTest(error=type(error).__name__):
-                work = self.service.store.create(owner, "Failure fixture")
-                work = self.service.store.begin_interview(owner, work["id"], work["revision"])
-                job = work["active_job"]["id"]
-                self.service.store.add_message(owner, work["id"], "user", "Teaching goals", "interview")
-                with patch("mentor_service.interview", side_effect=error):
-                    result = execute_mentor(owner, work["id"], job, "interview", backend=self.service)
-                self.assertEqual(result["status"], "failed")
-                state = self.service.store.get(owner, work["id"])
-                self.assertIsNone(state["active_job"])
-                message = state["jobs"][-1]["error"]
-                self.assertNotIn("fixture-key", message)
-                self.assertNotIn("private-upstream", message)
-                if not isinstance(error, RuntimeError):
-                    self.assertEqual(message, str(error).replace("fixture-key", "[credential removed]"))
-                else:
-                    self.assertIn("Job failed.", message)
-
     def test_selected_capabilities_are_server_owned_and_legacy_models_are_explicitly_unverified(self):
         info = self.request("/providers/openai/models/refresh", {})
         selected = self.request("/providers/openai/model", {
@@ -298,28 +249,3 @@ class ModelApiTests(unittest.TestCase):
             self.request("/providers/openai/model", {
                 "model": "davinci-002", "version": info["version"]}, method="PUT", status=400)
             factory.assert_not_called()
-
-    def test_capability_snapshot_is_immutable_across_catalog_refresh_and_worker_execution(self):
-        from model_capabilities import resolve_capabilities
-        owner = "c" * 64
-        profile = resolve_capabilities("openai", "gpt-4o")
-        changed = {**profile, "input_limit": 32768, "context_window": 32768, "output_limit": 2048}
-        self.service.vault.save(owner, "openai", {"api_key": "fixture-key", "model": "gpt-4o"})
-        saved = self.service.vault.get(owner, "openai")
-        work = self.service.store.create(owner, "Pinned capability fixture")
-        work = self.service.store.begin_interview(owner, work["id"], work["revision"])
-        job = work["active_job"]["id"]
-        self.service.store.pin_provider(owner, work["id"], job, "openai", "gpt-4o",
-                                         saved["version"], profile)
-        self.service.store.add_message(owner, work["id"], "user", "Teaching goals", "interview")
-        self.service.vault.update_preferences(owner, "openai", saved["version"], {"capabilities": changed})
-        with self.assertRaises(WorkspaceConflict):
-            self.service.store.pin_provider(owner, work["id"], job, "openai", "gpt-4o",
-                                             saved["version"], changed)
-        with patch("ai_client.AIClient") as factory:
-            factory.return_value.call_structured = factory.return_value.call
-            factory.return_value.call.return_value = '{"reply":"What evidence should learners produce?"}'
-            outcome = execute_mentor(owner, work["id"], job, "interview", "openai", self.service)
-            self.assertEqual(outcome["status"], "completed")
-            self.assertEqual(factory.call_args.kwargs["capabilities"], profile)
-            self.assertNotEqual(factory.call_args.kwargs["capabilities"], changed)

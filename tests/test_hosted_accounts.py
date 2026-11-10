@@ -133,13 +133,12 @@ class AccountTests(unittest.TestCase):
         self.assertEqual(second.get(path, base_url="https://mentor.example").status_code, 200)
         bob = web.app.test_client()
         self.sign_in("bob@example.edu", bob)
-        for suffix in ("", "/inventory", "/download", "/preview/index.html"):
+        for suffix in ("", "/course-map", "/plan", "/documents", "/site/index.html", "/share"):
             self.assertEqual(bob.get(path + suffix, base_url="https://mentor.example").status_code, 404)
         self.post("credentials", {"provider": "openai", "api_key": "alice-fixture-key"})
         self.assertEqual(self.session(bob)["credentials"], [])
         self.assertEqual(bob.get("/mentor/api/providers/openai/models",
                                 base_url="https://mentor.example").status_code, 400)
-        self.assertEqual(bob.get(path + "/uploads", base_url="https://mentor.example").status_code, 405)
 
     def test_new_account_cannot_skip_invitation(self):
         self.post("auth/verify-code", {"email": "bob@example.edu", "code": "123456"}, expected=403)
@@ -181,46 +180,21 @@ class AccountTests(unittest.TestCase):
     def test_claim_moves_private_records_without_merging_other_accounts(self):
         legacy = "c" * 64
         old = self.service.store.create(legacy, "Legacy work")
+        import copy
+        from test_mentor_store import BUNDLE, PRIVACY
+        from canvas_api_import import import_api_bundle
+        self.service.store.save_course_model(legacy, old["id"], 1, import_api_bundle(copy.deepcopy(BUNDLE)), PRIVACY)
         self.service.vault.save(legacy, "openai", {"api_key": "legacy-fixture-key"})
         verified = {"subject": "alice", "email": "alice@example.edu"}
         owner = self.service.accounts.resolve(AUTH_URL, verified, admit=True, legacy_owner=legacy)
         self.assertNotEqual(owner, legacy)
         self.assertEqual(self.service.store.get(owner, old["id"])["title"], "Legacy work")
+        self.assertIsNotNone(self.service.store.get_course_model(owner, old["id"]), "the imported course moves too")
         with self.assertRaises(WorkspaceNotFound):
             self.service.store.get(legacy, old["id"])
         self.assertEqual(self.service.vault.get(owner, "openai")["api_key"], "legacy-fixture-key")
         with self.assertRaises(WorkspaceConflict):
             self.service.accounts.resolve(AUTH_URL, {"subject": "bob"}, admit=True, legacy_owner=legacy)
-
-    def test_claim_preserves_prepared_and_raw_paths_and_owner_scoped_upload_status(self):
-        legacy = "f" * 64
-        work = self.service.store.create(legacy, "Prepared legacy")
-        record = self.service.uploads.create(legacy, work["id"], 1, "course.imscc", 1)
-        self.service.uploads.completed(record["id"], {
-            "pathname": record["pathname"], "size": 1, "etag": "fixture",
-            "url": "https://fixture.private.blob.vercel-storage.com/" + record["pathname"]})
-        record = self.service.uploads.claim(record["id"])
-        prepared = {"pathname": f"prepared/{legacy}/{work['id']}/{record['id']}/attempt-1/course.haxcourse",
-                    "sha256": "a" * 64, "size": 1}
-        self.service.uploads.prepared(record["id"], prepared, attempt=1)
-        self.service.uploads.attach(record["id"], {
-            "source_type": "prepared", "course_id": "imscc-" + record["id"],
-            "prepared_blob": prepared["pathname"], "sha256": prepared["sha256"], "size": 1}, attempt=1)
-        owner = self.service.accounts.resolve(AUTH_URL, {"subject": "alice"}, admit=True, legacy_owner=legacy)
-        saved = self.service.uploads.get(owner, record["id"])
-        self.assertEqual(saved["pathname"], record["pathname"])
-        self.assertEqual(saved["prepared"]["pathname"], prepared["pathname"])
-        self.assertEqual(self.service.store.get(owner, work["id"])["source"]["prepared_blob"], prepared["pathname"])
-        with self.assertRaises(WorkspaceNotFound):
-            self.service.uploads.get(legacy, record["id"])
-
-    def test_claim_refuses_running_jobs_and_rolls_back(self):
-        legacy = "d" * 64
-        old = self.service.store.create(legacy, "Busy work")
-        self.service.store.begin_interview(legacy, old["id"], 1)
-        with self.assertRaises(WorkspaceConflict):
-            self.service.accounts.resolve(AUTH_URL, {"subject": "alice"}, admit=True, legacy_owner=legacy)
-        self.assertEqual(self.service.store.get(legacy, old["id"])["title"], "Busy work")
 
     def test_competing_legacy_claims_have_only_one_winner(self):
         legacy = "e" * 64

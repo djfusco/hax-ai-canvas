@@ -3,22 +3,8 @@
   "version": "1.0.13",
   "description": "Course Consultant: AI-assisted pedagogical consultation for Canvas courses (cloud app, browser extension)",
   "scripts": {
-    "build": "node scripts/build-hosted.cjs",
-    "build:hosted": "node scripts/build-hosted.cjs",
-    "test:upload": "node --test tests-js/*.test.cjs",
-    "check:hosted": "python3 scripts/check_hosted.py",
     "test": "node --test tests-js/*.test.cjs",
     "build:extension": "node scripts/build-extension.cjs"
-  },
-  "dependencies": {
-    "@haxtheweb/create": "26.8.1",
-    "@vercel/blob": "2.8.2"
-  },
-  "devDependencies": {
-    "esbuild": "0.28.2"
-  },
-  "overrides": {
-    "js-yaml": "4.3.2"
   },
   "engines": {
     "node": ">=22.0.0"

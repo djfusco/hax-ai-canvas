@@ -1,6 +1,4 @@
 """Page revisions with instructions, tutor kit, version history, comparison."""
-import copy
-import json
 from pathlib import Path
 import sys
 import unittest
@@ -10,8 +8,6 @@ sys.path[:0] = [str(ROOT / "python"), str(ROOT / "tests")]
 import course_site
 import improvement_plan as ip
 import revised_documents as rd
-from canvas_api_import import import_api_bundle
-from course_map import build_course_map
 from test_plan_documents import Client, setup
 
 

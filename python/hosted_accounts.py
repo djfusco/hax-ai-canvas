@@ -214,25 +214,12 @@ class PostgresAccounts(_Postgres):
                              (legacy,)).fetchone()[0]
         if claimed != subject:
             raise WorkspaceConflict("This browser's legacy work has already been claimed.")
-        # Same lock/order as upload admission; old deployments cannot race a
-        # legacy upload reservation through the ownership migration.
-        db.execute("INSERT INTO hax_upload_owners VALUES (?) ON CONFLICT DO NOTHING", (legacy,))
-        db.execute("SELECT owner FROM hax_upload_owners WHERE owner=? FOR UPDATE", (legacy,)).fetchone()
-        rows = db.execute("SELECT state FROM mentor_workspaces WHERE owner=?", (legacy,)).fetchall()
-        uploads = db.execute("SELECT state FROM hax_uploads WHERE owner=? FOR UPDATE", (legacy,)).fetchall()
-        if any(json.loads(row[0]).get("active_job") for row in rows):
-            raise WorkspaceConflict("Finish or cancel legacy jobs before claiming this browser.")
-        if any(json.loads(row[0])["status"] not in ("ready", "failed", "canceled") for row in uploads):
-            raise WorkspaceConflict("Finish or cancel legacy uploads before claiming this browser.")
+        rows = db.execute("SELECT state FROM mentor_workspaces WHERE owner=? FOR UPDATE", (legacy,)).fetchall()
         if db.execute("SELECT state FROM mentor_workspaces WHERE owner=?", (owner,)).fetchone() or \
                 db.execute("SELECT provider FROM hax_credentials WHERE owner=?", (owner,)).fetchone():
-            if rows or uploads or db.execute("SELECT provider FROM hax_credentials WHERE owner=?", (legacy,)).fetchone():
+            if rows or db.execute("SELECT provider FROM hax_credentials WHERE owner=?", (legacy,)).fetchone():
                 raise WorkspaceConflict("Automatic account merging is not supported. Keep the existing work separate.")
         db.execute("UPDATE mentor_workspaces SET owner=? WHERE owner=?", (owner, legacy))
+        db.execute("UPDATE mentor_course_models SET owner=? WHERE owner=?", (owner, legacy))
+        db.execute("UPDATE mentor_intake_chunks SET owner=? WHERE owner=?", (owner, legacy))
         db.execute("UPDATE hax_credentials SET owner=? WHERE owner=?", (owner, legacy))
-        for row in uploads:
-            record = json.loads(row[0])
-            record["owner"] = owner
-            # Registered raw/prepared paths remain unchanged; never copy raw data.
-            db.execute("UPDATE hax_uploads SET owner=?, state=? WHERE id=? AND owner=?",
-                       (owner, json.dumps(record), record["id"], legacy))

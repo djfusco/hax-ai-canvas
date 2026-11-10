@@ -1,130 +1,34 @@
-"""Local mentoring API. Hosted deployment is explicitly gated until provisioned."""
+"""Course Consultant API (served under /mentor), local and hosted."""
 
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime
 import hmac
 import json
 import os
 from pathlib import Path
 import re
 import secrets
-import shutil
 import tempfile
-import threading
 import time
 from urllib.parse import urlsplit
-import uuid
-from contextlib import nullcontext
 
 from flask import (
-    Blueprint, abort, current_app, g, jsonify, render_template, request,
-    send_file, send_from_directory, Response, jsonify as flask_jsonify,
+    Blueprint, abort, current_app, g, render_template, request, Response, jsonify as flask_jsonify,
 )
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from werkzeug.utils import secure_filename
 from mentor_store import WorkspaceConflict, WorkspaceNotFound
-from hosted_config import hosted_mode, settings, HostedSetupError, sign_upload, verify_upload
+from hosted_config import hosted_mode, settings, HostedSetupError
 from hosted_accounts import AccountAuthError, NeonAuth, session_cookies, new_session_cookies, COOKIE_NAMES
 
 
-def acquire_canvas_course(course_id: str, destination: Path) -> Path:
-    """Local-only acquisition; no evaluation, enhancement or build is started."""
-    from setup_wizard import load_env_values
-    values = {**os.environ, **load_env_values()}
-    url, token = values.get("CANVAS_URL", ""), values.get("CANVAS_TOKEN", "")
-    parsed = urlsplit(url)
-    allowed = {h.strip() for h in os.environ.get("HAX_ALLOWED_CANVAS_HOSTS", "").split(",") if h.strip()}
-    host = parsed.hostname or ""
-    if not token or not url:
-        raise ValueError("Configure this local app's Canvas URL/token on the Configuration page, or import an IMSCC file.")
-    if (parsed.scheme != "https" or parsed.username or parsed.password or parsed.query or parsed.fragment
-            or parsed.port not in (None, 443)
-            or not (host.endswith(".instructure.com") or host in allowed)):
-        raise ValueError("Use an HTTPS Canvas institution URL or an administrator-allowlisted Canvas host.")
-    from canvasapi import Canvas
-    from export_course import export_course
-    try:
-        ok = export_course(Canvas(url, token), int(course_id), str(destination), token)
-        matches = list(destination.glob(f"course_{course_id}_*"))
-        if not ok or len(matches) != 1:
-            raise ValueError("Canvas export did not produce a complete local source folder.")
-        return matches[0]
-    except Exception:
-        raise ValueError("Canvas acquisition failed. Check the local configuration and course access; no analysis was started.") from None
+PUBLIC_FIELDS = ("id", "title", "source_type", "revision", "created_at", "updated_at", "messages", "share")
 
 
 def create_mentor_blueprint(root_provider):
     bp = Blueprint("mentor", __name__, url_prefix="/mentor")
-    runtime_lock = threading.RLock()
 
-    def local_hax_enabled():
-        return current_app.config.get("LOCAL_HAX_ENABLED",
-                                      os.environ.get("HAX_EXECUTION_MODE") == "local"
-                                      or bool(os.environ.get("HAX_HAX_CLI")))
-
-    def import_manager():
-        from local_imports import LocalImportManager
-        with runtime_lock:
-            managers = current_app.extensions.setdefault("local_imports", {})
-            key = str(root())
-            if key not in managers:
-                managers[key] = LocalImportManager(root() / "uploads")
-            return managers[key]
-
-    def require_current_assessment(workspace):
-        draft = workspace.get("draft") or {}
-        if not hosted_mode() and local_hax_enabled() and draft.get("mode") == "ai":
-            from mentor_assessment import assessment_current
-            if not assessment_current(draft.get("items", []), draft.get("assessment")):
-                raise WorkspaceConflict(
-                    "The AI assessment is missing or stale. Complete an AI final review "
-                    "of this draft before approving or building it.")
-
-    def site_manager():
-        from local_hax import LocalHaxSites
-        with runtime_lock:
-            managers = current_app.extensions.setdefault("local_hax_sites", {})
-            key = str(root())
-            if key not in managers:
-                managers[key] = LocalHaxSites(root() / "sites")
-            return managers[key]
-
-    def startup_source(*, public_only=False):
-        if hosted_mode() or not getattr(g, "authenticated", False):
-            return None
-        path_value = os.environ.get("HAX_STARTUP_COURSE", "")
-        if not path_value:
-            return None
-        with runtime_lock:
-            source = current_app.config.get("LOCAL_STARTUP_SOURCE")
-            if not source or source["path"] != path_value:
-                path = Path(path_value)
-                if not path.is_absolute() or not path.is_file() or path.is_symlink():
-                    return None
-                if path.suffix.lower() not in (".imscc", ".haxcourse"):
-                    return None
-                source = {"id": secrets.token_hex(32), "filename": path.name,
-                          "size": path.stat().st_size, "path": path_value, "owner": None}
-                current_app.config["LOCAL_STARTUP_SOURCE"] = source
-            if source["owner"] not in (None, g.owner):
-                return None
-            return ({k: source[k] for k in ("id", "filename", "size")}
-                    if public_only else dict(source))
-
-    def upload_public(record):
-        return {key: record[key] for key in
-                ("id", "filename", "size", "offset", "status", "workspace_id", "revision", "chunk_size")
-                if key in record}
-
-    def safe_site_error(exc):
-        value = str(exc)
-        if isinstance(exc, (ValueError, RuntimeError)) and value.startswith((
-                "Managed HAX", "Node.js", "HAX ", "The saved ", "This workspace ",
-                "This HAX ", "The local HAX ", "A new build", "Approve ")):
-            return value[:500]
-        return "Unable to start the local HAX site. Check local files, permissions and free disk space."
     def backend():
         if not hasattr(g, "hosted_backend"):
             from hosted_backend import HostedBackend
@@ -198,48 +102,11 @@ def create_mentor_blueprint(root_provider):
         return clean(value)
 
     def public(workspace):
-        result = {k: v for k, v in workspace.items()
-                  if k not in ("owner", "export_dir", "source", "local_upload")}
+        result = {k: v for k, v in workspace.items() if k in PUBLIC_FIELDS}
         course_summary = (workspace.get("source") or {}).get("course_model")
         if course_summary:
             result["course"] = course_summary
-        if result.get("artifact"):
-            result["artifact"] = {k: v for k, v in result["artifact"].items()
-                                  if k not in ("path", "preview_dir", "blob_path")}
-        if not hosted_mode() and (result.get("draft") or {}).get("assessment_required"):
-            from mentor_assessment import assessment_current
-            result["draft"] = {**result["draft"], "assessment_current": assessment_current(
-                result["draft"]["items"], result["draft"].get("assessment"))}
-        if (result.get("draft") is not None and
-                request.args.get("draft_revision") == str(result["draft_revision"])):
-            result.pop("draft")
-            result["keep_draft"] = True
-        if hosted_mode():
-            latest = next((j for j in reversed(workspace["jobs"]) if j["kind"] == "prepare"), None)
-            if latest:
-                upload = backend().uploads.get(g.owner, latest["id"])
-                result["upload"] = {k: upload.get(k) for k in
-                                    ("id", "filename", "size", "kind", "status", "cleanup_status", "attempts",
-                                     "created_at", "updated_at")}
-                result["upload"]["phase"] = (upload.get("sandbox") or {}).get("phase")
-        else:
-            latest = next((job for job in reversed(workspace["jobs"]) if job["kind"] == "prepare"), None)
-            pending = workspace.get("local_upload")
-            if pending and (not latest or latest["id"] != pending["id"]):
-                result["upload"] = {**pending, "status": "awaiting_upload"}
-            elif latest:
-                result["upload"] = {key: latest.get(key) for key in
-                                    ("id", "filename", "size", "status", "phase", "message",
-                                     "error", "created_at", "finished_at")}
-                result["upload"]["created_at"] = datetime.fromisoformat(latest["created_at"]).timestamp()
-                if latest["status"] == "completed":
-                    result["upload"]["status"] = "ready"
-                elif latest["status"] == "running":
-                    result["upload"]["status"] = "processing"
         return result
-
-    def with_source(workspace):
-        return backend().materialize(workspace) if hosted_mode() else nullcontext(workspace)
 
     def capabilities_for_values(provider, values, selected=None, prefer_catalog=False):
         from model_capabilities import resolve_capabilities, validate_capabilities
@@ -310,11 +177,6 @@ def create_mentor_blueprint(root_provider):
                 return jsonify({"error": str(exc), "code": "HOSTED_SETUP_REQUIRED"}), 503
             g.hosted_config = config
             g.auth_url, g.auth_origin = config.auth_url, config.origin
-            if request.endpoint in ("mentor.upload_callback", "mentor.cleanup_cron"):
-                expected = config.internal_secret if request.endpoint == "mentor.upload_callback" else config.cron_secret
-                if not hmac.compare_digest(request.headers.get("Authorization", ""), "Bearer " + expected):
-                    return jsonify({"error": "Unauthorized."}), 401
-                return
             key = config.session_secret.encode()
         else:
             key = private_key(root() / ".browser-key")
@@ -428,11 +290,6 @@ def create_mentor_blueprint(root_provider):
     def page():
         return render_template("consultant.html")
 
-    @bp.get("/legacy")
-    def legacy_page():
-        # The earlier draft-and-build wizard, kept until Phase 3 replaces it.
-        return render_template("mentor.html")
-
     @bp.get("/import/extension")
     def import_from_extension():
         return render_template("import_extension.html")
@@ -448,9 +305,7 @@ def create_mentor_blueprint(root_provider):
                         "local_mode": not hosted_mode(),
                         "local_accounts": not hosted_mode() and g.account_mode,
                         "local_auth_configurable": not hosted_mode() and not g.auth_url,
-                        "local_hax": not hosted_mode() and local_hax_enabled(),
-                        "local_source": startup_source(public_only=True),
-                        "maximum_upload_bytes": 8 * 1024**3})
+})
 
     @bp.post("/api/local-auth/config")
     def local_auth_config():
@@ -781,7 +636,7 @@ def create_mentor_blueprint(root_provider):
     def workspaces():
         values = store().list_workspaces(g.owner)
         if hosted_mode():
-            values = [{k: w[k] for k in ("id", "title", "stage", "revision", "draft_revision", "updated_at")} for w in values]
+            values = [{k: w[k] for k in ("id", "title", "revision", "updated_at")} for w in values]
         else:
             values = [public(w) for w in values]
         return jsonify(values)
@@ -802,354 +657,6 @@ def create_mentor_blueprint(root_provider):
     def get_workspace(workspace_id):
         return jsonify(public(store().get(g.owner, workspace_id)))
 
-    @bp.get("/api/workspaces/<workspace_id>/inventory")
-    def get_inventory(workspace_id):
-        from mentor_service import inventory
-        workspace = store().get(g.owner, workspace_id)
-        if hosted_mode() and workspace.get("source", {}).get("inventory"):
-            info = dict(workspace["source"]["inventory"])
-            info["materials"] = [{k: m.get(k) for k in ("id", "name", "role", "kind", "warnings")}
-                                 for m in workspace["materials"]]
-            return jsonify(info)
-        with with_source(workspace) as hydrated:
-            return jsonify(inventory(hydrated))
-
-    @bp.put("/api/workspaces/<workspace_id>/brief")
-    def save_brief(workspace_id):
-        data = payload()
-        if not isinstance(data.get("brief"), str) or len(data["brief"]) > 30000:
-            raise ValueError("The design brief must be 30,000 characters or smaller.")
-        return jsonify(public(store().save_brief(g.owner, workspace_id, redact(data.get("brief", "")),
-                                                 data.get("revision"))))
-
-    @bp.post("/api/workspaces/<workspace_id>/source")
-    def source_file(workspace_id):
-        if hosted_mode():
-            return jsonify({"error": "Use the private multipart upload flow for hosted course files."}), 400
-        workspace = store().get(g.owner, workspace_id)
-        revision = int(request.form.get("revision", 0))
-        if revision != workspace["revision"] or workspace.get("active_job"):
-            return jsonify({"error": "Workspace changed or is processing. Refresh before importing."}), 409
-        upload = request.files.get("file")
-        if not upload or not upload.filename:
-            raise ValueError("Choose an IMSCC or prepared .haxcourse file.")
-        suffix = Path(upload.filename).suffix.lower()
-        if suffix not in (".imscc", ".haxcourse"):
-            raise ValueError("Choose an IMSCC or prepared .haxcourse file.")
-        from imscc_import import import_imscc
-        from imscc_content import prepare_import_content
-        from course_package import import_course_package
-        base = root() / "courses" / workspace_id / uuid.uuid4().hex
-        result = None
-        try:
-            with tempfile.TemporaryDirectory(prefix="mentor-source-") as temp:
-                path = Path(temp) / (secure_filename(upload.filename) or "course" + suffix)
-                count = 0
-                with path.open("wb") as output:
-                    while chunk := upload.stream.read(1024 * 1024):
-                        count += len(chunk)
-                        if count > (64 if suffix == ".haxcourse" else 256) * 1024 * 1024:
-                            raise ValueError("File too large for browser import. Use the local preparation tool.")
-                        output.write(chunk)
-                loader = import_course_package if suffix == ".haxcourse" else import_imscc
-                result = loader(path, base)
-                prepare_import_content(Path(result["export_dir"]))
-                for folder in ("pages", "assignments", "quizzes", "discussions", "syllabus"):
-                    for record in (Path(result["export_dir"]) / folder).glob("*.json"):
-                        if record.stat().st_size > 2 * 1024 * 1024:
-                            raise ValueError("An instructional item exceeds the 2 MiB mentoring review limit.")
-                        clean = redact(json.loads(record.read_text(encoding="utf-8")))
-                        record.write_text(json.dumps(clean, ensure_ascii=False), encoding="utf-8")
-            from mentor_service import inventory
-            candidate = {**workspace, "export_dir": result["export_dir"], "source_type": "imscc"}
-            inventory(candidate)  # validate review bounds before attaching
-            workspace = store().set_source(g.owner, workspace_id, {
-                "source_type": "prepared" if suffix == ".haxcourse" else "imscc",
-                "course_id": result["course_id"], "export_dir": result["export_dir"],
-                "warnings": result.get("warnings", []),
-            }, revision)
-            return jsonify(public(workspace))
-        except Exception as exc:
-            shutil.rmtree(base, ignore_errors=True)
-            raise
-
-    def local_only():
-        if hosted_mode():
-            abort(404)
-
-    def upload_workspace(record):
-        workspace = store().get(g.owner, record["workspace_id"])
-        if workspace["revision"] != record["revision"]:
-            raise WorkspaceConflict("The workspace changed. Start a new local import.")
-        return workspace
-
-    @bp.post("/api/workspaces/<workspace_id>/local-uploads")
-    def create_local_upload(workspace_id):
-        local_only()
-        data = payload()
-        workspace = store().get(g.owner, workspace_id)
-        if workspace["revision"] != data.get("revision") or workspace.get("active_job"):
-            raise WorkspaceConflict("Workspace changed or is processing. Refresh before importing.")
-        record = import_manager().create(g.owner, workspace_id, data["revision"],
-                                         data.get("filename"), data.get("size"))
-        try:
-            store().reserve_local_upload(g.owner, workspace_id, data["revision"],
-                                         {**upload_public(record), "created_at": time.time()})
-        except Exception:
-            import_manager().cancel(g.owner, record["id"])
-            raise
-        result = upload_public(record)
-        result["chunk_size"] = 8 * 1024**2
-        return jsonify(result), 201
-
-    @bp.route("/api/local-uploads/<upload_id>", methods=["GET", "PUT", "DELETE"])
-    def local_upload(upload_id):
-        local_only()
-        from local_imports import LocalImportNotFound, LocalImportConflict
-        manager = import_manager()
-        try:
-            record = manager.get(g.owner, upload_id)
-            if request.method == "GET":
-                return jsonify(upload_public(record))
-            if request.method == "DELETE":
-                workspace = store().get(g.owner, record["workspace_id"])
-                active = workspace.get("active_job")
-                if active and active["id"] == upload_id:
-                    store().fail_job(g.owner, workspace["id"], upload_id, "Canceled local import.")
-                record = manager.cancel(g.owner, upload_id)
-                store().clear_local_upload(g.owner, workspace["id"], upload_id)
-                return jsonify(upload_public(record))
-            workspace = upload_workspace(record)
-            if workspace.get("active_job"):
-                raise WorkspaceConflict("The workspace is processing.")
-            if request.mimetype != "application/octet-stream":
-                raise ValueError("Use a bounded binary chunk.")
-            try:
-                offset = int(request.args.get("offset", ""))
-            except ValueError:
-                raise ValueError("Invalid local copy offset.") from None
-            record = manager.append(g.owner, upload_id, offset, request.stream, request.content_length)
-            store().update_local_upload(g.owner, workspace["id"], upload_public(record))
-            return jsonify(upload_public(record))
-        except LocalImportNotFound:
-            abort(404)
-        except LocalImportConflict as exc:
-            raise WorkspaceConflict(str(exc)) from None
-
-    def start_preparation(workspace, record, path, manager=None):
-        workspace = store().begin_prepare(g.owner, workspace["id"], workspace["revision"], {
-            "id": record["id"], "filename": record["filename"], "size": record["size"]})
-        owner, data_root = g.owner, root()
-        saved_keys = [value["api_key"] for item in g.vault.status(owner)
-                      if (value := g.vault.get(owner, item["provider"]))]
-        def redact_local(value):
-            if isinstance(value, str):
-                for key in saved_keys:
-                    value = value.replace(key, "[credential removed]")
-                return value
-            if isinstance(value, list):
-                return [redact_local(item) for item in value]
-            if isinstance(value, dict):
-                return {key: redact_local(item) for key, item in value.items()}
-            return value
-        def prepare():
-            from local_imports import prepare_local_source
-            from mentor_store import MentorStore
-            from mentor_service import inventory
-            database = MentorStore(data_root / "workspaces.sqlite")
-            destination = data_root / "courses" / workspace["id"] / record["id"]
-            committed = False
-            def progress(phase, message):
-                database.progress_job(owner, workspace["id"], record["id"], phase,
-                                      redact_local(message)[:500])
-            try:
-                source = prepare_local_source(path, destination, progress=progress)
-                export = Path(source["export_dir"])
-                for folder in ("pages", "assignments", "quizzes", "discussions", "syllabus"):
-                    for document in (export / folder).glob("*.json"):
-                        if document.stat().st_size > 2 * 1024**2:
-                            raise ValueError("An instructional item exceeds the 2 MiB mentoring limit.")
-                        value = redact_local(json.loads(document.read_text(encoding="utf-8")))
-                        document.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
-                source = redact_local(source)
-                inventory({**workspace, **source})
-                database.finish_prepare(owner, workspace["id"], record["id"], source)
-                committed = True
-            except Exception as exc:
-                from imscc_import import IMSCCImportError
-                from local_imports import LocalImportError
-                message = ("Local preparation failed: " + redact_local(str(exc))[:400]
-                           if isinstance(exc, (IMSCCImportError, LocalImportError, ValueError))
-                           else "Local preparation failed. Check archive safety, local permissions and free disk space.")
-                try:
-                    database.fail_job(owner, workspace["id"], record["id"],
-                                      "Local preparation failed.", public_message=message)
-                except WorkspaceConflict:
-                    pass
-            finally:
-                if not committed:
-                    shutil.rmtree(destination, ignore_errors=True)
-                if manager:
-                    manager.cancel(owner, record["id"])
-                database.clear_local_upload(owner, workspace["id"], record["id"])
-        threading.Thread(target=prepare, daemon=True).start()
-        return jsonify(public(workspace)), 202
-
-    @bp.post("/api/local-uploads/<upload_id>/complete")
-    def complete_local_upload(upload_id):
-        local_only()
-        from local_imports import LocalImportConflict, LocalImportNotFound
-        manager = import_manager()
-        try:
-            record = manager.get(g.owner, upload_id)
-            workspace = upload_workspace(record)
-            if workspace.get("active_job"):
-                if workspace["active_job"]["id"] == upload_id:
-                    return jsonify(public(workspace)), 202
-                raise WorkspaceConflict("Another job is running.")
-            record = manager.complete(g.owner, upload_id)
-            return start_preparation(workspace, record, record["path"], manager)
-        except LocalImportNotFound:
-            abort(404)
-        except LocalImportConflict as exc:
-            raise WorkspaceConflict(str(exc)) from None
-
-    @bp.post("/api/workspaces/<workspace_id>/local-source")
-    def import_startup_source(workspace_id):
-        local_only()
-        data = payload()
-        workspace = store().get(g.owner, workspace_id)
-        if data.get("revision") != workspace["revision"]:
-            raise WorkspaceConflict("The workspace changed. Refresh first.")
-        with runtime_lock:
-            source = startup_source()
-            if source is None or not hmac.compare_digest(str(data.get("source_id", "")), source["id"]):
-                abort(404)
-            current_app.config["LOCAL_STARTUP_SOURCE"]["owner"] = g.owner
-        source["id"] = uuid.uuid4().hex
-        return start_preparation(workspace, source, source["path"])
-
-    def current_site(workspace_id):
-        local_only()
-        workspace = store().get(g.owner, workspace_id)
-        site = (workspace.get("artifact") or {}).get("hax_site")
-        if not site or workspace["stage"] != "built":
-            return workspace, None
-        directory = Path(site["directory"]).resolve()
-        allowed = (root() / "sites" / workspace_id).resolve()
-        if not directory.is_relative_to(allowed) or directory == allowed:
-            raise ValueError("Invalid managed site location.")
-        return workspace, directory
-
-    @bp.get("/api/workspaces/<workspace_id>/hax")
-    def hax_status(workspace_id):
-        workspace, directory = current_site(workspace_id)
-        if directory is None:
-            return jsonify({"running": False, "url": None, "phase": "not_built",
-                            "error": None, "directory": None})
-        status = site_manager().status(g.owner, workspace_id)
-        saved_error = workspace["artifact"]["hax_site"].get("error")
-        if saved_error and not status["running"] and status["phase"] != "starting":
-            status.update(phase="failed", error=status.get("error") or saved_error)
-        status["directory"] = str(directory)
-        return jsonify(status)
-
-    @bp.post("/api/workspaces/<workspace_id>/hax/start")
-    def start_hax(workspace_id):
-        workspace, directory = current_site(workspace_id)
-        if directory is None:
-            raise WorkspaceConflict("Build the approved HAX site first.")
-        try:
-            status = site_manager().start(g.owner, workspace_id, directory.name, directory)
-            store().site_error(g.owner, workspace_id, workspace["draft_revision"], None)
-            return jsonify(status), 202
-        except (ValueError, RuntimeError, OSError) as exc:
-            message = safe_site_error(exc)
-            store().site_error(g.owner, workspace_id, workspace["draft_revision"], message)
-            return jsonify({"error": message}), 503
-
-    @bp.post("/api/workspaces/<workspace_id>/hax/stop")
-    def stop_hax(workspace_id):
-        workspace, directory = current_site(workspace_id)
-        return jsonify(site_manager().stop(g.owner, workspace_id))
-
-    @bp.post("/api/workspaces/<workspace_id>/uploads")
-    def create_upload(workspace_id):
-        if not hosted_mode():
-            return jsonify({"error": "Direct Blob uploads are enabled only in hosted mode."}), 400
-        data = payload()
-        record = backend().uploads.create(
-            g.owner, workspace_id, data.get("revision"), data.get("filename"),
-            data.get("size"), kind=data.get("kind", "course"), role=data.get("role", "reference"),
-        )
-        return jsonify({
-            "upload_id": record["id"], "pathname": record["pathname"],
-            "ticket": sign_upload(record, g.hosted_config.upload_secret),
-            "maximum_size": record["size"], "expires_at": int(record["token_expires_at"]),
-        }), 201
-
-    @bp.get("/api/uploads/<upload_id>")
-    def upload_status(upload_id):
-        if not hosted_mode():
-            abort(404)
-        record = backend().uploads.get(g.owner, upload_id)
-        return jsonify({k: record.get(k) for k in
-                        ("id", "workspace_id", "filename", "size", "status", "cleanup_status", "attempts")})
-
-    @bp.post("/api/uploads/<upload_id>/complete")
-    def complete_upload(upload_id):
-        if not hosted_mode():
-            abort(404)
-        backend().uploads.get(g.owner, upload_id)
-        backend().verified_completion(upload_id)
-        return jsonify({"accepted": True}), 202
-
-    @bp.post("/internal/upload-complete")
-    def upload_callback():
-        if not hosted_mode():
-            abort(404)
-        data = payload()
-        signed = verify_upload(data.get("ticket"), g.hosted_config.upload_secret, allow_expired=True)
-        record = backend().uploads.internal_get(signed["upload_id"])
-        if any(record[key] != signed[claim] for key, claim in (
-            ("owner", "owner"), ("workspace_id", "workspace_id"),
-            ("pathname", "pathname"), ("size", "size"), ("kind", "kind"),
-        )):
-            raise ValueError("Callback does not match its persisted intent.")
-        backend().verified_completion(record["id"])
-        return jsonify({"accepted": True}), 202
-
-    @bp.get("/internal/cleanup")
-    def cleanup_cron():
-        if not hosted_mode():
-            abort(404)
-        from hosted_jobs import cleanup_batch
-        return jsonify(cleanup_batch(backend=backend()))
-
-    @bp.post("/api/workspaces/<workspace_id>/canvas")
-    def canvas_source(workspace_id):
-        if hosted_mode():
-            return jsonify({"error": "Hosted beta uses course-file uploads; local shared Canvas credentials are disabled."}), 400
-        data = payload()
-        workspace = store().get(g.owner, workspace_id)
-        course_id = str(data.get("course_id", ""))
-        if not re.fullmatch(r"[0-9]{1,20}", course_id):
-            raise ValueError("Enter a numeric Canvas course ID.")
-        if data.get("revision") != workspace["revision"] or workspace.get("active_job"):
-            return jsonify({"error": "Workspace changed or is processing. Refresh first."}), 409
-        base = root() / "courses" / workspace_id / uuid.uuid4().hex
-        base.mkdir(parents=True, exist_ok=False)
-        try:
-            exported = acquire_canvas_course(course_id, base)
-            from mentor_service import inventory
-            inventory({**workspace, "source_type": "api", "export_dir": str(exported)})
-            return jsonify(public(store().set_source(g.owner, workspace_id, {
-                "source_type": "api", "course_id": course_id, "export_dir": str(exported),
-            }, workspace["revision"])))
-        except Exception:
-            shutil.rmtree(base, ignore_errors=True)
-            raise
-
     @bp.post("/api/workspaces/<workspace_id>/intake/export")
     def intake_export(workspace_id):
         """Import a browser-slimmed Canvas export into the workspace's course model.
@@ -1160,8 +667,6 @@ def create_mentor_blueprint(root_provider):
         from slim_import import MAX_SLIM_BYTES, SlimImportError, import_slim
         from privacy_strip import strip_course
         workspace = store().get(g.owner, workspace_id)
-        if workspace.get("active_job"):
-            return jsonify({"error": "Wait for the active job before replacing the course."}), 409
         try:
             revision = int(request.form.get("revision", ""))
         except ValueError:
@@ -1205,9 +710,7 @@ def create_mentor_blueprint(root_provider):
         from canvas_collect import CanvasClient, CollectError, collect
         from privacy_strip import strip_course
         data = payload()
-        workspace = store().get(g.owner, workspace_id)
-        if workspace.get("active_job"):
-            return jsonify({"error": "Wait for the active job before replacing the course."}), 409
+        store().get(g.owner, workspace_id)  # 404 unless this is the caller's workspace
         revision = data.get("revision")
         instructor = data.get("instructor_name", "")
         if not isinstance(instructor, str) or len(instructor) > 200:
@@ -1253,8 +756,6 @@ def create_mentor_blueprint(root_provider):
         from canvas_api_import import MAX_BUNDLE_BYTES, BundleError, import_api_bundle
         from privacy_strip import strip_course
         workspace = store().get(g.owner, workspace_id)
-        if workspace.get("active_job"):
-            return jsonify({"error": "Wait for the active job before replacing the course."}), 409
         try:
             revision = int(request.form.get("revision", ""))
         except ValueError:
@@ -1291,8 +792,6 @@ def create_mentor_blueprint(root_provider):
         from mentor_materials import MaterialError, extract_material
         from privacy_strip import strip_course
         workspace = store().get(g.owner, workspace_id)
-        if workspace.get("active_job"):
-            return jsonify({"error": "Wait for the active job before replacing the course."}), 409
         try:
             revision = int(request.form.get("revision", ""))
         except ValueError:
@@ -1913,370 +1412,5 @@ def create_mentor_blueprint(root_provider):
             ai.close()
         store().save_course_alignment(g.owner, workspace_id, summary["imported_at"], alignment)
         return jsonify(build_course_map(model, alignment))
-
-    @bp.post("/api/workspaces/<workspace_id>/materials")
-    def add_material(workspace_id):
-        workspace = store().get(g.owner, workspace_id)
-        if workspace.get("active_job"):
-            return jsonify({"error": "Wait for the active job before adding sources."}), 409
-        if len(workspace["materials"]) >= 30:
-            raise ValueError("Use at most 30 supplemental sources in this workspace.")
-        from mentor_materials import extract_material, fetch_url_material, text_material
-        if request.is_json:
-            data = payload()
-            revision, role = data.get("revision"), data.get("role", "reference")
-            if data.get("url"):
-                material = fetch_url_material(data["url"], role)
-            else:
-                material = text_material(data.get("text", ""), data.get("name", "Instructor notes"), role)
-        else:
-            if hosted_mode():
-                return jsonify({"error": "Use the private multipart upload flow for hosted documents."}), 400
-            revision = int(request.form.get("revision", 0))
-            role = request.form.get("role", "reference")
-            upload = request.files.get("file")
-            if not upload or not upload.filename:
-                raise ValueError("Choose a supplemental file.")
-            with tempfile.TemporaryDirectory(prefix="mentor-material-") as temp:
-                path = Path(temp) / (secure_filename(upload.filename) or "material.txt")
-                count = 0
-                with path.open("wb") as output:
-                    while chunk := upload.stream.read(65536):
-                        count += len(chunk)
-                        if count > 10 * 1024 * 1024:
-                            raise ValueError("Supplemental files must be 10 MiB or smaller.")
-                        output.write(chunk)
-                material = extract_material(path, upload.filename, role)
-        if len(workspace["materials"]) >= 30:
-            raise ValueError("Use at most 30 supplemental sources in this workspace.")
-        return jsonify(public(store().add_material(g.owner, workspace_id, redact(material), revision)))
-
-    @bp.delete("/api/workspaces/<workspace_id>/materials/<material_id>")
-    def remove_material(workspace_id, material_id):
-        return jsonify(public(store().remove_material(g.owner, workspace_id, material_id,
-                                                       payload().get("revision"))))
-
-    @bp.post("/api/workspaces/<workspace_id>/chat")
-    def chat(workspace_id):
-        from mentor_service import interview, review_draft, MentorResponseError
-        data = payload()
-        workspace = store().get(g.owner, workspace_id)
-        if workspace.get("active_job"):
-            return jsonify({"error": "Wait for the active job before continuing the conversation."}), 409
-        message = str(data.get("message", "")).strip()
-        if not 1 <= len(message) <= 6000:
-            raise ValueError("Enter a message of 1–6000 characters.")
-        message = redact(message)
-        chosen, selected_values = provider_values(data)
-        ai = None if hosted_mode() else client(data, (chosen, selected_values))
-        kind = "review" if data.get("kind") == "review" else "interview"
-        try:
-            if kind == "review":
-                workspace = store().begin_review(g.owner, workspace_id, workspace["draft_revision"])
-            else:
-                brief = workspace.get("brief", "") + "\nInstructor feedback: " + message
-                if len(brief) > 30000:
-                    raise ValueError("Refine the design brief before adding more interview feedback.")
-                workspace = store().save_brief(g.owner, workspace_id, brief.strip(), workspace["revision"])
-                workspace = store().begin_interview(g.owner, workspace_id, workspace["revision"])
-        except Exception:
-            if ai is not None:
-                ai.close()
-            raise
-        job_id = workspace["active_job"]["id"]
-        if selected_values:
-            workspace = store().pin_provider(g.owner, workspace_id, job_id, chosen,
-                                              selected_values["model"], selected_values.get("version"), selected_values.get("capabilities"))
-        store().add_message(g.owner, workspace_id, "user", message, kind)
-        if hosted_mode():
-            try:
-                backend().dispatch_mentor(g.owner, workspace, kind, chosen)
-            except Exception:
-                store().fail_job(g.owner, workspace_id, job_id, "Could not queue mentor discussion.")
-                return jsonify({"error": "Could not queue the discussion. Your feedback is saved; retry."}), 503
-            return jsonify(public(store().get(g.owner, workspace_id))), 202
-        if local_hax_enabled() and ai is not None:
-            threading.Thread(target=run_conversation,
-                             args=(g.owner, workspace, kind, message, ai, root()),
-                             daemon=True).start()
-            return jsonify(public(store().get(g.owner, workspace_id))), 202
-        try:
-            if kind == "review":
-                reply, revised = review_draft(workspace, message, ai)
-                store().finish_review(g.owner, workspace_id, job_id, revised)
-            else:
-                reply = interview(store().get(g.owner, workspace_id), message, ai)
-                store().finish_interview(g.owner, workspace_id, job_id)
-        except Exception as exc:
-            from ai_client import AIResponseError
-            from mentor_assessment import AssessmentError
-            from model_capabilities import ModelCapabilityError
-            failure = (redact(str(exc))[:500]
-                       if isinstance(exc, (AIResponseError, AssessmentError, ModelCapabilityError, MentorResponseError))
-                       else "Mentor response failed. Your feedback was saved; check provider settings and retry.")
-            try:
-                store().fail_job(g.owner, workspace_id, job_id, "Mentor response failed.",
-                                 public_message=failure)
-            except WorkspaceConflict:
-                pass
-            # Never return provider exception text, which can contain credentials.
-            return jsonify({"error": failure}), 502
-        finally:
-            if ai is not None:
-                ai.close()
-        store().add_message(g.owner, workspace_id, "assistant", redact(reply), kind)
-        return jsonify(public(store().get(g.owner, workspace_id)))
-
-    @bp.post("/api/workspaces/<workspace_id>/approve-direction")
-    def approve_direction(workspace_id):
-        workspace = store().get(g.owner, workspace_id)
-        if not any(j.get("kind") == "interview" and j.get("status") == "completed"
-                   and j.get("revision") == workspace["revision"] for j in workspace["jobs"]):
-            raise ValueError("Complete a mentor interview for this input revision before approving the direction.")
-        return jsonify(public(store().approve_direction(g.owner, workspace_id, payload().get("revision"))))
-
-    def clean_local_output(owner, data_root, value):
-        from mentor_credentials import CredentialVault
-        vault = CredentialVault(data_root)
-        keys = [saved["api_key"] for item in vault.status(owner)
-                if (saved := vault.get(owner, item["provider"]))]
-        def clean(item):
-            if isinstance(item, str):
-                for key in keys:
-                    item = item.replace(key, "[credential removed]")
-                return item
-            if isinstance(item, list):
-                return [clean(child) for child in item]
-            if isinstance(item, dict):
-                return {key: clean(child) for key, child in item.items()}
-            return item
-        return clean(value)
-
-    def check_local_provider(owner, workspace, data_root):
-        from mentor_credentials import CredentialVault
-        job = workspace.get("active_job") or {}
-        if job.get("provider"):
-            saved = CredentialVault(data_root).get(owner, job["provider"])
-            if not saved or saved.get("version") != job.get("credential_version"):
-                raise WorkspaceConflict("The selected provider key changed or expired. Retry with current settings.")
-
-    def run_conversation(owner, workspace, kind, message, ai, data_root):
-        from mentor_service import interview, review_draft, MentorResponseError
-        from mentor_store import MentorStore
-        database = MentorStore(data_root / "workspaces.sqlite")
-        job_id = workspace["active_job"]["id"]
-        def progress(phase, text):
-            check_local_provider(owner, workspace, data_root)
-            database.progress_job(owner, workspace["id"], job_id, phase, text[:500])
-        try:
-            progress("reviewing" if kind == "review" else "interviewing", "Preparing the AI discussion.")
-            if kind == "review":
-                reply, revised = review_draft(workspace, message, ai, assess=True, progress=progress)
-                if revised:
-                    revised = clean_local_output(owner, data_root, revised)
-                database.finish_review(owner, workspace["id"], job_id, revised)
-            else:
-                reply = interview(workspace, message, ai)
-                database.finish_interview(owner, workspace["id"], job_id)
-            database.add_message(owner, workspace["id"], "assistant",
-                                 clean_local_output(owner, data_root, reply), kind)
-        except Exception as exc:
-            from ai_client import AIResponseError
-            from mentor_assessment import AssessmentError
-            from model_capabilities import ModelCapabilityError
-            failure = (str(exc)[:500] if isinstance(exc, (AIResponseError, AssessmentError, ModelCapabilityError, MentorResponseError))
-                       else "AI review failed. Check the selected model and retry. "
-                       "No approval was granted and no scores were fabricated.")
-            try:
-                database.fail_job(owner, workspace["id"], job_id, "AI discussion failed.",
-                                  public_message=failure)
-            except WorkspaceConflict:
-                pass
-        finally:
-            ai.close()
-
-    def run_job(owner, workspace, kind, ai, data_root, hax_sites=None, assess_ai=False):
-        from mentor_store import MentorStore
-        from mentor_service import build_artifact, generate_draft, MentorResponseError
-        database = MentorStore(data_root / "workspaces.sqlite")
-        job_id = workspace["active_job"]["id"]
-        current_phase = "preparing_analysis"
-        def progress(phase, message):
-            nonlocal current_phase
-            if assess_ai:
-                check_local_provider(owner, workspace, data_root)
-            database.progress_job(owner, workspace["id"], job_id, phase, message[:500])
-            current_phase = phase
-        try:
-            if kind == "analysis":
-                draft = (generate_draft(workspace, ai, assess=True, progress=progress)
-                         if assess_ai else generate_draft(workspace, ai))
-                if assess_ai:
-                    draft = clean_local_output(owner, data_root, draft)
-                    progress("saving_draft", "Draft assessment completed. Saving the proposed draft and reports; approval is still required.")
-                database.finish_analysis(owner, workspace["id"], job_id, draft)
-            else:
-                if hax_sites:
-                    from local_hax import build_local_hax_site
-                    hax_site = build_local_hax_site(
-                        workspace, data_root / "sites" / workspace["id"] / job_id,
-                        progress=progress)
-                destination = data_root / "artifacts" / workspace["id"] / job_id
-                artifact = (build_artifact(workspace, destination, asset_budget=64 * 1024**2)
-                            if hax_sites else build_artifact(workspace, destination))
-                if hax_sites:
-                    artifact["hax_site"] = hax_site
-                database.finish_build(owner, workspace["id"], job_id, artifact)
-                if hax_sites:
-                    try:
-                        hax_sites.start(owner, workspace["id"], job_id, Path(hax_site["directory"]))
-                    except (ValueError, RuntimeError, OSError) as exc:
-                        database.site_error(owner, workspace["id"], workspace["draft_revision"],
-                                            safe_site_error(exc))
-        except Exception as exc:
-            try:
-                stages = {
-                    "preparing_analysis": "analysis preparation",
-                    "assessing_baseline": "baseline assessment",
-                    "triaging": "item triage for batch draft generation",
-                    "drafting": "draft generation after baseline assessment",
-                    "validating_draft": "draft proposal validation",
-                    "assessing_draft": "proposed-draft assessment",
-                    "synthesizing": "course-level assessment synthesis",
-                    "saving_draft": "saving the assessed draft",
-                }
-                message = (safe_site_error(exc) if kind == "build" and hax_sites else
-                           "AI processing failed during " + stages.get(current_phase, "analysis") + ". "
-                           "no approval was granted and no scores were fabricated." if assess_ai else None)
-                if assess_ai:
-                    from ai_client import AIResponseError
-                    from mentor_assessment import AssessmentError
-                    from model_capabilities import ModelCapabilityError
-                    if isinstance(exc, (AIResponseError, AssessmentError, ModelCapabilityError, MentorResponseError)):
-                        prefix = ("Draft proposal validation failed. "
-                                  if isinstance(exc, MentorResponseError) and current_phase == "validating_draft"
-                                  else "")
-                        message = (prefix + str(exc))[:500]
-                database.fail_job(owner, workspace["id"], job_id,
-                                  "Processing failed. Check the input/provider and retry; no approval was granted.",
-                                  public_message=message)
-            except WorkspaceConflict:
-                pass  # Canceled/recovered jobs cannot commit late results.
-        finally:
-            if ai is not None:
-                ai.close()
-
-    @bp.post("/api/workspaces/<workspace_id>/analyze")
-    def analyze(workspace_id):
-        data = payload()
-        chosen, selected_values = provider_values(data)
-        ai = None if hosted_mode() else client(data, (chosen, selected_values))
-        try:
-            workspace = store().begin_analysis(g.owner, workspace_id, data.get("revision"))
-        except Exception:
-            if ai is not None:
-                ai.close()
-            raise
-        if hosted_mode():
-            try:
-                if selected_values:
-                    workspace = store().pin_provider(g.owner, workspace_id,
-                        workspace["active_job"]["id"], chosen, selected_values["model"],
-                        selected_values.get("version"), selected_values.get("capabilities"))
-                backend().dispatch_mentor(g.owner, workspace, "analysis", chosen)
-            except Exception:
-                store().fail_job(g.owner, workspace_id, workspace["active_job"]["id"], "Could not queue analysis.")
-                return jsonify({"error": "Could not queue analysis. Please retry."}), 503
-        else:
-            if selected_values:
-                workspace = store().pin_provider(g.owner, workspace_id,
-                    workspace["active_job"]["id"], chosen, selected_values["model"],
-                    selected_values.get("version"), selected_values.get("capabilities"))
-            threading.Thread(target=run_job,
-                             args=(g.owner, workspace, "analysis", ai, root(), None,
-                                   local_hax_enabled() and ai is not None), daemon=True).start()
-        return jsonify(public(workspace)), 202
-
-    @bp.put("/api/workspaces/<workspace_id>/draft")
-    def edit_draft(workspace_id):
-        from mentor_service import validate_manual_draft
-        data = payload()
-        workspace = store().get(g.owner, workspace_id)
-        if not workspace.get("draft"):
-            raise ValueError("Generate a draft first.")
-        draft = validate_manual_draft(workspace["draft"], redact(data.get("draft")))
-        return jsonify(public(store().save_draft(g.owner, workspace_id, draft, data.get("draft_revision"))))
-
-    @bp.post("/api/workspaces/<workspace_id>/approve-build")
-    def approve_build(workspace_id):
-        workspace = store().get(g.owner, workspace_id)
-        require_current_assessment(workspace)
-        return jsonify(public(store().approve_build(g.owner, workspace_id,
-                                                     payload().get("draft_revision"))))
-
-    @bp.post("/api/workspaces/<workspace_id>/cancel-job")
-    def cancel_job(workspace_id):
-        workspace = store().get(g.owner, workspace_id)
-        data = payload()
-        if not workspace.get("active_job") or workspace["active_job"]["id"] != data.get("job_id"):
-            return jsonify({"error": "The job is no longer active."}), 409
-        if hosted_mode() and workspace["active_job"]["kind"] == "prepare":
-            backend().uploads.cancel(g.owner, data["job_id"])
-            return jsonify(public(store().get(g.owner, workspace_id)))
-        return jsonify(public(store().fail_job(g.owner, workspace_id, data["job_id"],
-                                               "Canceled or recovered by the owner.")))
-
-    @bp.post("/api/workspaces/<workspace_id>/build")
-    def build(workspace_id):
-        require_current_assessment(store().get(g.owner, workspace_id))
-        workspace = store().begin_build(g.owner, workspace_id, payload().get("draft_revision"))
-        if hosted_mode():
-            try:
-                backend().dispatch_mentor(g.owner, workspace, "build")
-            except Exception:
-                store().fail_job(g.owner, workspace_id, workspace["active_job"]["id"], "Could not queue build.")
-                return jsonify({"error": "Could not queue the build. Please retry."}), 503
-        else:
-            sites = site_manager() if local_hax_enabled() else None
-            if sites:
-                sites.stop(g.owner, workspace_id)
-            threading.Thread(target=run_job, args=(g.owner, workspace, "build", None, root(), sites),
-                             daemon=True).start()
-        return jsonify(public(workspace)), 202
-
-    @bp.get("/api/workspaces/<workspace_id>/download")
-    def download(workspace_id):
-        workspace = store().get(g.owner, workspace_id)
-        artifact = workspace.get("artifact")
-        if not artifact or workspace["stage"] != "built":
-            abort(404)
-        if hosted_mode():
-            return Response(backend().stream_artifact(workspace), content_type="application/zip",
-                            headers={"Content-Disposition": 'attachment; filename="approved-course.zip"'})
-        path = Path(artifact["path"]).resolve()
-        if not path.is_relative_to(root() / "artifacts"):
-            abort(404)
-        return send_file(path, as_attachment=True, download_name="approved-course.zip")
-
-    @bp.get("/api/workspaces/<workspace_id>/preview/<path:filename>")
-    def preview(workspace_id, filename):
-        workspace = store().get(g.owner, workspace_id)
-        artifact = workspace.get("artifact")
-        if not artifact or workspace["stage"] != "built":
-            abort(404)
-        from mentor_preview import delivery_headers
-        headers = delivery_headers(filename, artifact.get("preview_style_hash"))
-        if hosted_mode():
-            import mimetypes
-            response = Response(backend().preview_stream(workspace, filename),
-                                content_type=mimetypes.guess_type(filename)[0] or "application/octet-stream")
-            response.headers.update(headers)
-            return response
-        directory = Path(artifact["preview_dir"]).resolve()
-        if not directory.is_relative_to(root() / "artifacts"):
-            abort(404)
-        response = send_from_directory(directory, filename)
-        response.headers.update(headers)
-        return response
 
     return bp

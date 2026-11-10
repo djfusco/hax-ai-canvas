@@ -12,10 +12,12 @@ import httpx
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
 from ai_client import AIClient, AIResponseError, HAS_ANTHROPIC, HAS_GEMINI, HAS_OPENAI
 from model_capabilities import ModelCapabilityError, resolve_capabilities
-from mentor_assessment import (
-    response_schema, assess_design, assessment_current, AssessmentError, SYSTEM, MAX_TOKENS,
-)
-from test_mentor_assessment import item, workspace, payload, response_for
+
+
+def response_schema():
+    """The consultant's real structured-output schema."""
+    import consultation
+    return consultation._schema(["course-map", "item-1", "item-2"])
 
 
 @unittest.skipUnless(HAS_ANTHROPIC and HAS_OPENAI and HAS_GEMINI, "Install repository provider SDK dependencies.")
@@ -179,37 +181,6 @@ class ModelClientMatrixTests(unittest.TestCase):
         client, requests = self.client("anthropic", "claude-sonnet-5-5", self.anthropic(), statuses=[400])
         with self.assertRaises(Exception):
             client.call_structured("System", "Prompt", response_schema())
-        self.assertEqual(len(requests), 1)
-
-    def test_real_sdk_assessment_chunks_account_for_native_schema_and_reject_fake_quotes(self):
-        def response(request):
-            body = json.loads(request.content)
-            data = payload(body["messages"][-1]["content"])
-            return self.chat(content=json.dumps(response_for(data)))
-        profile = resolve_capabilities("openai", "gpt-4o")
-        profile.update(input_limit=18000, context_window=22096, output_limit=4096)
-        client, requests = self.client("openai", "gpt-4o", response, capabilities=profile)
-        original = item(html="<p>" + "Compare documented evidence. " * 500 + "</p>")
-        report = assess_design(workspace(), [original], client)
-        self.assertGreater(len(requests), 1)
-        self.assertTrue(assessment_current([original], report))
-        self.assertEqual(report["coverage"]["chunks_evaluated"], len(requests))
-        for request in requests:
-            body = json.loads(request.content)
-            plan = client.preflight_structured(SYSTEM, body["messages"][-1]["content"],
-                                               response_schema(), max_tokens=MAX_TOKENS)
-            self.assertLessEqual(plan["input_estimate"], 18000)
-            self.assertEqual(body["response_format"]["json_schema"]["schema"], response_schema())
-
-        def forged(request):
-            data = payload(json.loads(request.content)["messages"][-1]["content"])
-            value = response_for(data)
-            value["evidence"][0]["quote"] = "PRIVATE_FABRICATED_QUOTE"
-            return self.chat(content=json.dumps(value))
-        client, requests = self.client("openai", "gpt-4o", forged)
-        with self.assertRaisesRegex(AssessmentError, "evidence quote did not exactly match") as error:
-            assess_design(workspace(), [item()], client)
-        self.assertNotIn("PRIVATE_FABRICATED_QUOTE", str(error.exception))
         self.assertEqual(len(requests), 1)
 
     def test_openai_chat_normal_budget_storage_role_and_explicit_timeout(self):

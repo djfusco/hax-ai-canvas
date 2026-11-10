@@ -4,7 +4,6 @@ import io
 import json
 from pathlib import Path
 import sys
-import tempfile
 import unittest
 import zipfile
 
@@ -192,15 +191,9 @@ class DocumentTests(unittest.TestCase):
         archive = zipfile.ZipFile(io.BytesIO(rd.zip_package("Bio", documents, [("plan.html", "<p>plan</p>")])))
         self.assertEqual(sorted(archive.namelist()), ["README.txt", "documents/Syllabus.docx",
                                                       "documents/Syllabus.html", "plan.html"])
-        with tempfile.TemporaryDirectory() as temp:
-            result = rd.hax_package("w1", "Bio", documents, Path(temp) / "site")
-            names = zipfile.ZipFile(result["path"]).namelist()
-            self.assertIn("site.json", names)
-            self.assertIn("index.html", names)
-            self.assertEqual(result["items"], 1)
         self.assertEqual(rd.remove(documents, "doc-2")[0]["id"], "doc-1")
         with self.assertRaises(rd.DocumentError):
-            rd.hax_package("w1", "Bio", rd.edit(documents, "doc-1", {"status": "draft"}), Path("/nonexistent"))
+            rd.zip_package("Bio", rd.edit(documents, "doc-1", {"status": "draft"}), [])
 
 
 if __name__ == "__main__":

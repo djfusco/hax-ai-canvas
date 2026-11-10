@@ -131,9 +131,14 @@ class LocalAccountTests(unittest.TestCase):
         legacy = "c" * 64
         store = MentorStore(self.root / "workspaces.sqlite")
         course = store.create(legacy, "Browser legacy")
+        import copy
+        from canvas_api_import import import_api_bundle
+        from test_mentor_store import BUNDLE, PRIVACY
+        store.save_course_model(legacy, course["id"], 1, import_api_bundle(copy.deepcopy(BUNDLE)), PRIVACY)
         CredentialVault(self.root).save(legacy, "openai", {"api_key": "claim-fixture"})
         owner = accounts.resolve(AUTH_URL, {"subject": "alice"}, legacy_owner=legacy)
         self.assertEqual(store.get(owner, course["id"])["title"], "Browser legacy")
+        self.assertIsNotNone(store.get_course_model(owner, course["id"]), "the imported course moves too")
         self.assertEqual(CredentialVault(self.root).get(owner, "openai")["api_key"], "claim-fixture")
         with self.assertRaises(WorkspaceNotFound):
             store.get(legacy, course["id"])

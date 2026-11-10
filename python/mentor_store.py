@@ -128,7 +128,6 @@ class MentorStore:
     @staticmethod
     def _decode(encoded):
         state = json.loads(encoded)
-        state.setdefault("reviewed_draft_revision", None)
         return state
 
     @staticmethod
@@ -161,15 +160,8 @@ class MentorStore:
 
     @staticmethod
     def _idle(state):
-        if state["active_job"] is not None:
+        if state.get("active_job") is not None:
             raise WorkspaceConflict("A job is already running.")
-    @staticmethod
-    def _assessment_ready(state):
-        draft = state.get("draft") or {}
-        if draft.get("assessment_required"):
-            from mentor_assessment import assessment_current
-            if not assessment_current(draft.get("items", []), draft.get("assessment")):
-                raise WorkspaceConflict("Complete an AI final review to refresh this draft's assessment.")
 
     @staticmethod
     def _exact(state, revision, key="revision"):
@@ -179,21 +171,6 @@ class MentorStore:
     @staticmethod
     def _invalidate(state):
         state["revision"] += 1
-        state.update(direction_revision=None, draft=None, build_revision=None,
-                     reviewed_draft_revision=None,
-                     artifact=None, stage="brief")
-
-    @staticmethod
-    def _resting_stage(state):
-        if state["artifact"] is not None:
-            return "built"
-        if state["build_revision"] is not None:
-            return "build_approved"
-        if state["draft"] is not None:
-            return "draft"
-        if state["direction_revision"] == state["revision"]:
-            return "direction_approved"
-        return "brief"
 
     def create(self, owner, title, source_type="blank", course_id=None, export_dir=None):
         _text(owner, "owner")
@@ -207,10 +184,7 @@ class MentorStore:
         state = dict(
             id=uuid4().hex, title=title, source_type=source_type,
             course_id=course_id, export_dir=export_dir, source={},
-            brief="", revision=1, stage="brief", materials=[], messages=[],
-            draft=None, draft_revision=0, direction_revision=None,
-            build_revision=None, reviewed_draft_revision=None,
-            active_job=None, artifact=None, jobs=[],
+            revision=1, messages=[], active_job=None,
             created_at=now, updated_at=now,
         )
         with self._transaction() as conn:
@@ -232,40 +206,6 @@ class MentorStore:
     def get(self, owner, id):
         with self._connection() as conn:
             return self._load(conn, owner, id)
-
-    def _edit_input(self, owner, id, revision, edit):
-        def transition(state):
-            self._exact(state, revision)
-            self._idle(state)
-            edit(state)
-            self._invalidate(state)
-        return self._change(owner, id, transition)
-
-    def site_error(self, owner, id, draft_revision, error):
-        if error is not None and (not isinstance(error, str) or not 1 <= len(error) <= 500):
-            raise ValueError("Invalid local site error.")
-        def transition(state):
-            self._exact(state, draft_revision, "draft_revision")
-            if not (state.get("artifact") or {}).get("hax_site") or state["stage"] != "built":
-                raise WorkspaceConflict("The saved site changed.")
-            state["artifact"]["hax_site"]["error"] = error
-        return self._change(owner, id, transition)
-
-    def set_source(self, owner, id, source, revision):
-        source = _object(source)
-        if "source_type" in source:
-            if not isinstance(source["source_type"], str) or source["source_type"] not in SOURCE_TYPES:
-                raise ValueError("Invalid source type.")
-        for key in ("course_id", "export_dir"):
-            if source.get(key) is not None:
-                _text(source[key], "source metadata")
-
-        def edit(state):
-            state["source"] = source
-            for key in ("source_type", "course_id", "export_dir"):
-                if key in source:
-                    state[key] = source[key]
-        return self._edit_input(owner, id, revision, edit)
 
     def save_course_model(self, owner, id, revision, model, privacy):
         """Store a validated, privacy-stripped course model as the workspace source.
@@ -365,32 +305,6 @@ class MentorStore:
             ).fetchone()
         return json.loads(row[0]) if row else None
 
-    def save_brief(self, owner, id, brief, revision):
-        _text(brief, "brief", empty=True)
-        return self._edit_input(owner, id, revision,
-                                lambda state: state.update(brief=brief))
-
-    def add_material(self, owner, id, material, revision):
-        material = _object(material)
-        material.setdefault("id", uuid4().hex)
-        _text(material["id"], "material ID")
-
-        def edit(state):
-            if any(item["id"] == material["id"] for item in state["materials"]):
-                raise WorkspaceConflict("Material already exists.")
-            state["materials"].append(material)
-        return self._edit_input(owner, id, revision, edit)
-
-    def remove_material(self, owner, id, material_id, revision):
-        _text(material_id, "material ID")
-
-        def edit(state):
-            remaining = [item for item in state["materials"] if item["id"] != material_id]
-            if len(remaining) == len(state["materials"]):
-                raise WorkspaceNotFound("Material not found.")
-            state["materials"] = remaining
-        return self._edit_input(owner, id, revision, edit)
-
     def add_message(self, owner, id, role, content, kind="interview"):
         if role not in ("user", "assistant", "instructor", "system"):
             raise ValueError("Invalid message role.")
@@ -470,282 +384,3 @@ class MentorStore:
                 raise WorkspaceConflict("The consultant is still answering. Wait a moment.")
             state["consultation"] = consultation
         return self._change(owner, id, transition)
-
-    def approve_direction(self, owner, id, revision):
-        def transition(state):
-            self._exact(state, revision)
-            self._idle(state)
-            if not state["brief"].strip():
-                raise WorkspaceConflict("A design brief is required.")
-            state["direction_revision"] = state["revision"]
-            state["stage"] = self._resting_stage(state)
-        return self._change(owner, id, transition)
-
-    def _begin(self, owner, id, revision, kind):
-        def transition(state):
-            self._exact(state, revision, "draft_revision" if kind in ("build", "review") else "revision")
-            self._idle(state)
-            if kind != "interview" and state["direction_revision"] != state["revision"]:
-                raise WorkspaceConflict("Approve the current design direction first.")
-            if kind == "review" and state["draft"] is None:
-                raise WorkspaceConflict("Analyze the current direction first.")
-            if kind == "build" and (
-                state["draft"] is None or state["build_revision"] != state["draft_revision"]
-                or state["reviewed_draft_revision"] != state["draft_revision"]
-            ):
-                raise WorkspaceConflict("Approve the current draft first.")
-            if kind == "build":
-                self._assessment_ready(state)
-            job = dict(id=uuid4().hex, kind=kind, revision=state["revision"],
-                       draft_revision=state["draft_revision"], status="running",
-                       created_at=_now(), finished_at=None)
-            state["active_job"] = job
-            state["jobs"].append(job)
-            if kind != "interview":
-                state["artifact"] = None
-            if kind in ("analysis", "review"):
-                state["build_revision"] = None
-            if kind == "review":
-                state["reviewed_draft_revision"] = None
-            state["stage"] = {
-                "analysis": "analyzing", "build": "building",
-                "review": "reviewing", "interview": "interviewing",
-            }[kind]
-        return self._change(owner, id, transition)
-
-    def begin_analysis(self, owner, id, revision):
-        return self._begin(owner, id, revision, "analysis")
-    def reserve_local_upload(self, owner, id, revision, upload):
-        upload = _object(upload)
-        def transition(state):
-            self._exact(state, revision)
-            self._idle(state)
-            pending = state.get("local_upload")
-            if pending and pending["id"] != upload["id"]:
-                raise WorkspaceConflict("Cancel the saved local copy before importing another file.")
-            state["local_upload"] = upload
-        return self._change(owner, id, transition)
-
-    def update_local_upload(self, owner, id, upload):
-        upload = _object(upload)
-        def transition(state):
-            if not state.get("local_upload") or state["local_upload"]["id"] != upload["id"]:
-                raise WorkspaceConflict("The local copy reservation changed.")
-            state["local_upload"].update(upload)
-        return self._change(owner, id, transition)
-
-    def clear_local_upload(self, owner, id, upload_id):
-        def transition(state):
-            if state.get("local_upload", {}).get("id") == upload_id:
-                state.pop("local_upload", None)
-        return self._change(owner, id, transition)
-
-    def begin_prepare(self, owner, id, revision, upload):
-        upload = _object(upload)
-        def transition(state):
-            self._exact(state, revision)
-            self._idle(state)
-            if state.get("local_upload") and state["local_upload"]["id"] != upload["id"]:
-                raise WorkspaceConflict("Cancel the saved local copy before importing another file.")
-            job = dict(id=upload["id"], kind="prepare", revision=state["revision"],
-                       draft_revision=state["draft_revision"], status="running",
-                       phase="inspecting", message="Inspecting the local course archive.",
-                       filename=upload["filename"], size=upload["size"],
-                       created_at=_now(), finished_at=None)
-            state["active_job"] = job
-            state["jobs"].append(job)
-            state["stage"] = "preparing"
-        return self._change(owner, id, transition)
-
-    def progress_job(self, owner, id, job_id, phase, message):
-        if not isinstance(phase, str) or not re.fullmatch(r"[a-z_]{1,40}", phase):
-            raise ValueError("Invalid processing phase.")
-        if not isinstance(message, str) or len(message) > 500:
-            raise ValueError("Invalid processing message.")
-        def transition(state):
-            job = self._active(state, job_id)
-            job.update(phase=phase, message=message)
-            next(entry for entry in state["jobs"] if entry["id"] == job_id).update(
-                phase=phase, message=message)
-        return self._change(owner, id, transition)
-
-    def finish_prepare(self, owner, id, job_id, source):
-        source = _object(source)
-        if source.get("source_type") not in SOURCE_TYPES or not source.get("export_dir"):
-            raise ValueError("Invalid local prepared source.")
-        def transition(state):
-            job = self._active(state, job_id, "prepare")
-            state["source"] = source
-            for key in ("source_type", "course_id", "export_dir"):
-                state[key] = source.get(key)
-            state.pop("local_upload", None)
-            self._end(state, job, "completed")
-            self._invalidate(state)
-        return self._change(owner, id, transition)
-
-    def pin_provider(self, owner, id, job_id, provider, model, credential_version, capabilities=None):
-        """Pin only nonsecret execution choices; never read mutable model preferences later."""
-        from provider_models import model_id
-        if provider not in ("openai", "anthropic", "gemini", "nebula", "openrouter"):
-            raise ValueError("Unsupported AI provider.")
-        model_id(model)
-        if capabilities is not None:
-            from model_capabilities import validate_capabilities
-            capabilities = validate_capabilities(provider, model, capabilities)
-        def transition(state):
-            active = self._active(state, job_id)
-            choices = {"provider": provider, "model": model, "credential_version": credential_version}
-            if capabilities is not None:
-                choices["model_capabilities"] = capabilities
-            if active.get("model") and any(active.get(k) != v for k, v in choices.items()):
-                raise WorkspaceConflict("The queued provider/model cannot be changed.")
-            active.update(choices)
-            next(j for j in state["jobs"] if j["id"] == job_id).update(choices)
-        return self._change(owner, id, transition)
-
-    def begin_interview(self, owner, id, revision):
-        return self._begin(owner, id, revision, "interview")
-
-    def finish_interview(self, owner, id, job_id):
-        def transition(state):
-            job = self._active(state, job_id, "interview")
-            self._end(state, job, "completed")
-            state["stage"] = self._resting_stage(state)
-        return self._change(owner, id, transition)
-
-    def begin_review(self, owner, id, draft_revision):
-        return self._begin(owner, id, draft_revision, "review")
-
-    def finish_review(self, owner, id, job_id, draft_or_none):
-        draft = None if draft_or_none is None else _object(draft_or_none)
-        if draft is not None and not draft:
-            raise ValueError("A nonempty draft is required.")
-
-        def transition(state):
-            job = self._active(state, job_id, "review")
-            if state["direction_revision"] != state["revision"] or state["draft"] is None:
-                raise WorkspaceConflict("Review is not current for this direction.")
-            self._end(state, job, "completed")
-            if draft is not None:
-                state["draft"] = draft
-                state["draft_revision"] += 1
-            state.update(reviewed_draft_revision=state["draft_revision"],
-                         build_revision=None, artifact=None, stage="draft")
-        return self._change(owner, id, transition)
-
-    @staticmethod
-    def _active(state, job_id, kind=None):
-        _text(job_id, "job ID")
-        job = state["active_job"]
-        if (job is None or job["id"] != job_id or job["status"] != "running"
-                or (kind is not None and job["kind"] != kind)
-                or job["revision"] != state["revision"]
-                or job["draft_revision"] != state["draft_revision"]):
-            raise WorkspaceConflict("Job is not active for the current workspace.")
-        return job
-
-    @staticmethod
-    def _end(state, job, status, error=None):
-        # JSON decoding does not preserve aliasing between active_job and jobs.
-        for entry in state["jobs"]:
-            if entry["id"] == job["id"]:
-                entry.update(status=status, finished_at=_now())
-                if error is not None:
-                    entry["error"] = error
-                break
-        state["active_job"] = None
-
-    def finish_analysis(self, owner, id, job_id, draft):
-        draft = _object(draft)
-        if not draft:
-            raise ValueError("A nonempty draft is required.")
-
-        def transition(state):
-            job = self._active(state, job_id, "analysis")
-            self._end(state, job, "completed")
-            state.update(draft=draft, draft_revision=state["draft_revision"] + 1,
-                         build_revision=None, reviewed_draft_revision=None,
-                         artifact=None, stage="draft")
-        return self._change(owner, id, transition)
-
-    def fail_job(self, owner, id, job_id, error, *, public_message=None):
-        _text(error, "job error")
-
-        def transition(state):
-            job = self._active(state, job_id)
-            # Exception strings may include credentials, prompts or upstream bodies.
-            message = "Job failed. Retry after checking server diagnostics."
-            if public_message is not None:
-                if not isinstance(public_message, str) or not 1 <= len(public_message) <= 500:
-                    raise ValueError("Invalid public processing error.")
-                message = public_message
-            self._end(state, job, "failed", message)
-            state["stage"] = self._resting_stage(state)
-        return self._change(owner, id, transition)
-
-    def save_draft(self, owner, id, draft, draft_revision):
-        draft = _object(draft)
-        if not draft:
-            raise ValueError("A nonempty draft is required.")
-
-        def transition(state):
-            self._exact(state, draft_revision, "draft_revision")
-            self._idle(state)
-            if state["draft"] is None or state["direction_revision"] != state["revision"]:
-                raise WorkspaceConflict("Analyze the current direction first.")
-            state.update(draft=draft, draft_revision=state["draft_revision"] + 1,
-                         build_revision=None, reviewed_draft_revision=None,
-                         artifact=None, stage="draft")
-        return self._change(owner, id, transition)
-
-    def approve_build(self, owner, id, draft_revision):
-        def transition(state):
-            self._exact(state, draft_revision, "draft_revision")
-            self._idle(state)
-            if state["draft"] is None or state["direction_revision"] != state["revision"]:
-                raise WorkspaceConflict("A current analyzed draft is required.")
-            if state["reviewed_draft_revision"] != state["draft_revision"]:
-                raise WorkspaceConflict("Complete the final review of the current draft first.")
-            self._assessment_ready(state)
-            state["build_revision"] = state["draft_revision"]
-            state["stage"] = self._resting_stage(state)
-        return self._change(owner, id, transition)
-
-    def begin_build(self, owner, id, draft_revision):
-        return self._begin(owner, id, draft_revision, "build")
-
-    def finish_build(self, owner, id, job_id, artifact):
-        artifact = _object(artifact)
-        if not artifact:
-            raise ValueError("A nonempty artifact is required.")
-
-        def transition(state):
-            job = self._active(state, job_id, "build")
-            if (state["direction_revision"] != state["revision"]
-                    or state["build_revision"] != state["draft_revision"]
-                    or state["reviewed_draft_revision"] != state["draft_revision"]):
-                raise WorkspaceConflict("Build approval is stale.")
-            self._end(state, job, "completed")
-            state.update(artifact=artifact, stage="built")
-        return self._change(owner, id, transition)
-
-    def recover_interrupted_jobs(self):
-        """Startup-only maintenance: fail interrupted jobs; never call on live workers.
-
-        This privileged operation spans owners and must not be a public API route.
-        Construction never silently changes job status.
-        """
-        recovered = []
-        with self._transaction() as conn:
-            rows = conn.execute("SELECT owner, state FROM mentor_workspaces").fetchall()
-            for owner, encoded in rows:
-                state = self._decode(encoded)
-                if state["active_job"] is not None:
-                    if state["active_job"]["kind"] == "prepare":
-                        state.pop("local_upload", None)
-                    self._end(state, state["active_job"], "failed",
-                              "Job interrupted by application restart.")
-                    state["stage"] = self._resting_stage(state)
-                    self._write(conn, owner, state)
-                    recovered.append(state)
-        return recovered

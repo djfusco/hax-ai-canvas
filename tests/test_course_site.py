@@ -25,6 +25,17 @@ class CourseSiteTests(unittest.TestCase):
         self.model = import_api_bundle(copy.deepcopy(BUNDLE))
         self.ids = {i["title"]: i["id"] for i in self.model["items"]}
 
+    def test_active_content_is_never_rendered(self):
+        welcome = next(i for i in self.model["items"] if i["title"] == "Welcome")
+        welcome["html"] = ('<p onclick="steal()">Hi</p><script>steal()</script><img src=x onerror="steal()">'
+                           '<a href="javascript:steal()">bad</a><iframe srcdoc="<script>x</script>"></iframe>')
+        items = course_site.build_items(self.model, [])
+        places = course_site.locations(items)
+        page = course_site.render("Bio", items, places[welcome["id"]]).lower()
+        for marker in ("<script", "onclick", "onerror", "javascript:", "srcdoc"):
+            self.assertNotIn(marker, page)
+        self.assertIn("hi", page)
+
     def test_order_and_revisions(self):
         documents = [doc("syllabus", "New syllabus", "<p>Revised syllabus</p>"),
                      doc("assignment", "Essay (revised)", "<p>Outline first.</p>", self.ids["Essay"]),

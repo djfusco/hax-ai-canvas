@@ -101,14 +101,16 @@ class LocalAccounts:
                     raise WorkspaceConflict("This browser's work has already been claimed.")
                 rows = db.execute("SELECT state FROM workspaces.mentor_workspaces WHERE owner=?",
                                   (legacy_owner,)).fetchall()
-                if any(json.loads(row[0]).get("active_job") for row in rows):
-                    raise WorkspaceConflict("Finish or cancel local jobs before claiming this browser.")
                 legacy_keys = db.execute("SELECT 1 FROM vault.credentials WHERE owner=?", (legacy_owner,)).fetchone()
                 target_work = db.execute("SELECT 1 FROM workspaces.mentor_workspaces WHERE owner=?", (owner,)).fetchone()
                 target_keys = db.execute("SELECT 1 FROM vault.credentials WHERE owner=?", (owner,)).fetchone()
                 if (rows or legacy_keys) and (target_work or target_keys):
                     raise WorkspaceConflict("Automatic account merging is not supported.")
                 db.execute("UPDATE workspaces.mentor_workspaces SET owner=? WHERE owner=?", (owner, legacy_owner))
+                for table in ("mentor_course_models", "mentor_intake_chunks"):
+                    if db.execute("SELECT 1 FROM workspaces.sqlite_master WHERE type='table' AND name=?",
+                                  (table,)).fetchone():
+                        db.execute(f"UPDATE workspaces.{table} SET owner=? WHERE owner=?", (owner, legacy_owner))
                 db.execute("UPDATE vault.credentials SET owner=? WHERE owner=?", (owner, legacy_owner))
         return owner
 

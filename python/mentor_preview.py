@@ -117,16 +117,6 @@ def preview_content(content, locations, assets, prefix):
     return str(soup), unavailable
 
 
-def delivery_headers(filename, style_hash=None):
-    headers = {"Content-Security-Policy": response_policy(style_hash)}
-    suffix = posixpath.splitext(filename)[1].lower()
-    if suffix not in (".html", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".ico",
-                      ".mp3", ".mp4", ".m4a", ".m4v", ".wav", ".ogg", ".webm", ".mov", ".vtt"):
-        # Do not execute or embed retained documents/stylesheet files as pages.
-        headers["Content-Disposition"] = "attachment"
-    return headers
-
-
 def render_preview(workspace, locations, assets, *, position=None):
     items = workspace["draft"]["items"]
     prefix = "" if position is None else "../../"

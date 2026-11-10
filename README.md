@@ -39,12 +39,30 @@ Design: [`docs/superpowers/specs/2026-11-09-course-consultant.md`](docs/superpow
 6. **Revised documents.** Generate a revised syllabus, assignments and
    rubrics that carry out the accepted changes; preview, edit and approve
    each, **ask for changes** in plain language, or **rewrite** from the latest
-   plan. Download approved documents as Word + HTML (with the plan).
+   plan. Compare any revision with the original (before/after), restore
+   earlier versions (the plan and each document keep their last ten), revise
+   any page, or apply one instruction to many pages at once. A **course AI
+   tutor kit** (system prompt, guardrails, sample questions) can be generated
+   too. Download approved documents as Word + HTML (with the plan), or as a
+   **Canvas import file (.imscc)**: pages, assignments (points, due dates,
+   settings) and rubrics arrive as new, unpublished "(revised)" items in one
+   module, and nothing already in the course changes.
 7. **The course site.** The whole course in module order, using approved
    revised versions in place of originals. **Preview course site** opens it in
    a new tab; **Preview in HAX theme** renders it with HAX's Clean One theme in
    the browser (sandboxed, no HAX server); **Download course site (ZIP)** is a
    static HAX site plus an offline preview.
+8. **Accessibility check.** Automatic WCAG 2.1 checks of what students would
+   see (image descriptions, link text, headings, tables, frames, captions),
+   with **Fix with AI** for any page. It states what automatic checks cannot
+   judge.
+9. **Share a read-only link** with a colleague or instructional designer:
+   the plan and course site, no sign-in needed, revocable at any time
+   (90-day maximum).
+
+Before the quick AI version or bulk revisions, Course Consultant shows an
+estimate of the AI requests and tokens, and the cost when the provider
+publishes prices (OpenRouter).
 
 **Quick AI version.** Instead of talking it through, the instructor can have
 the AI act as their advisor: it answers every consultation topic from the
@@ -79,6 +97,10 @@ decision, ask for changes to any document, and the site follows.
 | Revised documents (syllabus, assignment, rubric; exports) | `python/revised_documents.py` |
 | Institutional Canvas connection (OAuth2, server-side reader) | `python/canvas_oauth.py`, `python/canvas_collect.py` |
 | Whole-course site (preview, download) | `python/course_site.py` |
+| Canvas import package (.imscc) | `python/canvas_package.py` |
+| Accessibility checks | `python/accessibility.py` |
+| AI cost estimate | `python/cost_estimate.py` |
+| Consultant quality evaluation | `scripts/evaluate_consultant.py`, `python/quality_checks.py` |
 | HAX-theme preview and static HAX site files | `python/hax_preview.py` |
 | AI providers (OpenAI, Anthropic, Gemini, OpenRouter, gateways) | `python/ai_client.py`, `python/model_capabilities.py`, `python/provider_models.py` |
 | Web app and API | `python/app/mentor_routes.py`, `python/app/templates/consultant.html`, `python/app/static/consultant.js` |
@@ -100,7 +122,11 @@ from its catalog; nothing is silently truncated.
 | `POST /consult/proposals/<id>` | Instructor decision on a proposal (accept, reject, defer, reopen; optional edits) |
 | `GET/PUT /plan`, `POST /plan/draft`, `GET /plan/export?format=docx\|html` | Improvement plan |
 | `GET /documents`, `POST /documents/generate`, `PUT/DELETE /documents/<id>` | Revised documents |
-| `GET /documents/<id>/export?format=docx\|html`, `GET /documents/export?format=zip\|hax` | Downloads (approved only for packages) |
+| `GET /documents/<id>/export?format=docx\|html`, `GET /documents/export?format=zip\|hax\|imscc` | Downloads (approved only for packages) |
+| `GET /documents/<id>/compare`, `POST /documents/<id>/restore`, `POST /plan/restore` | Before/after and version history |
+| `GET /accessibility` | Accessibility report |
+| `GET /estimate?action=quick\|turn\|plan\|document\|bulk&count=n&provider=p` | AI use and cost estimate |
+| `GET/POST/DELETE /share` → `/mentor/shared/<signed>/` | Read-only share link |
 | `POST /intake/canvas` | Import a course through the institutional Canvas connection |
 | `POST /consult` with `mode: auto` / `advance` | Quick AI version advisor turn / move on to the next topic |
 | `POST /consult/proposals/accept-all` | Quick AI version: accept proposals as AI-decided |
@@ -125,7 +151,6 @@ Python 3.12 and Node 22.
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt -r requirements-test.txt
-npm ci
 HAX_NO_BROWSER=1 python3 python/app/app.py     # http://127.0.0.1:5050/mentor
 ```
 
@@ -150,12 +175,9 @@ npm run build:extension -- --origin https://your-course-consultant-site --browse
 See [`extension/README.md`](extension/README.md).
 
 ## Deployment
-Vercel (Python + Node functions) with Neon Postgres and Neon Auth email
-sign-in. Environment variables, Neon Auth setup and the deployment smoke test
-are documented in [`docs/legacy-readme.md`](docs/legacy-readme.md#administrator-setup);
-they are unchanged. Add the OpenRouter callback
-`https://<your-origin>/mentor/openrouter/callback` (no registration is
-required by OpenRouter for PKCE).
+Vercel (one Python function) with Neon Postgres and Neon Auth email sign-in.
+Step-by-step setup, environment variables, **your own email sender (SMTP)**
+and the post-deployment smoke test: [`docs/deployment.md`](docs/deployment.md).
 
 ## Known limitations
 - **Not yet tested against real Canvas.** Export parsing and the extension's
@@ -174,6 +196,8 @@ required by OpenRouter for PKCE).
   Run `tests-js/hax-preview.test.cjs` with `HAX_TEST_CDN_DIR` pointing at it.
 - **Institutional connection** is OAuth2 only; LTI 1.3 (launching from inside
   Canvas) needs an institution's registration to build and test.
-- The earlier draft-and-build wizard remains at `/mentor/legacy`, with its
-  hosted raw-upload pipeline and local HAX build modules. Course Consultant
-  does not use them; remove them once nobody relies on the old wizard.
+- **Canvas import package** follows the Canvas Common Cartridge format and
+  round-trips through this app's importer; try it on a sandbox course before
+  importing into a live one.
+- **Quality evaluation** needs a real AI key; `scripts/evaluate_consultant.py`
+  runs it and writes a report for a person to review.

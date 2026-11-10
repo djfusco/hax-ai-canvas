@@ -20,19 +20,6 @@
     </div>
     <nav class="main-nav">
       <a href="{{ url_for('mentor.page') }}" class="nav-link {% if request.endpoint == 'mentor.page' %}active{% endif %}">My Courses</a>
-      {% if not is_hosted %}
-      <details class="nav-advanced">
-        <summary class="nav-link">Advanced ▾</summary>
-        <div class="nav-dropdown">
-          <a href="{{ url_for('mentor.legacy_page') }}" class="nav-link">Earlier draft &amp; build wizard</a>
-          <a href="{{ url_for('index') }}"  class="nav-link {% if request.endpoint == 'index' %}active{% endif %}">Requirements</a>
-          <a href="{{ url_for('setup') }}"  class="nav-link {% if request.endpoint == 'setup' %}active{% endif %}">Configuration</a>
-          <a href="{{ url_for('run_page') }}" class="nav-link {% if request.endpoint in ('run_page','run_start','stream') %}active{% endif %}">Legacy Run</a>
-          <a href="{{ url_for('history') }}" class="nav-link {% if request.endpoint == 'history' %}active{% endif %}">Legacy History</a>
-          <a href="{{ url_for('import_page') }}" class="nav-link {% if request.endpoint == 'import_page' %}active{% endif %}">Legacy Import</a>
-        </div>
-      </details>
-      {% endif %}
     </nav>
   </div>
 </header>

@@ -15,17 +15,16 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from scripts import check_hosted, configure_hosted
 from hosted_config import settings
-from test_hosted_integration import fixture_environment, MemoryBlob
+from test_hosted_integration import fixture_environment
 
 
 class HostedSetupTests(unittest.TestCase):
     def test_generated_environment_validates_and_secrets_are_distinct(self):
         values = configure_hosted.create_environment(
-            "postgresql://fixture", "https://mentor.example/", "fixture-blob",
+            "postgresql://fixture", "https://mentor.example/",
             "https://ep-fixture.neonauth.us-east-1.aws.neon.tech/neondb/auth")
         self.assertEqual(settings(values).origin, "https://mentor.example")
-        names = ("HAX_SESSION_SECRET", "HAX_UPLOAD_SIGNING_SECRET",
-                 "HAX_INTERNAL_SECRET", "HAX_BETA_ACCESS_CODE", "CRON_SECRET")
+        names = ("HAX_SESSION_SECRET", "HAX_BETA_ACCESS_CODE")
         self.assertEqual(len({values[name] for name in names}), len(names))
         self.assertTrue(all(len(values[name]) >= 32 for name in names))
         self.assertNotIn(values["HAX_SESSION_SECRET"], repr(settings(values)))
@@ -33,7 +32,7 @@ class HostedSetupTests(unittest.TestCase):
     def test_newline_injection_is_rejected(self):
         with self.assertRaises(ValueError):
             configure_hosted.create_environment(
-                "postgresql://fixture\nINJECTED=value", "https://mentor.example", "blob")
+                "postgresql://fixture\nINJECTED=value", "https://mentor.example")
 
     def test_private_file_permissions_and_no_overwrite(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -59,16 +58,13 @@ class HostedSetupTests(unittest.TestCase):
     def preflight(self, extra=(), backend=None, env=None):
         output = io.StringIO()
         values = fixture_environment() if env is None else env
-        registry = SimpleNamespace(wf=SimpleNamespace(http_handler=lambda: None))
         with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, values, clear=True), \
-                patch.dict(sys.modules, {"workflows": registry}), \
                 patch.object(importlib.util, "find_spec", return_value=True), \
                 patch("hosted_backend.HostedBackend", backend or unittest.mock.Mock(
                     side_effect=AssertionError("Offline preflight contacted services"))), \
                 redirect_stdout(output):
             code = check_hosted.main(["--env-file", str(Path(temp) / "absent"), *extra])
-        for name in ("HAX_SESSION_SECRET", "HAX_UPLOAD_SIGNING_SECRET", "HAX_INTERNAL_SECRET",
-                     "HAX_BETA_ACCESS_CODE", "BLOB_READ_WRITE_TOKEN", "HAX_MENTOR_ENCRYPTION_KEY"):
+        for name in ("HAX_SESSION_SECRET", "HAX_BETA_ACCESS_CODE", "HAX_MENTOR_ENCRYPTION_KEY"):
             if name in values:
                 self.assertNotIn(values[name], output.getvalue())
         return code, output.getvalue()
@@ -83,28 +79,19 @@ class HostedSetupTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("DATABASE_URL", output)
 
-    def test_explicit_live_probe_verifies_and_deletes(self):
-        blob = MemoryBlob()
-        code, output = self.preflight(["--live"], lambda config: SimpleNamespace(blob=blob))
+    def test_explicit_live_check_connects_to_the_database(self):
+        code, output = self.preflight(["--live"], lambda config: SimpleNamespace())
         self.assertEqual(code, 0, output)
-        self.assertEqual([event[0] for event in blob.events], ["persist", "download", "delete"])
-        self.assertEqual(blob.objects, {})
+        self.assertIn("PostgreSQL connection and tables: verified.", output)
 
-    def test_live_probe_reports_retryable_deletion_failure(self):
-        blob = MemoryBlob()
-        blob.delete_failure = True
-        code, output = self.preflight(["--live"], lambda config: SimpleNamespace(blob=blob))
+    def test_live_check_reports_failure_without_details(self):
+        def broken(config):
+            raise ConnectionError("password=hidden-fixture")
+        code, output = self.preflight(["--live"], broken)
         self.assertEqual(code, 1)
-        self.assertIn("Probe cleanup needs attention", output)
+        self.assertIn("Database check failed (ConnectionError)", output)
+        self.assertNotIn("hidden-fixture", output)
 
 
-class BlobOptionalTests(unittest.TestCase):
-    def test_settings_do_not_require_a_blob_token(self):
-        from cryptography.fernet import Fernet
-        from hosted_config import settings
-        env = {"DATABASE_URL": "postgresql://u:p@db.example/x", "HAX_APP_ORIGIN": "https://consultant.example.edu",
-               "HAX_AUTH_MODE": "browser-beta", "HAX_MENTOR_ENCRYPTION_KEY": Fernet.generate_key().decode()}
-        for index, name in enumerate(("HAX_SESSION_SECRET", "HAX_UPLOAD_SIGNING_SECRET", "HAX_INTERNAL_SECRET",
-                                      "HAX_BETA_ACCESS_CODE", "CRON_SECRET")):
-            env[name] = chr(ord("a") + index) * 40
-        self.assertEqual(settings(env).origin, "https://consultant.example.edu")
+if __name__ == "__main__":
+    unittest.main()

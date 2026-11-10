@@ -23,7 +23,7 @@ import zipfile
 from bs4 import BeautifulSoup
 
 from course_map import compact_map, html_text
-from improvement_plan import AI_LABELS, accepted
+from improvement_plan import accepted
 
 KINDS = ("syllabus", "assignment", "rubric", "page", "tutor")
 MAX_VERSIONS = 10
@@ -533,14 +533,3 @@ def zip_package(course_title, documents, plan_files):
                                        "Each document is provided as HTML (paste into Canvas) and Word.\n")
     return buffer.getvalue()
 
-
-def hax_package(workspace_id, course_title, documents, destination):
-    """A HAX-compatible static site package of the approved documents."""
-    from mentor_service import build_artifact
-    approved = [d for d in documents if d["status"] == "approved"]
-    if not approved:
-        raise DocumentError("Approve at least one document first.")
-    workspace = {"id": workspace_id, "title": course_title, "revision": 1, "draft_revision": 1, "export_dir": None,
-                 "draft": {"items": [{"id": d["id"], "type": "pages", "title": d["title"], "html": d["html"]}
-                                     for d in approved], "warnings": [], "mode": "ai"}}
-    return build_artifact(workspace, destination)

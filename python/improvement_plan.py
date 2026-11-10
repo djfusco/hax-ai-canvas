@@ -15,7 +15,7 @@ import io
 import json
 import re
 
-from consultation import AI_DIMENSIONS, EFFORTS, TOPIC_LABELS, TOPICS, _clean, _clean_list
+from consultation import TOPIC_LABELS, TOPICS, _clean, _clean_list
 
 STATUSES = ("proposed", "accepted", "rejected", "deferred")
 MAX_VISION = 3000
