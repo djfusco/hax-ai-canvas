@@ -1383,7 +1383,7 @@ def create_mentor_blueprint(root_provider):
         from course_map import build_course_map
         data = payload()
         mode = data.get("mode", "turn")
-        if mode not in ("opening", "turn", "advance"):
+        if mode not in ("opening", "turn", "advance", "auto"):
             raise ValueError("Unknown consultation mode.")
         if mode == "advance":
             current = store().get(g.owner, workspace_id).get("consultation")
@@ -1417,8 +1417,18 @@ def create_mentor_blueprint(root_provider):
             course_map = build_course_map(model, alignment)
             history = [m for m in workspace["messages"] if m.get("kind") == "consult"]
             ai = client(data, resolved)
+            topic = state["current_topic"]
             reply, state = consult.respond(state, history, model, course_map, ai, mode=mode,
-                                           message=None if mode == "advance" else message)
+                                           message=None if mode in ("advance", "auto") else message)
+            if mode == "auto":
+                # The advisor finished this topic; move on so the next call covers the next one.
+                reply = f"**Quick AI version: {consult.TOPIC_LABELS[topic]}.** " + reply
+                if state["topics"][topic]["status"] in ("not_started", "in_progress"):
+                    state["topics"][topic]["status"] = "covered"
+                try:
+                    state = consult.advance({**state, "current_topic": topic})
+                except consult.ConsultationError:
+                    pass  # every topic is done
         except consult.ConsultationError as exc:
             store().release_consult(g.owner, workspace_id)
             return jsonify({"error": redact(str(exc))[:500]}), 502
@@ -1490,6 +1500,13 @@ def create_mentor_blueprint(root_provider):
             raise ValueError(str(exc)) from None
         return jsonify(plan_view(store().save_consultant_fields(g.owner, workspace_id, consultation=state)))
 
+    @bp.post("/api/workspaces/<workspace_id>/consult/proposals/accept-all")
+    def accept_all_proposals(workspace_id):
+        import improvement_plan as ip
+        workspace = store().get(g.owner, workspace_id)
+        state = ip.accept_all(workspace.get("consultation"))
+        return jsonify(plan_view(store().save_consultant_fields(g.owner, workspace_id, consultation=state)))
+
     @bp.get("/api/workspaces/<workspace_id>/plan")
     def plan_get(workspace_id):
         return jsonify(plan_view(store().get(g.owner, workspace_id)))
@@ -1535,6 +1552,29 @@ def create_mentor_blueprint(root_provider):
         response.headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'"
         return response
 
+    @bp.get("/api/workspaces/<workspace_id>/site")
+    def site_root(workspace_id):
+        from flask import redirect
+        return redirect(f"/mentor/api/workspaces/{workspace_id}/site/index.html", code=302)
+
+    @bp.get("/api/workspaces/<workspace_id>/site/<path:path>")
+    def site_page(workspace_id, path):
+        """Private preview of the whole course site, rendered from current approved documents."""
+        import course_site
+        from flask import Response
+        from mentor_preview import PREVIEW_STYLE_HASH, response_policy
+        workspace = store().get(g.owner, workspace_id)
+        model = store().get_course_model(g.owner, workspace_id)
+        if model is None:
+            return jsonify({"error": "Import a course first."}), 404
+        title = ((workspace.get("source") or {}).get("course_model") or {}).get("title") or workspace["title"]
+        html = course_site.render(title, course_site.build_items(model, workspace.get("documents") or []), path)
+        if html is None:
+            return jsonify({"error": "That page is not part of the course site."}), 404
+        response = Response(html, mimetype="text/html")
+        response.headers["Content-Security-Policy"] = response_policy(PREVIEW_STYLE_HASH)
+        return response
+
     @bp.get("/api/workspaces/<workspace_id>/documents")
     def documents_get(workspace_id):
         return jsonify(documents_view(store().get(g.owner, workspace_id)))
@@ -1548,7 +1588,28 @@ def create_mentor_blueprint(root_provider):
             model, course_map = course_inputs(workspace)
             document = rd.generate(data.get("kind"), model, course_map, workspace.get("consultation"),
                                    workspace.get("plan"), ai, item_id=data.get("item_id"))
+            if data.get("approve") is True:  # Quick AI version: approved on the instructor's behalf
+                document.update(status="approved", auto=True)
+            if data.get("replace_id"):
+                return {"documents": rd.replace(workspace.get("documents"), data["replace_id"], document)}
             return {"documents": rd.add(workspace.get("documents"), document)}
+        workspace, error = ai_step(workspace_id, data, work)
+        return error or jsonify(documents_view(workspace))
+
+    @bp.post("/api/workspaces/<workspace_id>/documents/<document_id>/revise")
+    def documents_revise(workspace_id, document_id):
+        import revised_documents as rd
+        data = payload()
+
+        def work(workspace, ai):
+            documents = workspace.get("documents") or []
+            document = next((d for d in documents if d["id"] == document_id), None)
+            if document is None:
+                raise rd.DocumentError("That document no longer exists.")
+            model, course_map = course_inputs(workspace)
+            revised = rd.revise(document, redact(str(data.get("instruction", ""))), model, course_map,
+                                workspace.get("consultation"), workspace.get("plan"), ai)
+            return {"documents": rd.replace(documents, document_id, revised)}
         workspace, error = ai_step(workspace_id, data, work)
         return error or jsonify(documents_view(workspace))
 
@@ -1586,10 +1647,15 @@ def create_mentor_blueprint(root_provider):
         documents = workspace.get("documents") or []
         try:
             if request.args.get("format") == "hax":
+                import course_site
+                model = store().get_course_model(g.owner, workspace_id)
+                if model is None:
+                    raise ValueError("Import a course first.")
                 with tempfile.TemporaryDirectory(prefix="hax-package-") as temp:
-                    result = rd.hax_package(workspace_id, title, documents, Path(temp) / "site")
+                    result = course_site.package(workspace_id, title, course_site.build_items(model, documents),
+                                                 Path(temp) / "site")
                     body = Path(result["path"]).read_bytes()
-                return file_response(body, ip.safe_filename(title + " HAX site", ".zip"), "application/zip")
+                return file_response(body, ip.safe_filename(title + " course site", ".zip"), "application/zip")
             plan = workspace.get("plan") or ip.new_plan()
             plan_files = [("Improvement plan.html", ip.render_html(title, plan, workspace.get("consultation"))),
                           ("Improvement plan.docx", ip.render_docx(title, plan, workspace.get("consultation")))]

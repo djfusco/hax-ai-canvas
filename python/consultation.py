@@ -208,7 +208,15 @@ def _build_prompt(state, history, model, course_map, mode, message, scale):
     conversation = _history(history, int(8000 * scale))
     if conversation:
         parts.append("CONVERSATION SO FAR:\n" + conversation)
-    if mode == "advance":
+    if mode == "auto":
+        task = ("QUICK AI VERSION: no instructor is present; they asked you to act as their expert advisor and "
+                f"decide for them. Topic: {TOPIC_LABELS[topic]} ({TOPIC_FOCUS[topic]}). From the course evidence and "
+                "course map: record what the course shows as facts (with evidence IDs); state the reasonable "
+                "assumptions you are making as goals that begin with 'Assumption:'; and propose the 1-3 strongest "
+                "changes for an excellent version of this course, using AI where it genuinely improves learning or "
+                "teaching. Do not ask questions. In the reply, briefly explain what you found and decided, in plain "
+                f"language for the instructor to review later. Mark {topic} covered.")
+    elif mode == "advance":
         previous = TOPIC_LABELS[state.get("previous_topic") or topic]
         task = (f"The instructor has finished with {previous} and wants to move on. Do not ask anything more "
                 f"about {previous}. In one sentence acknowledge what was settled, then open the new topic, "
@@ -385,7 +393,7 @@ def choose_topic(state, topic):
 
 def respond(state, history, model, course_map, client, *, mode="turn", message=None):
     """One consultation turn. Returns (reply, new_state). Raises ConsultationError."""
-    if mode not in ("opening", "turn", "advance"):
+    if mode not in ("opening", "turn", "advance", "auto"):
         raise ConsultationError("Unknown consultation mode.")
     if mode == "turn" and (not isinstance(message, str) or not 1 <= len(message.strip()) <= 6000):
         raise ConsultationError("Enter a message of 1-6000 characters.")

@@ -70,6 +70,16 @@ def decide(consult_state, proposal_id, status, edits=None):
             proposal["edited_by_instructor"] = True
     proposal["status"] = status
     proposal["decided_at"] = _now() if status != "proposed" else None
+    proposal["decided_by"] = "instructor" if status != "proposed" else None
+    return state
+
+
+def accept_all(consult_state):
+    """Quick AI version: accept every undecided proposal on the instructor's behalf, marked as AI-decided."""
+    state = deepcopy(consult_state or {})
+    for proposal in state.get("proposals", []):
+        if proposal["status"] == "proposed":
+            proposal.update(status="accepted", decided_by="ai", decided_at=_now())
     return state
 
 

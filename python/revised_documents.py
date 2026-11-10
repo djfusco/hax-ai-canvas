@@ -220,6 +220,77 @@ def generate(kind, model, course_map, consult_state, plan, client, *, item_id=No
     return document
 
 
+def revise(document, instruction, model, course_map, consult_state, plan, client):
+    """Revise one document following the instructor's instruction; returns the updated document (draft)."""
+    if not isinstance(instruction, str) or not 3 <= len(instruction.strip()) <= 4000:
+        raise DocumentError("Describe the change you want (3-4000 characters).")
+    if client is None:
+        raise DocumentError("Choose an AI provider and model to revise documents.")
+    proposal_ids = [p["id"] for p in accepted(consult_state)]
+    text = {"type": "string"}
+    schema = {"type": "object", "properties": {
+        "title": text, "html": text, "summary_of_changes": text,
+        "applied_proposals": {"type": "array", "items": {"type": "string", "enum": proposal_ids} if proposal_ids else text}},
+        "required": ["title", "html", "summary_of_changes", "applied_proposals"], "additionalProperties": False}
+    changes = [{"id": p["id"], "title": p["title"], "change": p["change"]} for p in accepted(consult_state)]
+    prompt = "\n\n".join([
+        "COURSE MAP:\n" + compact_map(course_map, 3000),
+        "ACCEPTED CHANGES:\n" + json.dumps(changes, ensure_ascii=False),
+        "PLAN AI POLICY: " + ((plan or {}).get("ai_policy") or "(none yet)"),
+        f"CURRENT DOCUMENT ({document['kind']}): {document['title']}\n" + document["html"][:60000],
+        "INSTRUCTOR'S REQUEST: " + instruction.strip(),
+        "TASK: Revise the document to do what the instructor asked. Keep everything else unless the request "
+        "requires changing it. Return the full revised document as HTML, a one-paragraph summary of what you "
+        "changed, and the IDs of accepted changes the document now applies."])
+    preflight = getattr(client, "preflight_structured", None)
+    if callable(preflight):
+        try:
+            preflight(SYSTEM, prompt, schema, max_tokens=MAX_TOKENS)
+        except ValueError:
+            raise DocumentError("The selected model's context is too small for this document.") from None
+    try:
+        structured = getattr(client, "call_structured", None)
+        raw = (structured(SYSTEM, prompt, schema, max_tokens=MAX_TOKENS) if callable(structured)
+               else client.call(SYSTEM, prompt, max_tokens=MAX_TOKENS))
+    except Exception as exc:
+        from ai_client import AIResponseError
+        if isinstance(exc, AIResponseError):
+            raise DocumentError(str(exc)) from None
+        raise DocumentError("The AI provider request failed. Check your key, model and connection, then retry.") from None
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            raise DocumentError("The AI returned a document that is not valid JSON. Try again.") from None
+    if not isinstance(raw, dict):
+        raise DocumentError("The AI returned an unexpected document. Try again.")
+    applied = raw.get("applied_proposals", [])
+    if not isinstance(applied, list) or any(p not in proposal_ids for p in applied):
+        raise DocumentError("The AI cited a change you have not accepted. Try again.")
+    updated = deepcopy(document)
+    updated.pop("rubric", None)  # revised as HTML; the structured rubric no longer matches
+    title = raw.get("title")
+    summary = raw.get("summary_of_changes")
+    updated.update(html=_clean_html(raw.get("html")), status="draft", updated_at=_now(),
+                   title=title.strip()[:240] if isinstance(title, str) and title.strip() else document["title"],
+                   summary=summary.strip()[:3000] if isinstance(summary, str) else "",
+                   applied_proposals=list(dict.fromkeys(applied)))
+    updated.setdefault("history", []).append({"at": _now(), "request": instruction.strip()[:500]})
+    updated["history"] = updated["history"][-20:]
+    updated.pop("auto", None)
+    return updated
+
+
+def replace(documents, document_id, document):
+    """Put a regenerated or revised document in place of an existing one, keeping its id."""
+    documents = deepcopy(documents or [])
+    for index, existing in enumerate(documents):
+        if existing["id"] == document_id:
+            documents[index] = {**document, "id": document_id}
+            return documents
+    raise DocumentError("That document no longer exists.")
+
+
 def add(documents, document):
     documents = deepcopy(documents or [])
     if len(documents) >= MAX_DOCUMENTS:
