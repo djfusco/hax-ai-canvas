@@ -125,9 +125,38 @@ def render(title, items, path):
 
 
 def package(workspace_id, title, items, destination):
-    """The downloadable HAX-compatible package (static site + site.json)."""
-    from mentor_service import build_artifact
-    workspace = {"id": workspace_id, "title": title, "revision": 1, "draft_revision": 1, "export_dir": None,
-                 "draft": {"items": [{k: i[k] for k in ("id", "title", "type", "html")} for i in items],
-                           "warnings": [], "mode": "ai"}}
-    return build_artifact(workspace, destination)
+    """The downloadable course site: a static HAX site plus an offline plain preview.
+
+    Top level: HAX's site shell (index.html, config.js), a HAX-format site.json
+    and one page fragment per item; served from any static host it renders
+    with a HAX theme. preview/: plain pages that open offline with a double-click.
+    """
+    import json
+    import zipfile
+    from pathlib import Path
+    import hax_preview
+    destination = Path(destination)
+    destination.mkdir(parents=True, exist_ok=False)
+    places = locations(items)
+    files = {
+        "index.html": hax_preview.index_html(title, "./"),
+        "config.js": hax_preview.config_js(),
+        "site.json": json.dumps(hax_preview.site_json(workspace_id, title, items, places), indent=2),
+        "preview/index.html": render(title, items, "index.html"),
+        "README.txt": (
+            f"{title}: course site from Course Consultant\n\n"
+            "Quick look (works offline): open preview/index.html in your browser.\n\n"
+            "HAX theme: put this folder on any static web host (GitHub Pages, Netlify, your web server), or run\n"
+            "  python3 -m http.server 8000\n"
+            "in this folder and open http://localhost:8000/ . The site loads HAX's components from cdn.hax.cloud.\n\n"
+            "To keep editing in HAX: create a HAX site and import site.json and the pages/ folder.\n"),
+    }
+    for item in items:
+        slug = places[item["id"]].split("/")[1]
+        files[f"pages/{slug}/index.html"] = hax_preview.page_html(item)
+        files[f"preview/{places[item['id']]}"] = render(title, items, places[item["id"]])
+    package_path = destination.with_suffix(".zip")
+    with zipfile.ZipFile(package_path, "x", zipfile.ZIP_DEFLATED) as archive:
+        for name, body in files.items():
+            archive.writestr(name, body)
+    return {"path": str(package_path), "items": len(items), "kind": "course-site"}

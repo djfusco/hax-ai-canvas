@@ -435,6 +435,22 @@
   });
   $('cc-start-consult').addEventListener('click', () => selectTab('consult'));
 
+  // HAX-theme preview: a signed link to a sandboxed page that loads HAX's components.
+  for (const button of document.querySelectorAll('.cc-hax-preview')) {
+    button.addEventListener('click', () => {
+      const tab = window.open('about:blank', '_blank'); // open now, so popup blockers allow it
+      run('Preparing the HAX preview…', async () => {
+        const { url } = await api(`/mentor/api/workspaces/${state.workspace.id}/hax-preview`, { method: 'POST', json: {} });
+        if (tab) {
+          tab.opener = null; // the preview cannot reach back to this page
+          tab.location.href = url;
+        } else {
+          window.location.assign(url);
+        }
+      }).then(ok => { if (!ok && tab) tab.close(); });
+    });
+  }
+
   /** Quick AI version: the AI advises and decides; every step is a separate, resumable request. */
   async function quickVersion() {
     requireAi();

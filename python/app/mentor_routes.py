@@ -296,7 +296,7 @@ def create_mentor_blueprint(root_provider):
     @bp.before_request
     def browser_identity():
         from mentor_credentials import CredentialVault, private_key
-        if request.endpoint in ("mentor.openrouter_callback", "mentor.canvas_callback"):
+        if request.endpoint in ("mentor.openrouter_callback", "mentor.canvas_callback", "mentor.hax_preview_file"):
             # Reached by a cross-site redirect from openrouter.ai, which does not
             # carry our SameSite=Strict cookies. Never mint or replace an identity
             # here; the page finishes the exchange with a same-site request.
@@ -1574,6 +1574,64 @@ def create_mentor_blueprint(root_provider):
         response = Response(html, mimetype="text/html")
         response.headers["Content-Security-Policy"] = response_policy(PREVIEW_STYLE_HASH)
         return response
+
+    # ── HAX-theme preview (signed link, sandboxed third-party scripts) ────────
+
+    def preview_signer():
+        from mentor_credentials import private_key
+        key = settings().session_secret.encode() if hosted_mode() else private_key(root() / ".browser-key")
+        return URLSafeTimedSerializer(key.decode(), salt="hax-preview")
+
+    def preview_origin():
+        return settings().origin if hosted_mode() else request.host_url.rstrip("/")
+
+    @bp.post("/api/workspaces/<workspace_id>/hax-preview")
+    def hax_preview_link(workspace_id):
+        if store().get_course_model(g.owner, workspace_id) is None:
+            return jsonify({"error": "Import a course first."}), 404
+        token = preview_signer().dumps({"owner": g.owner, "workspace": workspace_id})
+        return jsonify({"url": f"{preview_origin()}/mentor/hax/{token}/"})
+
+    @bp.get("/hax/<token>/", defaults={"path": ""})
+    @bp.get("/hax/<token>/<path:path>")
+    def hax_preview_file(token, path):
+        import course_site
+        import hax_preview
+        from flask import Response
+        def respond(body, mimetype, status=200):
+            response = Response(body, status=status, mimetype=mimetype)
+            response.headers["Content-Security-Policy"] = hax_preview.policy(preview_origin())
+            # The sandboxed page has an isolated origin; the signed link is the credential.
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            response.headers["X-Robots-Tag"] = "noindex"
+            return response
+        try:
+            claim = preview_signer().loads(token, max_age=hax_preview.TOKEN_SECONDS)
+        except (BadSignature, SignatureExpired):
+            return respond("This preview link has expired. Open the preview again from Course Consultant.",
+                           "text/plain", 403)
+        workspace = store().get(claim["owner"], claim["workspace"])
+        model = store().get_course_model(claim["owner"], claim["workspace"])
+        if model is None:
+            return respond("Not found.", "text/plain", 404)
+        title = ((workspace.get("source") or {}).get("course_model") or {}).get("title") or workspace["title"]
+        items = course_site.build_items(model, workspace.get("documents") or [])
+        places = course_site.locations(items)
+        if path in ("", "index.html") or ("." not in path.rsplit("/", 1)[-1] and not path.startswith("pages/")):
+            # The site shell; HAX's router reads page addresses like ".../week-1" itself.
+            body, mimetype = hax_preview.index_html(title, f"/mentor/hax/{token}/"), "text/html"
+        elif path == "config.js":
+            body, mimetype = hax_preview.config_js(), "text/javascript"
+        elif path == "site.json":
+            body = json.dumps(hax_preview.site_json(claim["workspace"], title, items, places))
+            mimetype = "application/json"
+        else:
+            slug = path.split("/")[1] if path.startswith("pages/") and path.endswith("/index.html") else None
+            item = next((i for i in items if slug and places[i["id"]].split("/")[1] == slug), None)
+            if item is None:
+                return respond("Not found.", "text/plain", 404)
+            body, mimetype = hax_preview.page_html(item), "text/html"
+        return respond(body, mimetype)
 
     @bp.get("/api/workspaces/<workspace_id>/documents")
     def documents_get(workspace_id):

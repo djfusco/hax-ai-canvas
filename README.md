@@ -38,8 +38,20 @@ Design: [`docs/superpowers/specs/2026-11-09-course-consultant.md`](docs/superpow
    edits it and downloads it as Word or HTML.
 6. **Revised documents.** Generate a revised syllabus, assignments and
    rubrics that carry out the accepted changes; preview, edit and approve
-   each, then download approved documents as Word + HTML (with the plan) or
-   as a HAX site package.
+   each, **ask for changes** in plain language, or **rewrite** from the latest
+   plan. Download approved documents as Word + HTML (with the plan).
+7. **The course site.** The whole course in module order, using approved
+   revised versions in place of originals. **Preview course site** opens it in
+   a new tab; **Preview in HAX theme** renders it with HAX's Clean One theme in
+   the browser (sandboxed, no HAX server); **Download course site (ZIP)** is a
+   static HAX site plus an offline preview.
+
+**Quick AI version.** Instead of talking it through, the instructor can have
+the AI act as their advisor: it answers every consultation topic from the
+course evidence (assumptions marked), accepts its own proposals (labelled
+*AI-decided*), drafts the plan and writes revised documents (labelled
+*AI-approved*). Everything stays editable: keep consulting, change any
+decision, ask for changes to any document, and the site follows.
 
 ## Privacy
 - Grades, submissions, student discussion replies and class lists are never
@@ -66,6 +78,8 @@ Design: [`docs/superpowers/specs/2026-11-09-course-consultant.md`](docs/superpow
 | Improvement plan (decisions, AI draft, Word/HTML) | `python/improvement_plan.py` |
 | Revised documents (syllabus, assignment, rubric; exports) | `python/revised_documents.py` |
 | Institutional Canvas connection (OAuth2, server-side reader) | `python/canvas_oauth.py`, `python/canvas_collect.py` |
+| Whole-course site (preview, download) | `python/course_site.py` |
+| HAX-theme preview and static HAX site files | `python/hax_preview.py` |
 | AI providers (OpenAI, Anthropic, Gemini, OpenRouter, gateways) | `python/ai_client.py`, `python/model_capabilities.py`, `python/provider_models.py` |
 | Web app and API | `python/app/mentor_routes.py`, `python/app/templates/consultant.html`, `python/app/static/consultant.js` |
 | Storage (Postgres in the cloud, SQLite in development) | `python/mentor_store.py`, `python/hosted_data.py` |
@@ -88,6 +102,16 @@ from its catalog; nothing is silently truncated.
 | `GET /documents`, `POST /documents/generate`, `PUT/DELETE /documents/<id>` | Revised documents |
 | `GET /documents/<id>/export?format=docx\|html`, `GET /documents/export?format=zip\|hax` | Downloads (approved only for packages) |
 | `POST /intake/canvas` | Import a course through the institutional Canvas connection |
+| `POST /consult` with `mode: auto` / `advance` | Quick AI version advisor turn / move on to the next topic |
+| `POST /consult/proposals/accept-all` | Quick AI version: accept proposals as AI-decided |
+| `POST /documents/<id>/revise` | Revise a document from an instruction |
+| `GET /site/...` | Private preview of the whole course site |
+| `POST /hax-preview` → `/mentor/hax/<signed>/` | HAX-theme preview (signed two-hour link, sandboxed origin) |
+
+The HAX-theme preview loads HAX's web components from `HAX_CDN_URL`
+(default `https://cdn.hax.cloud/cdn/`). Third-party scripts run under a
+Content-Security-Policy `sandbox` without same-origin, so they cannot see or
+use the instructor's session.
 
 Institutional Canvas connection (under `/mentor/api/canvas`): `institutions`,
 `connect`, `exchange`, `courses`, `disconnect`. Configure participating
@@ -143,6 +167,11 @@ required by OpenRouter for PKCE).
 - **Firefox** is validated by build checks and the bridge hand-off tested in
   Chromium, not in Firefox itself; run `npx web-ext lint` and try it in
   Firefox before publishing.
+- **HAX-theme preview** was tested with HAX's own built components served
+  locally; it relies on `cdn.hax.cloud` sending CORS headers for the sandboxed
+  page. If a deployment shows a blank HAX preview, host HAX's build (from the
+  `@haxtheweb/haxcms-nodejs` package's `dist/public`) and set `HAX_CDN_URL`.
+  Run `tests-js/hax-preview.test.cjs` with `HAX_TEST_CDN_DIR` pointing at it.
 - **Institutional connection** is OAuth2 only; LTI 1.3 (launching from inside
   Canvas) needs an institution's registration to build and test.
 - The earlier draft-and-build wizard remains at `/mentor/legacy`, with its
