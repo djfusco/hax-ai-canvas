@@ -178,6 +178,7 @@ See [`extension/README.md`](extension/README.md).
 Vercel (one Python function) with Neon Postgres and Neon Auth email sign-in.
 Step-by-step setup, environment variables, **your own email sender (SMTP)**
 and the post-deployment smoke test: [`docs/deployment.md`](docs/deployment.md).
+Outstanding set-up, testing and clean-up tasks: [`docs/todo.md`](docs/todo.md).
 
 ## Known limitations
 - **Not yet tested against real Canvas.** Export parsing and the extension's
