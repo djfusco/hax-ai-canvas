@@ -302,6 +302,7 @@
     state.map = course ? await api(`/mentor/api/workspaces/${state.workspace.id}/course-map`) : null;
     state.consult = await api(`/mentor/api/workspaces/${state.workspace.id}/consult`);
     if (course) renderCourse();
+    if (course) $('cc-preview-course').href = `/mentor/api/workspaces/${state.workspace.id}/site/index.html`;
     // Reveal only after rendering, so the panel never shows half-filled.
     $('cc-intake').hidden = Boolean(course);
     $('cc-course').hidden = !course;
@@ -433,6 +434,51 @@
     $('cc-course').hidden = true;
   });
   $('cc-start-consult').addEventListener('click', () => selectTab('consult'));
+
+  /** Quick AI version: the AI advises and decides; every step is a separate, resumable request. */
+  async function quickVersion() {
+    requireAi();
+    const ws = () => `/mentor/api/workspaces/${state.workspace.id}`;
+    const step = (n, total, text) => status(`Quick AI version, step ${n} of ${total}: ${text}`);
+    // 1. The advisor works through every topic not yet covered.
+    let view = await api(ws() + '/consult');
+    const open = () => view.state ? view.topics.filter(t => !['covered', 'skipped'].includes(view.state.topics[t.id].status)).length : view.topics.length;
+    let guard = 0;
+    while (open() && guard++ < 8) {
+      const label = view.state ? view.topics.find(t => t.id === view.state.current_topic).label : view.topics[0].label;
+      step(1, 4, `advising on ${label}…`);
+      view = await api(ws() + '/consult', { method: 'POST', json: { mode: 'auto', provider: state.provider } });
+      state.consult = view;
+    }
+    // 2. Accept the advisor's proposals on the instructor's behalf (labelled AI-decided).
+    step(2, 4, 'accepting the advisor\'s changes…');
+    state.plan = await api(ws() + '/consult/proposals/accept-all', { method: 'POST', json: {} });
+    if (state.consult && state.consult.state) state.consult.state.proposals = state.plan.proposals;
+    // 3. Draft the plan.
+    step(3, 4, 'drafting the improvement plan…');
+    state.plan = await api(ws() + '/plan/draft', { method: 'POST', json: { provider: state.provider } });
+    // 4. Write revised documents: syllabus, then assessments touched by accepted changes, with rubrics.
+    const docs = await api(ws() + '/documents');
+    const have = new Set(docs.documents.filter(d => d.status === 'approved').map(d => `${d.kind}:${d.item_id || ''}`));
+    const wanted = docs.targets.filter(t => t.kind === 'syllabus' || t.proposals.length).slice(0, 13)
+      .filter(t => !have.has(`${t.kind}:${t.item_id || ''}`));
+    for (const [index, target] of wanted.entries()) {
+      step(4, 4, `writing ${target.title} (${index + 1} of ${wanted.length})…`);
+      state.docs = await api(ws() + '/documents/generate', { method: 'POST',
+        json: { provider: state.provider, kind: target.kind, item_id: target.item_id, approve: true } });
+    }
+    renderPlanCount();
+    selectTab('docs'); // its own loader is skipped while this task runs, so load here
+    state.docs = await api(ws() + '/documents');
+    renderDocuments();
+  }
+  $('cc-quick').addEventListener('click', () => {
+    if (!window.confirm('Create the quick AI version?\n\nThe AI will answer the consultation itself, accept its own proposed '
+      + 'changes (labelled AI-decided), draft the plan and write revised documents. This makes roughly 10-25 requests '
+      + 'on your AI account and takes a few minutes. You can change any part afterwards.')) return;
+    run('Starting the quick AI version…', quickVersion,
+      'Quick AI version ready. Preview the course site, then refine anything: consult further, change decisions, or ask for changes to any document.');
+  });
 
   // ── course map ───────────────────────────────────────────────────────────
 
@@ -645,7 +691,8 @@
     const view = () => {
       card.replaceChildren(
         el('div', { class: 'cc-head' }, el('h3', { text: p.title }),
-          el('span', { class: 'cc-tag' + (p.status === 'accepted' ? ' good' : ''), text: STATUS_LABELS[p.status] })),
+          el('span', {}, p.decided_by === 'ai' ? el('span', { class: 'cc-tag ai', text: 'AI-decided' }) : null, ' ',
+            el('span', { class: 'cc-tag' + (p.status === 'accepted' ? ' good' : ''), text: STATUS_LABELS[p.status] }))),
         el('p', { class: 'cc-muted' }, topics[p.topic] || p.topic, ' · ', `${p.effort} effort`,
           p.ai_dimension !== 'none' ? ` · ${AI_DIMENSIONS[p.ai_dimension]}` : ''),
         el('p', { text: p.change }),
@@ -733,11 +780,10 @@
         + (t.proposals.length ? ` (applies ${plural(t.proposals.length, 'accepted change')})` : '') })));
     $('cc-generate').disabled = !view.targets.length;
     const approved = view.documents.filter(d => d.status === 'approved').length;
-    for (const id of ['cc-docs-zip', 'cc-docs-hax']) {
-      $(id).setAttribute('aria-disabled', String(!approved));
-      $(id).classList.toggle('cc-disabled', !approved);
-    }
+    $('cc-docs-zip').setAttribute('aria-disabled', String(!approved));
+    $('cc-docs-zip').classList.toggle('cc-disabled', !approved);
     $('cc-docs-zip').href = base() + '/documents/export';
+    $('cc-docs-preview').href = base() + '/site/index.html';
     $('cc-docs-hax').href = base() + '/documents/export?format=hax';
     $('cc-documents').replaceChildren(...(view.documents.length ? [...view.documents].reverse().map(documentCard)
       : [el('p', { class: 'cc-banner', text: 'No documents yet. Accept changes in the plan, then write a revised syllabus, assignment or rubric.' })]));
@@ -755,14 +801,26 @@
       frame.append(iframe);
       card.replaceChildren(
         el('div', { class: 'cc-head' }, el('h2', { text: d.title }),
-          el('span', { class: 'cc-tag' + (d.status === 'approved' ? ' good' : ''), text: d.status === 'approved' ? 'Approved' : 'Draft' })),
+          el('span', {}, d.auto ? el('span', { class: 'cc-tag ai', text: 'AI-approved' }) : null, ' ',
+            el('span', { class: 'cc-tag' + (d.status === 'approved' ? ' good' : ''), text: d.status === 'approved' ? 'Approved' : 'Draft' }))),
         d.summary ? el('p', { class: 'cc-muted', text: d.summary }) : null,
         frame,
+        askForm(d),
         el('div', { class: 'cc-row' },
           d.status !== 'approved'
             ? el('button', { type: 'button', class: 'cc-btn', text: 'Approve', onclick: () => change(d.id, { status: 'approved' }) })
             : el('button', { type: 'button', class: 'cc-btn cc-btn-quiet', text: 'Back to draft', onclick: () => change(d.id, { status: 'draft' }) }),
-          el('button', { type: 'button', class: 'cc-btn cc-btn-quiet', text: 'Edit', onclick: edit }),
+          el('button', { type: 'button', class: 'cc-btn cc-btn-quiet', text: 'Edit HTML', onclick: edit }),
+          el('button', { type: 'button', class: 'cc-btn cc-btn-quiet', text: 'Rewrite from latest plan', onclick: () => {
+            if (window.confirm(`Rewrite “${d.title}” from scratch using your latest plan and accepted changes?`)) {
+              run('Rewriting… this can take a minute', async () => {
+                requireAi();
+                state.docs = await api(base() + '/documents/generate', { method: 'POST', json: {
+                  provider: state.provider, kind: d.kind, item_id: d.item_id, replace_id: d.id } });
+                renderDocuments();
+              });
+            }
+          } }),
           el('a', { class: 'cc-btn cc-btn-quiet', href: `${base()}/documents/${d.id}/export?format=docx`, download: '', text: 'Word' }),
           el('a', { class: 'cc-btn cc-btn-quiet', href: `${base()}/documents/${d.id}/export`, download: '', text: 'HTML' }),
           el('button', { type: 'button', class: 'cc-btn cc-btn-quiet', text: 'Delete', onclick: () => {
@@ -787,6 +845,24 @@
     return card;
   }
 
+  function askForm(d) {
+    const box = el('textarea', { rows: 2, maxlength: 4000, class: 'cc-ask-input',
+      placeholder: 'Ask for changes, e.g. “Make the rubric 4 levels” or “Add a peer-review step”',
+      'aria-label': `Ask for changes to ${d.title}` });
+    const form = el('form', { class: 'cc-ask' }, box, el('button', { type: 'submit', class: 'cc-btn', text: 'Ask for changes' }));
+    form.addEventListener('submit', event => {
+      event.preventDefault();
+      if (!box.value.trim()) return;
+      run('Revising… this can take a minute', async () => {
+        requireAi();
+        state.docs = await api(`${base()}/documents/${d.id}/revise`, { method: 'POST',
+          json: { provider: state.provider, instruction: box.value } });
+        renderDocuments();
+      }, 'Revised. Review it, then approve it to use it in the course site.');
+    });
+    return form;
+  }
+
   function change(id, body) {
     return run('Saving…', async () => {
       state.docs = await api(`${base()}/documents/${id}`, { method: 'PUT', json: body });
@@ -801,7 +877,7 @@
       json: { provider: state.provider, kind: target.kind, item_id: target.item_id } });
     renderDocuments();
   }));
-  for (const id of ['cc-docs-zip', 'cc-docs-hax']) {
+  for (const id of ['cc-docs-zip']) {
     $(id).addEventListener('click', event => {
       if ($(id).getAttribute('aria-disabled') === 'true') {
         event.preventDefault();

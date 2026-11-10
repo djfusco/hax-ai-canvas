@@ -162,7 +162,21 @@
         </div>
         <p id="cc-privacy" class="cc-banner"></p>
         <div id="cc-map"></div>
-        <div class="cc-row"><button id="cc-start-consult" type="button" class="cc-btn">Start the consultation</button></div>
+        <div class="cc-grid cc-routes">
+          <article class="cc-card">
+            <h2>Talk it through</h2>
+            <p>Work through your course topic by topic with the consultant. You decide every change.</p>
+            <button id="cc-start-consult" type="button" class="cc-btn">Start the consultation</button>
+          </article>
+          <article class="cc-card">
+            <h2>Quick AI version</h2>
+            <p>The AI acts as your advisor: it answers the consultation from your course, decides the changes, drafts
+              the plan and writes revised documents, then builds a site you can preview. Everything it decides is
+              labelled, and you can revisit any part afterwards.</p>
+            <button id="cc-quick" type="button" class="cc-btn cc-btn-quiet">Create the quick AI version</button>
+          </article>
+        </div>
+        <a id="cc-preview-course" class="cc-btn cc-btn-quiet" href="#" target="_blank" rel="noopener">Preview course site ↗</a>
       </div>
     </section>
 
@@ -229,10 +243,13 @@
     <section id="view-docs" role="tabpanel" aria-labelledby="tab-docs" hidden>
       <div class="cc-head">
         <div><h1>Revised documents</h1>
-          <p class="cc-muted">Generate documents that carry out your accepted changes. Edit and approve each one; only approved documents are downloaded.</p></div>
+          <p class="cc-muted">Generate documents that carry out your accepted changes. Edit, ask for changes and approve
+            each one. The course site uses approved documents in place of the originals; everything else comes from your
+            course as it is.</p></div>
         <div class="cc-row">
           <a id="cc-docs-zip" class="cc-btn" href="#" download>Download all (Word + HTML)</a>
-          <a id="cc-docs-hax" class="cc-btn cc-btn-quiet" href="#" download>Download HAX site</a>
+          <a id="cc-docs-preview" class="cc-btn cc-btn-quiet" href="#" target="_blank" rel="noopener">Preview course site ↗</a>
+          <a id="cc-docs-hax" class="cc-btn cc-btn-quiet" href="#" download>Download course site (ZIP)</a>
         </div>
       </div>
       <article class="cc-card">

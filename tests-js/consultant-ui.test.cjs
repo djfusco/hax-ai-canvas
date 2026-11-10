@@ -40,6 +40,13 @@ class FakeAI:
                                "outcomes": [{"text": "Construct a scientific argument from evidence.", "note": "unchanged"}],
                                "ai_policy": "You may use AI to practise; cite any AI help.",
                                "open_questions": ["Keep the final exam?"]})
+        if "QUICK AI VERSION" in prompt:
+            return json.dumps({"reply": "I reviewed this topic and decided on the strongest options.",
+                               "topic_updates": [], "proposed_changes": [PROPOSAL] if "Topic: Assessment" in prompt else [],
+                               "next_topic": ""})
+        if "INSTRUCTOR'S REQUEST" in prompt:
+            return json.dumps({"title": "BIO 101 Syllabus", "html": "<h1>BIO 101 Syllabus</h1><p>Office hours added.</p>",
+                               "summary_of_changes": "Added office hours.", "applied_proposals": []})
         if "revising a faculty member's course documents" in system:
             return json.dumps({"title": "BIO 101 Syllabus", "html": "<h1>BIO 101 Syllabus</h1><p>Essay outline due in week 1.</p>",
                                "summary_of_changes": "Added the outline checkpoint.", "applied_proposals": ["p-1"]})
@@ -289,5 +296,70 @@ test('institutional Canvas connection: connect, choose a course, import', { skip
     await browser.close();
     app.kill();
     canvas.close();
+  }
+});
+
+test('quick AI version, site preview and asking for changes', { skip: !playwright, timeout: 120000 }, async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-ui-'));
+  const exportPath = path.join(dataDir, 'bio101.imscc');
+  execFileSync(PYTHON, ['-c', MAKE_EXPORT, exportPath], { cwd: ROOT });
+  const app = await startApp(dataDir);
+  const browser = await playwright.chromium.launch();
+  try {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const page = await context.newPage();
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    page.on('dialog', dialog => dialog.accept());
+    await page.goto(`${ORIGIN}/mentor`);
+    await page.locator('#cc-intake').waitFor({ state: 'visible' });
+    await page.click('#cc-ai-toggle');
+    await page.click('.cc-provider[data-provider="openai"]');
+    await page.fill('#cc-key', 'sk-test-only-fixture-key');
+    await page.click('#cc-key-form button[type=submit]');
+    await page.locator('#cc-models').waitFor({ state: 'visible' });
+    await page.selectOption('#cc-model', 'gpt-4o');
+    await page.click('#cc-model-use');
+    await page.setInputFiles('#cc-export', exportPath);
+    await page.locator('#cc-slim-import').waitFor({ state: 'visible' });
+    await page.click('#cc-slim-import');
+    await page.locator('#cc-course').waitFor({ state: 'visible' });
+
+    // Quick AI version from the course screen.
+    await page.click('#cc-quick');
+    await page.locator('#view-docs').waitFor({ state: 'visible', timeout: 60000 });
+    await page.waitForFunction(() => document.querySelector('#cc-status').textContent.includes('Quick AI version ready'));
+    await page.locator('.cc-document .cc-tag:has-text("AI-approved")').waitFor();
+    assert.equal(await page.locator('#cc-plan-count').isHidden(), true, 'no undecided changes remain');
+    await shot(page, '7-quick-docs');
+
+    // The preview opens the whole course site in a new tab, using the approved syllabus.
+    const [site] = await Promise.all([context.waitForEvent('page'), page.click('#cc-docs-preview')]);
+    await site.waitForLoadState();
+    assert.match(await site.content(), /Private student-view preview/);
+    assert.match(await site.locator('body').textContent(), /BIO 101 Syllabus.*Week 1.*Essay/s);
+    await shot(site, '8-site-preview');
+    await site.close();
+
+    // Ask for a change to the syllabus; it returns to draft for review.
+    await page.fill('.cc-ask-input', 'Add my office hours');
+    await page.click('.cc-ask button[type=submit]');
+    await page.locator('.cc-document .cc-tag:has-text("Draft")').waitFor();
+    assert.equal(await page.frameLocator('.cc-doc-frame').locator('p').first().textContent(), 'Office hours added.');
+
+    // The plan shows the advisor's decisions as AI-decided, and they can be changed.
+    await page.click('#tab-plan');
+    await page.locator('.cc-proposal .cc-tag.ai').first().waitFor();
+    await page.click('.cc-proposal button:has-text("Reject")');
+    await page.locator('.cc-proposal .cc-tag:has-text("Rejected")').waitFor();
+    assert.equal(await page.locator('.cc-proposal .cc-tag.ai').count(), 0, 'decision is now the instructor\'s');
+    // The consultation shows the advisor's notes and can continue.
+    await page.click('#tab-consult');
+    assert.match(await page.locator('#cc-messages').textContent(), /Quick AI version: Purpose and learners/);
+    assert.equal(await page.locator('#cc-composer').isVisible(), true);
+    assert.deepEqual(errors, []);
+  } finally {
+    await browser.close();
+    app.kill();
   }
 });
