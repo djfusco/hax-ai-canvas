@@ -857,6 +857,9 @@
     $('cc-docs-zip').setAttribute('aria-disabled', String(!approved));
     $('cc-docs-zip').classList.toggle('cc-disabled', !approved);
     $('cc-docs-zip').href = base() + '/documents/export';
+    $('cc-docs-imscc').setAttribute('aria-disabled', String(!approved));
+    $('cc-docs-imscc').classList.toggle('cc-disabled', !approved);
+    $('cc-docs-imscc').href = base() + '/documents/export?format=imscc';
     $('cc-docs-preview').href = base() + '/site/index.html';
     $('cc-docs-hax').href = base() + '/documents/export?format=hax';
     const checked = new Set([...$('cc-bulk-items').querySelectorAll('input:checked')].map(i => i.value));
@@ -1054,7 +1057,7 @@
       json: { provider: state.provider, kind: target.kind, item_id: target.item_id } });
     renderDocuments();
   }));
-  for (const id of ['cc-docs-zip']) {
+  for (const id of ['cc-docs-zip', 'cc-docs-imscc']) {
     $(id).addEventListener('click', event => {
       if ($(id).getAttribute('aria-disabled') === 'true') {
         event.preventDefault();

@@ -111,6 +111,11 @@ class QuickVersionTests(unittest.TestCase):
         package = zipfile.ZipFile(io.BytesIO(self.client.get(self.base + "/documents/export?format=hax").data))
         manifest = json.loads(package.read("site.json"))
         self.assertGreater(len(manifest["items"]), 8)
+        cartridge = self.client.get(self.base + "/documents/export?format=imscc")
+        self.assertEqual(cartridge.status_code, 200)
+        self.assertIn(".imscc", cartridge.headers["Content-Disposition"])
+        names = zipfile.ZipFile(io.BytesIO(cartridge.data)).namelist()
+        self.assertIn("course_settings/canvas_export.txt", names)
 
         # Instructor decisions are recorded as theirs.
         plan = self.call("POST", self.base + "/consult/proposals/p-1", {"status": "rejected"})

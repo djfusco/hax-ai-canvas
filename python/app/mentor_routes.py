@@ -1866,6 +1866,14 @@ def create_mentor_blueprint(root_provider):
         title = ((workspace.get("source") or {}).get("course_model") or {}).get("title") or workspace["title"]
         documents = workspace.get("documents") or []
         try:
+            if request.args.get("format") == "imscc":
+                import canvas_package
+                model = store().get_course_model(g.owner, workspace_id)
+                if model is None:
+                    raise ValueError("Import a course first.")
+                body, _ = canvas_package.build(title, model, documents)
+                return file_response(body, ip.safe_filename(title + " revised for Canvas", ".imscc"),
+                                     "application/zip")
             if request.args.get("format") == "hax":
                 import course_site
                 model = store().get_course_model(g.owner, workspace_id)
