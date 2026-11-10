@@ -394,6 +394,12 @@ test('quick AI version, site preview and asking for changes', { skip: !playwrigh
     assert.equal((await visitor.goto(shared)).status(), 404, 'turned-off link stops working');
     await visitor.context().close();
 
+    // Automatic quality check of the advisor's work.
+    await page.click('#cc-quality summary');
+    await page.click('#cc-quality-run');
+    await page.locator('#cc-quality-results .cc-a11y-item').first().waitFor();
+    assert.match(await page.textContent('#cc-quality-summary'), /\d+ passed, \d+ to review, \d+ failed/);
+
     // The plan shows the advisor's decisions as AI-decided, and they can be changed.
     await page.click('#tab-plan');
     await page.locator('.cc-proposal .cc-tag.ai').first().waitFor();

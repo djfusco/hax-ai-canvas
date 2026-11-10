@@ -1283,6 +1283,16 @@ def create_mentor_blueprint(root_provider):
                                    plan=workspace.get("plan"), count=count, capabilities=capabilities,
                                    pricing=pricing))
 
+    @bp.get("/api/workspaces/<workspace_id>/quality")
+    def quality_report(workspace_id):
+        import quality_checks
+        workspace = store().get(g.owner, workspace_id)
+        model = store().get_course_model(g.owner, workspace_id)
+        if model is None:
+            return jsonify({"error": "Import a course first."}), 404
+        return jsonify(quality_checks.evaluate(model, workspace.get("consultation"), workspace.get("messages", []),
+                                               workspace.get("plan"), workspace.get("documents") or []))
+
     @bp.get("/api/workspaces/<workspace_id>/accessibility")
     def accessibility_report(workspace_id):
         import accessibility

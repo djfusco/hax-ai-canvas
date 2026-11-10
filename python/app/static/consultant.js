@@ -482,6 +482,21 @@
     renderAccessibility(await api(`/mentor/api/workspaces/${state.workspace.id}/accessibility`));
   }));
 
+  function renderQuality(report) {
+    const { pass, warn, fail } = report.summary;
+    $('cc-quality-summary').textContent = `${pass} passed, ${warn} to review, ${fail} failed`;
+    const label = { pass: 'pass', warn: 'review', fail: 'fail' };
+    $('cc-quality-results').replaceChildren(
+      ...report.groups.map(group => el('div', { class: 'cc-a11y-item' }, el('strong', { text: group.name }),
+        el('ul', { class: 'cc-list' }, group.checks.map(check => el('li', {},
+          el('span', { class: 'cc-tag' + (check.status === 'pass' ? ' good' : ' warn'), text: label[check.status] }), ' ',
+          el('strong', { text: check.check }), ': ', check.detail))))),
+      el('p', { class: 'cc-muted', text: report.note }));
+  }
+  $('cc-quality-run').addEventListener('click', () => run('Checking quality…', async () => {
+    renderQuality(await api(`/mentor/api/workspaces/${state.workspace.id}/quality`));
+  }));
+
   // HAX-theme preview: a signed link to a sandboxed page that loads HAX's components.
   for (const button of document.querySelectorAll('.cc-hax-preview')) {
     button.addEventListener('click', () => {
