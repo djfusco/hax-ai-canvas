@@ -296,8 +296,10 @@ def create_mentor_blueprint(root_provider):
     @bp.before_request
     def browser_identity():
         from mentor_credentials import CredentialVault, private_key
-        if request.endpoint in ("mentor.openrouter_callback", "mentor.canvas_callback", "mentor.hax_preview_file"):
-            # Reached by a cross-site redirect from openrouter.ai, which does not
+        if request.endpoint in ("mentor.openrouter_callback", "mentor.canvas_callback", "mentor.hax_preview_file",
+                                "mentor.shared_view"):
+            # Callbacks reached by cross-site redirects, and signed links opened by
+            # people who are not signed in. Callbacks from openrouter.ai do not
             # carry our SameSite=Strict cookies. Never mint or replace an identity
             # here; the page finishes the exchange with a same-site request.
             return
@@ -1644,6 +1646,95 @@ def create_mentor_blueprint(root_provider):
                 return respond("Not found.", "text/plain", 404)
             body, mimetype = hax_preview.page_html(item), "text/html"
         return respond(body, mimetype)
+
+    # ── Read-only share link (signed, revocable) ─────────────────────────────
+
+    SHARE_SECONDS = 90 * 24 * 3600
+
+    def share_signer():
+        from mentor_credentials import private_key
+        key = settings().session_secret.encode() if hosted_mode() else private_key(root() / ".browser-key")
+        return URLSafeTimedSerializer(key.decode(), salt="read-only-share")
+
+    def share_view(workspace):
+        share = workspace.get("share") or {}
+        if not share.get("enabled"):
+            return {"enabled": False}
+        token = share_signer().dumps({"owner": g.owner, "workspace": workspace["id"], "v": share["version"]})
+        return {"enabled": True, "url": f"{preview_origin()}/mentor/shared/{token}/",
+                "days": SHARE_SECONDS // 86400}
+
+    @bp.get("/api/workspaces/<workspace_id>/share")
+    def share_status(workspace_id):
+        return jsonify(share_view(store().get(g.owner, workspace_id)))
+
+    @bp.post("/api/workspaces/<workspace_id>/share")
+    def share_start(workspace_id):
+        if store().get_course_model(g.owner, workspace_id) is None:
+            return jsonify({"error": "Import a course first."}), 404
+        return jsonify(share_view(store().set_share(g.owner, workspace_id, True)))
+
+    @bp.delete("/api/workspaces/<workspace_id>/share")
+    def share_stop(workspace_id):
+        return jsonify(share_view(store().set_share(g.owner, workspace_id, False)))
+
+    @bp.get("/shared/<token>/", defaults={"path": ""})
+    @bp.get("/shared/<token>/<path:path>")
+    def shared_view(token, path):
+        """What a colleague sees: the plan and the course site, read-only."""
+        import course_site
+        import improvement_plan as ip
+        from flask import Response
+        from html import escape
+        from mentor_preview import PREVIEW_STYLE_HASH, response_policy
+
+        def respond(body, status=200, policy="default-src 'none'; style-src 'unsafe-inline'"):
+            response = Response(body, status=status, mimetype="text/html")
+            response.headers["Content-Security-Policy"] = policy
+            response.headers["X-Robots-Tag"] = "noindex, nofollow"
+            response.headers["Referrer-Policy"] = "no-referrer"
+            response.headers["Cache-Control"] = "no-store"
+            return response
+
+        unavailable = "<!doctype html><title>Link not available</title><p>This shared link has been turned off or has expired.</p>"
+        try:
+            claim = share_signer().loads(token, max_age=SHARE_SECONDS)
+            workspace = store().get(claim["owner"], claim["workspace"])
+        except (BadSignature, SignatureExpired, KeyError, TypeError, WorkspaceNotFound):
+            return respond(unavailable, 404)
+        share = workspace.get("share") or {}
+        if not share.get("enabled") or share.get("version") != claim.get("v"):
+            return respond(unavailable, 404)
+        model = store().get_course_model(claim["owner"], claim["workspace"])
+        if model is None:
+            return respond(unavailable, 404)
+        title = ((workspace.get("source") or {}).get("course_model") or {}).get("title") or workspace["title"]
+        if path == "plan":
+            return respond(ip.render_html(title, workspace.get("plan") or ip.new_plan(), workspace.get("consultation")))
+        if path.startswith("site/"):
+            html = course_site.render(title, course_site.build_items(model, workspace.get("documents") or []),
+                                      path[len("site/"):] or "index.html")
+            if html is None:
+                return respond("<!doctype html><title>Not found</title><p>That page is not part of the course site.</p>", 404)
+            return respond(html, policy=response_policy(PREVIEW_STYLE_HASH))
+        if path:
+            return respond("<!doctype html><title>Not found</title><p>Not found.</p>", 404)
+        approved = [d for d in workspace.get("documents") or [] if d.get("status") == "approved"]
+        rows = "".join(f"<li>{escape(d.get('title') or d['kind'])}</li>" for d in approved[:100])
+        body = (f"<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+                f"<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+                f"<title>{escape(title)} – shared view</title><style>"
+                "body{font:16px/1.5 system-ui,sans-serif;max-width:720px;margin:32px auto;padding:0 16px;color:#1d2330;background:#fff}"
+                "a{color:#2459c9}.note{color:#5b6474}"
+                "@media (prefers-color-scheme:dark){body{background:#14171c;color:#e7eaf0}a{color:#7ea6ff}.note{color:#a3abb9}}"
+                f"</style></head><body><h1>{escape(title)}</h1>"
+                "<p class=\"note\">A read-only view shared by the course's instructor from Course Consultant. "
+                "It shows the current plan and course site, and updates as the instructor works.</p>"
+                "<ul><li><a href=\"plan\">Improvement plan</a></li>"
+                "<li><a href=\"site/index.html\">Course site preview</a></li></ul>"
+                + (f"<h2>Approved revised documents</h2><ul>{rows}</ul>" if rows else "")
+                + "</body></html>")
+        return respond(body)
 
     @bp.get("/api/workspaces/<workspace_id>/documents")
     def documents_get(workspace_id):

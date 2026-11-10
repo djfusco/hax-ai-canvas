@@ -997,6 +997,34 @@
     });
   }
 
+  // Read-only share link.
+  function renderShare(share) {
+    $('cc-share-on').hidden = !share.enabled;
+    $('cc-share-start').hidden = Boolean(share.enabled);
+    $('cc-share-url').value = share.url || '';
+  }
+  $('cc-share').addEventListener('toggle', () => {
+    if ($('cc-share').open) api(base() + '/share').then(renderShare).catch(error => showError(error.message));
+  });
+  $('cc-share-start').addEventListener('click', () => run('Creating the link…', async () => {
+    renderShare(await api(base() + '/share', { method: 'POST', json: {} }));
+  }, 'Link created. Anyone with it can read the plan and course site.'));
+  $('cc-share-stop').addEventListener('click', () => {
+    if (!window.confirm('Turn off sharing? The link stops working for everyone who has it.')) return;
+    run('Turning off sharing…', async () => {
+      renderShare(await api(base() + '/share', { method: 'DELETE' }));
+    }, 'Sharing is off. The old link no longer works.');
+  });
+  $('cc-share-copy').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText($('cc-share-url').value);
+      status('Link copied.');
+    } catch (error) {
+      $('cc-share-url').select();
+      status('Select the link and copy it.');
+    }
+  });
+
   $('cc-bulk-all').addEventListener('click', () => $('cc-bulk-items').querySelectorAll('input').forEach(i => { i.checked = true; }));
   $('cc-bulk-none').addEventListener('click', () => $('cc-bulk-items').querySelectorAll('input').forEach(i => { i.checked = false; }));
   $('cc-bulk-run').addEventListener('click', () => {

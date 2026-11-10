@@ -448,6 +448,17 @@ class MentorStore:
                 state["consult_busy"] = None
         return self._change(owner, id, transition)
 
+    def set_share(self, owner, id, enabled):
+        """Turn the read-only share link on or off. Turning it off (or on again)
+        changes the version, so every earlier link stops working."""
+        def transition(state):
+            share = state.get("share") or {"version": 0, "enabled": False}
+            if enabled and share.get("enabled"):
+                return
+            state["share"] = {"version": int(share.get("version", 0)) + 1, "enabled": bool(enabled),
+                              "updated_at": _now()}
+        return self._change(owner, id, transition)
+
     def release_consult(self, owner, id):
         return self._change(owner, id, lambda state: state.update(consult_busy=None))
 

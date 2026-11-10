@@ -380,6 +380,20 @@ test('quick AI version, site preview and asking for changes', { skip: !playwrigh
     await page.click('#cc-bulk-run');
     await page.waitForFunction(n => document.querySelectorAll('.cc-document').length === n + 1, before);
 
+    // Share a read-only link; a visitor without the instructor's cookies can open it.
+    await page.click('#cc-share summary');
+    await page.click('#cc-share-start');
+    await page.locator('#cc-share-on').waitFor({ state: 'visible' });
+    const shared = await page.inputValue('#cc-share-url');
+    const visitor = await (await browser.newContext()).newPage();
+    await visitor.goto(shared);
+    await visitor.click('text=Improvement plan');
+    await visitor.locator('h1').first().waitFor();
+    await page.click('#cc-share-stop');
+    await page.locator('#cc-share-start').waitFor({ state: 'visible' });
+    assert.equal((await visitor.goto(shared)).status(), 404, 'turned-off link stops working');
+    await visitor.context().close();
+
     // The plan shows the advisor's decisions as AI-decided, and they can be changed.
     await page.click('#tab-plan');
     await page.locator('.cc-proposal .cc-tag.ai').first().waitFor();

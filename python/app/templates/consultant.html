@@ -268,6 +268,21 @@
           <a id="cc-docs-hax" class="cc-btn cc-btn-quiet" href="#" download>Download course site (ZIP)</a>
         </div>
       </div>
+      <details class="cc-card cc-share" id="cc-share">
+        <summary>Share a read-only link</summary>
+        <p class="cc-muted">Anyone with the link can read the plan and the course site preview (for example an
+          instructional designer or your chair). They cannot change anything or see your consultation or AI settings.
+          The link shows your latest work, lasts 90 days, and stops working as soon as you turn sharing off.</p>
+        <div id="cc-share-on" hidden>
+          <label for="cc-share-url">Shared link</label>
+          <div class="cc-row">
+            <input id="cc-share-url" type="text" readonly>
+            <button id="cc-share-copy" type="button" class="cc-btn cc-btn-quiet">Copy link</button>
+            <button id="cc-share-stop" type="button" class="cc-btn cc-btn-quiet">Turn off sharing</button>
+          </div>
+        </div>
+        <button id="cc-share-start" type="button" class="cc-btn">Create a read-only link</button>
+      </details>
       <article class="cc-card">
         <h2>Create a document</h2>
         <div class="cc-row">
