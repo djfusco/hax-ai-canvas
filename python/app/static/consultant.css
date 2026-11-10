@@ -116,6 +116,10 @@
 .cc-ask .cc-btn { margin: 0; }
 .cc-routes { margin-top: 8px; }
 .cc-bulk { margin-top: 16px; }
+.cc-a11y { margin: 16px 0; }
+.cc-a11y summary { cursor: pointer; }
+.cc-a11y-item { border-top: 1px solid var(--cc-line); padding: 8px 0; }
+.cc-a11y-item .cc-btn { margin-top: 0; }
 .cc-bulk summary { cursor: pointer; }
 .cc-bulk-list { max-height: 220px; overflow: auto; border: 1px solid var(--cc-line); border-radius: 8px; margin-top: 8px; }
 .cc-bulk-list label { font-weight: 400; display: flex; gap: 8px; align-items: center; margin: 4px 0; }

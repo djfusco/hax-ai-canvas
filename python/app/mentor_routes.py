@@ -1667,6 +1667,18 @@ def create_mentor_blueprint(root_provider):
         workspace, error = ai_step(workspace_id, data, work)
         return error or jsonify(documents_view(workspace))
 
+    @bp.get("/api/workspaces/<workspace_id>/accessibility")
+    def accessibility_report(workspace_id):
+        import accessibility
+        workspace = store().get(g.owner, workspace_id)
+        model = store().get_course_model(g.owner, workspace_id)
+        if model is None:
+            return jsonify({"error": "Import a course first."}), 404
+        report = accessibility.course_report(model, workspace.get("documents") or [])
+        for entry in report["items"]:
+            entry["fix_instruction"] = accessibility.fix_instruction(entry)
+        return jsonify(report)
+
     @bp.get("/api/workspaces/<workspace_id>/documents/<document_id>/compare")
     def documents_compare(workspace_id, document_id):
         import revised_documents as rd

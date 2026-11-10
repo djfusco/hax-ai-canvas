@@ -435,6 +435,33 @@
   });
   $('cc-start-consult').addEventListener('click', () => selectTab('consult'));
 
+  // Accessibility check (no AI); "Fix with AI" drafts a revision for review.
+  function renderAccessibility(report) {
+    $('cc-a11y-summary').textContent = report.items_with_issues
+      ? `${report.errors} errors, ${report.warnings} warnings in ${report.items_with_issues} of ${report.items_checked} pages`
+      : `No problems found in ${report.items_checked} pages`;
+    const rows = report.items.map(entry => el('div', { class: 'cc-a11y-item' },
+      el('div', { class: 'cc-head' }, el('strong', { text: entry.title }),
+        entry.fixable ? el('button', { type: 'button', class: 'cc-btn cc-btn-quiet', text: 'Fix with AI',
+          onclick: () => run(`Fixing ${entry.title}…`, async () => {
+            requireAi();
+            await api(`/mentor/api/workspaces/${state.workspace.id}/documents/generate`, { method: 'POST', json: {
+              provider: state.provider, kind: entry.id === 'syllabus' ? 'syllabus' : 'page',
+              item_id: entry.id === 'syllabus' ? null : entry.id, instruction: entry.fix_instruction } });
+          }, `Draft fix for “${entry.title}” is in Revised documents. Review and approve it, then check again.`) }) : null),
+      el('ul', { class: 'cc-list' }, entry.issues.map(issue => el('li', {},
+        el('span', { class: 'cc-tag' + (issue.severity === 'error' ? ' warn' : ''), text: issue.severity }), ' ',
+        `${issue.message} ×${issue.count} (WCAG ${issue.wcag})`)))));
+    $('cc-a11y-results').replaceChildren(
+      ...rows,
+      report.videos_without_captions.length ? el('p', { class: 'cc-banner',
+        text: `Course videos with no caption file: ${report.videos_without_captions.join(', ')}. Add captions in Canvas or your video platform.` }) : null,
+      el('p', { class: 'cc-muted', text: report.limitations }));
+  }
+  $('cc-a11y-run').addEventListener('click', () => run('Checking accessibility…', async () => {
+    renderAccessibility(await api(`/mentor/api/workspaces/${state.workspace.id}/accessibility`));
+  }));
+
   // HAX-theme preview: a signed link to a sandboxed page that loads HAX's components.
   for (const button of document.querySelectorAll('.cc-hax-preview')) {
     button.addEventListener('click', () => {

@@ -144,6 +144,14 @@ test('instructor journey: model, export upload, course map, consultation, propos
       assert.match(mapText, /Construct a scientific argument/);
       await shot(page, '2-course-map');
 
+      // Accessibility check finds the uncaptioned video; Fix with AI drafts a revision.
+      await page.click('#cc-a11y summary');
+      await page.click('#cc-a11y-run');
+      await page.locator('.cc-a11y-item').first().waitFor();
+      assert.match(await page.locator('#cc-a11y-results').textContent(), /Video or audio has no captions track/);
+      await page.click('.cc-a11y-item button:has-text("Fix with AI")');
+      await page.waitForFunction(() => document.querySelector('#cc-status').textContent.includes('is in Revised documents'));
+
       // Consultation
       await page.click('#cc-start-consult');
       await page.click('#cc-begin-btn');
@@ -185,12 +193,13 @@ test('instructor journey: model, export upload, course map, consultation, propos
       await page.click('#tab-docs');
       await page.locator('#cc-target option').first().waitFor({ state: 'attached' });
       assert.match(await page.locator('#cc-target option').first().textContent(), /Revised syllabus \(applies 1 accepted change\)/);
+      const existing = await page.locator('.cc-document').count(); // the accessibility fix draft
       await page.click('#cc-generate');
-      await page.locator('.cc-document').waitFor();
-      const frame = page.frameLocator('.cc-doc-frame');
-      assert.equal(await frame.locator('h1').textContent(), 'BIO 101 Syllabus');
-      await page.click('.cc-document button:has-text("Approve")');
-      await page.locator('.cc-document .cc-tag:has-text("Approved")').waitFor();
+      await page.waitForFunction(n => document.querySelectorAll('.cc-document').length === n + 1, existing);
+      const newest = page.locator('.cc-document').first(); // newest first
+      assert.equal(await newest.frameLocator('.cc-doc-frame').locator('h1').textContent(), 'BIO 101 Syllabus');
+      await newest.locator('button:has-text("Approve")').click();
+      await page.locator('.cc-document').first().locator('.cc-tag:has-text("Approved")').waitFor();
       const zip = await page.evaluate(async () => {
         const response = await fetch(document.querySelector('#cc-docs-zip').href);
         return { status: response.status, type: response.headers.get('content-type'), size: (await response.arrayBuffer()).byteLength };
