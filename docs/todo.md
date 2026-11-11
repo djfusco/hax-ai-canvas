@@ -16,6 +16,8 @@ Work that is not finished yet. Tick items off as they are done.
   - [ ] Delete the Blob store connected to the project.
   - [ ] Remove the Vercel access token saved in the Claude cloud environment's
     network settings, and revoke it in Vercel (Account Settings → Tokens).
+- [ ] **Remove the OpenRouter testing key** saved in the Claude cloud environment's network settings
+  (host `openrouter.ai`) when testing is done, and revoke or limit it in OpenRouter.
 
 ## To test or verify
 - [ ] **Real evaluation run.** With your own key:
