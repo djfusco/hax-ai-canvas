@@ -292,9 +292,16 @@ def _clean_list(values, *, field, maximum=MAX_LIST):
 
 
 def _check_ids(values, known, *, field):
-    if not isinstance(values, list) or any(not isinstance(v, str) or v not in known for v in values):
-        raise ConsultationError(f"The AI cited course evidence that does not exist ({field}).")
-    return list(dict.fromkeys(values))[:20]
+    """Keep only IDs that exist in this course.
+
+    Unknown IDs (a mistyped ID, or a valid evidence ID such as "syllabus" given
+    where only course items belong) are dropped rather than failing the whole
+    turn, so nothing is ever attributed to evidence that does not exist. The
+    quality check reports claims left without course evidence.
+    """
+    if not isinstance(values, list):
+        raise ConsultationError(f"The AI response's {field} must be a list.")
+    return list(dict.fromkeys(v for v in values if isinstance(v, str) and v in known))[:20]
 
 
 def _normalized(text):

@@ -97,21 +97,31 @@ class ConsultationTests(unittest.TestCase):
         self.assertEqual(len(state["proposals"]), 1, "duplicate titles are skipped")
         proposal = state["proposals"][0]
         self.assertEqual((proposal["id"], proposal["status"]), ("p-1", "proposed"))
-        bad = dict(good, title="Other", affected_items=["invented-item"])
-        with self.assertRaisesRegex(c.ConsultationError, "does not exist"):
-            self.turn(Client(response(proposed_changes=[bad])))
+        # Unknown IDs, and evidence IDs that are not course items, are dropped
+        # rather than failing the turn; real ones are kept.
+        mixed = dict(good, title="Other", affected_items=["invented-item", "syllabus", essay],
+                     evidence=["made-up", essay])
+        _, state = self.turn(Client(response(proposed_changes=[mixed])))
+        self.assertEqual(state["proposals"][-1]["affected_items"], [essay])
+        self.assertEqual(state["proposals"][-1]["evidence"], [essay])
         with self.assertRaisesRegex(c.ConsultationError, "invalid effort"):
             self.turn(Client(response(proposed_changes=[dict(good, title="X", effort="huge")])))
 
     def test_rejects_invalid_responses(self):
         cases = [("{not json", "not valid JSON"), (response(reply=""), "reply"),
                  (response(topic_updates=[update(topic="vibes")]), "unknown consultation topic"),
-                 (response(topic_updates=[update(facts=[{"text": "x", "evidence": ["nope"]}])]), "does not exist"),
+                 (response(topic_updates=[update(facts=[{"text": "x", "evidence": "nope"}])]), "must be a list"),
                  (response(next_topic="dessert"), "unknown next topic")]
         for raw, message in cases:
             with self.subTest(message=message):
                 with self.assertRaisesRegex(c.ConsultationError, message):
                     self.turn(Client(raw))
+
+    def test_unknown_fact_evidence_is_dropped(self):
+        _, state = self.turn(Client(response(topic_updates=[update(facts=[{"text": "x", "evidence": ["nope"]}])])))
+        facts = [f for t in c.TOPICS for f in state["topics"][t]["facts"]]
+        self.assertTrue(facts)
+        self.assertTrue(all("nope" not in f["evidence"] for f in facts))
 
     def test_provider_failures_are_safe(self):
         with self.assertRaisesRegex(c.ConsultationError, "provider request failed"):
