@@ -676,7 +676,7 @@
       + 'changes (labelled AI-decided), draft the plan and write revised documents. It takes a few minutes; progress '
       + 'shows at the top of the page, where you can cancel. You can change any part afterwards.\n\n' + cost)) return;
     run('Starting the quick AI version…', quickVersion,
-      'Quick AI version ready. Preview the course site, then refine anything: consult further, change decisions, or ask for changes to any document.');
+      'Quick AI version ready. Review the revised documents below and refine anything you like, then go to step 5 to build the finished course.');
   });
 
   // ── course map ───────────────────────────────────────────────────────────
@@ -993,9 +993,7 @@
     $('cc-docs-zip').href = base() + '/documents/export';
     $('cc-docs-imscc').setAttribute('aria-disabled', String(!approved));
     $('cc-docs-imscc').classList.toggle('cc-disabled', !approved);
-    $('cc-docs-imscc').href = base() + '/documents/export?format=imscc';
-    $('cc-docs-preview').href = base() + '/site/index.html';
-    $('cc-docs-hax').href = base() + '/documents/export?format=hax';
+    $('cc-docs-imscc').href = base() + '/documents/export?format=imscc&scope=revised';
     const checked = new Set([...$('cc-bulk-items').querySelectorAll('input:checked')].map(i => i.value));
     $('cc-bulk-items').replaceChildren(...view.items.map(item => el('label', {},
       el('input', { type: 'checkbox', value: item.id, checked: checked.has(item.id) }), ` ${item.title} `,
@@ -1135,6 +1133,7 @@
   }
 
   // ── 5. Build the finished course ─────────────────────────────────────────
+  $('cc-docs-next').addEventListener('click', () => selectTab('build'));
   const FRAME_STYLE = `<!doctype html><meta charset=utf-8><style>body{font:15px/1.55 system-ui;margin:12px;color:#1d2330}
     table{border-collapse:collapse}td,th{border:1px solid #ccd;padding:6px;vertical-align:top;text-align:left}
     .item-facts{list-style:none;padding:8px 12px;border:1px solid #dce4ee;border-radius:8px;display:flex;flex-wrap:wrap;gap:4px 16px}

@@ -386,12 +386,18 @@ test('quick AI version, site preview and asking for changes', { skip: !playwrigh
     await shot(page, '7-quick-docs');
 
     // The preview opens the whole course site in a new tab, using the approved syllabus.
-    const [site] = await Promise.all([context.waitForEvent('page'), page.click('#cc-docs-preview')]);
+    // Tab 4 points to step 5, where the course site is previewed and downloaded.
+    assert.equal(await page.locator('#view-docs #cc-docs-preview').count(), 0);
+    await page.click('#cc-docs-next');
+    await page.locator('#view-build').waitFor({ state: 'visible' });
+    const [site] = await Promise.all([context.waitForEvent('page'), page.click('#cc-build-preview')]);
     await site.waitForLoadState();
     assert.match(await site.content(), /Private student-view preview/);
     assert.match(await site.locator('body').textContent(), /BIO 101 Syllabus.*Week 1.*Essay/s);
     await shot(site, '8-site-preview');
     await site.close();
+    await page.click('#tab-docs');
+    await page.locator('#view-docs').waitFor({ state: 'visible' });
 
     // Ask for a change to the syllabus; it returns to draft for review.
     await page.fill('.cc-ask-input', 'Add my office hours');
@@ -421,7 +427,8 @@ test('quick AI version, site preview and asking for changes', { skip: !playwrigh
     await page.click('#cc-bulk-run');
     await page.waitForFunction(n => document.querySelectorAll('.cc-document').length === n + 1, before);
 
-    // Share a read-only link; a visitor without the instructor's cookies can open it.
+    // Share a read-only link (step 5); a visitor without the instructor's cookies can open it.
+    await page.click('#tab-build');
     await page.click('#cc-share summary');
     await page.click('#cc-share-start');
     await page.locator('#cc-share-on').waitFor({ state: 'visible' });
@@ -435,7 +442,8 @@ test('quick AI version, site preview and asking for changes', { skip: !playwrigh
     assert.equal((await visitor.goto(shared)).status(), 404, 'turned-off link stops working');
     await visitor.context().close();
 
-    // Automatic quality check of the advisor's work.
+    // Automatic quality check of the advisor's work (step 4).
+    await page.click('#tab-docs');
     await page.click('#cc-quality summary');
     await page.click('#cc-quality-run');
     await page.locator('#cc-quality-results .cc-a11y-item').first().waitFor();

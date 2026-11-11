@@ -269,32 +269,16 @@
           <p class="cc-muted">Generate documents that carry out your accepted changes. Edit, ask for changes and approve
             each one. The course site uses approved documents in place of the originals; everything else comes from your
             course as it is.</p>
-          <p class="cc-muted">To bring approved documents into Canvas, download the Canvas import file, then in Canvas open
-            Settings, Import Course Content, Common Cartridge 1.x Package. They arrive as new unpublished items marked
-            “(revised)” in one module; nothing already in the course changes.</p></div>
+          <p class="cc-muted">When the documents are ready, go to step 5 to build the finished course; preview it and
+            download it there. To add only these documents to your existing Canvas course, use the Canvas file here: in
+            Canvas open Settings, Import Course Content, Common Cartridge 1.x Package. They arrive as new unpublished
+            items marked “(revised)” in one module; nothing already in the course changes.</p></div>
         <div class="cc-row">
-          <a id="cc-docs-zip" class="cc-btn" href="#" download>Download all (Word + HTML)</a>
-          <a id="cc-docs-imscc" class="cc-btn cc-btn-quiet" href="#" download>Download for Canvas import (.imscc)</a>
-          <a id="cc-docs-preview" class="cc-btn cc-btn-quiet" href="#" target="_blank" rel="noopener">Preview course site ↗</a>
-          <button type="button" class="cc-btn cc-btn-quiet cc-hax-preview">Preview in HAX theme ↗</button>
-          <a id="cc-docs-hax" class="cc-btn cc-btn-quiet" href="#" download>Download course site (ZIP)</a>
+          <a id="cc-docs-zip" class="cc-btn cc-btn-quiet" href="#" download>Download documents (Word + HTML)</a>
+          <a id="cc-docs-imscc" class="cc-btn cc-btn-quiet" href="#" download>Documents for Canvas (.imscc)</a>
+          <button id="cc-docs-next" type="button" class="cc-btn">Next: build the course →</button>
         </div>
       </div>
-      <details class="cc-card cc-share" id="cc-share">
-        <summary>Share a read-only link</summary>
-        <p class="cc-muted">Anyone with the link can read the plan and the course site preview (for example an
-          instructional designer or your chair). They cannot change anything or see your consultation or AI settings.
-          The link shows your latest work, lasts 90 days, and stops working as soon as you turn sharing off.</p>
-        <div id="cc-share-on" hidden>
-          <label for="cc-share-url">Shared link</label>
-          <div class="cc-row">
-            <input id="cc-share-url" type="text" readonly>
-            <button id="cc-share-copy" type="button" class="cc-btn cc-btn-quiet">Copy link</button>
-            <button id="cc-share-stop" type="button" class="cc-btn cc-btn-quiet">Turn off sharing</button>
-          </div>
-        </div>
-        <button id="cc-share-start" type="button" class="cc-btn">Create a read-only link</button>
-      </details>
       <details class="cc-card cc-a11y" id="cc-quality">
         <summary><strong>Quality check</strong> <span id="cc-quality-summary" class="cc-muted">(automatic, no AI)</span></summary>
         <p class="cc-muted">Checks the consultation, plan and documents for common weaknesses: advice not grounded in
@@ -376,6 +360,21 @@
         <div id="cc-build-list"></div>
         <button id="cc-build-discard" type="button" class="cc-btn cc-btn-quiet">Discard the built course</button>
       </article>
+      <details class="cc-card cc-share" id="cc-share">
+        <summary>Share a read-only link</summary>
+        <p class="cc-muted">Anyone with the link can read the plan and the course site preview (for example an
+          instructional designer or your chair). They cannot change anything or see your consultation or AI settings.
+          The link shows your latest work, lasts 90 days, and stops working as soon as you turn sharing off.</p>
+        <div id="cc-share-on" hidden>
+          <label for="cc-share-url">Shared link</label>
+          <div class="cc-row">
+            <input id="cc-share-url" type="text" readonly>
+            <button id="cc-share-copy" type="button" class="cc-btn cc-btn-quiet">Copy link</button>
+            <button id="cc-share-stop" type="button" class="cc-btn cc-btn-quiet">Turn off sharing</button>
+          </div>
+        </div>
+        <button id="cc-share-start" type="button" class="cc-btn">Create a read-only link</button>
+      </details>
     </section>
   </div>
 </div>
