@@ -34,6 +34,10 @@ Work that is not finished yet. Tick items off as they are done.
   [`deployment.md`](deployment.md#6-smoke-test-after-each-deployment).
 
 ## Code clean-up (small)
+- [ ] **Build the course: unsaved structure changes.** Clicking "Build the course" after renaming a
+  week or moving an item, without "Save changes to the structure", silently builds from the last
+  saved structure. Warn about unsaved changes, or save them automatically before building
+  (`python/app/static/consultant.js`, build tab).
 - [ ] Remove the old wizard's unused styles from `python/app/static/style.css`
   (for example `.nav-advanced`, `.nav-dropdown`).
 - [ ] One browser test (`instructor journey` in
