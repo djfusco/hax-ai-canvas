@@ -32,9 +32,11 @@ class FakeAI:
                 {"title": "Arguing from evidence", "theme": "Writing.", "objectives": ["Construct an argument."],
                  "items": ["assignment-202", "assignment-201"], "hours": 8, "instructor_focus": "Feedback."}]})
         if "home_html" in keys:
-            return json.dumps({"home_html": '<h2>Welcome</h2><p>Start with <a href="item:module--start">Start here</a>.</p>',
-                               "start_here_html": "<h2>How this course works</h2><p>Each week has an overview.</p>",
-                               "instructor_guide_html": "<h2>Design</h2><p>Weekly rhythm.</p>"})
+            return json.dumps({"home_html": '<h2>Welcome</h2><p>Start with <a href="item:module--start">Start here</a>.</p>'})
+        if "start_here_html" in keys:
+            return json.dumps({"start_here_html": "<h2>How this course works</h2><p>Each week has an overview.</p>"})
+        if "instructor_guide_html" in keys:
+            return json.dumps({"instructor_guide_html": "<h2>Design</h2><p>Weekly rhythm.</p>"})
         if "overview_html" in keys:
             return json.dumps({"overview_html": '<p>This week: read <a href="item:page-11">Welcome</a>, '
                                                 '<a href="item:not-real">ghost</a>.</p><script>x()</script>',
@@ -79,8 +81,9 @@ class CourseBuildTests(unittest.TestCase):
 
     def test_essential_build_and_site(self):
         build, ai = self.build("essential")
-        self.assertEqual(build["done"], ["front", "week-1", "week-2"])
-        self.assertEqual(len(ai.prompts), 4)
+        self.assertEqual(build["done"], ["front-home", "front-start", "front-guide", "week-1", "week-2"])
+        self.assertEqual(len(ai.prompts), 6)
+        self.assertIn("Length: 250-400 words", ai.prompts[1])
         week = next(p for p in build["pages"] if p["id"] == "week-1")
         self.assertNotIn("<script", week["html"])
         self.assertIn("$IMSCC_ITEM_REFERENCE$/page-11", week["html"])
@@ -236,7 +239,7 @@ class BuildApiTests(unittest.TestCase):
         self.assertIsNone(view["build"])
         self.call("POST", self.base + "/build/blueprint", {"provider": "openai", "mode": "huge"}, expected=502)
         view = self.call("POST", self.base + "/build/blueprint", {"provider": "openai", "mode": "full"})
-        self.assertEqual([s["id"] for s in view["steps"]][:2], ["front", "week-1"])
+        self.assertEqual([s["id"] for s in view["steps"]][:4], ["front-home", "front-start", "front-guide", "week-1"])
         self.assertFalse(view["ready"])
         before = self.client.get(self.base + "/site/index.html").get_data(as_text=True)
         self.assertNotIn("Course sections", before, "the plain site until the course is built")

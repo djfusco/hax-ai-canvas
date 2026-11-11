@@ -47,7 +47,7 @@ class FakeAI:
                      "hours": 6, "instructor_focus": "Prior knowledge."},
                     {"title": "Argument", "theme": "Evidence.", "objectives": ["Argue from evidence."], "items": ids[half:],
                      "hours": 7, "instructor_focus": "Feedback."}]})
-            if "home_html" in keys:
+            if keys & {"home_html", "start_here_html", "instructor_guide_html"}:
                 return json.dumps({"home_html": "<h2>Welcome to BIO 101</h2><p>Start with <a href=\"item:module--start\">Start here</a>.</p>",
                                    "start_here_html": "<h2>How this course works</h2><p>One week at a time.</p>",
                                    "instructor_guide_html": "<h2>Design</h2><p>Weekly rhythm.</p>"})

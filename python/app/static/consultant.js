@@ -1261,7 +1261,7 @@
   /** Run the remaining build steps, front pages first, then weekly overviews, then course pages. */
   async function buildCourse() {
     requireAi();
-    const group = id => (id === 'front' ? 0 : /-items-/.test(id) ? 2 : 1);
+    const group = id => (id.startsWith('front') ? 0 : /-items-/.test(id) ? 2 : 1);
     const pending = [...state.build.steps].sort((a, b) => group(a.id) - group(b.id));
     const labels = ['Home, Start here and the instructor guide', 'Weekly overviews and instructor notes', 'Course pages, reorganised'];
     const used = [...new Set(pending.map(s => group(s.id)))];

@@ -9,7 +9,7 @@ teach from:
    weekly rhythm, balanced workload). Every original item is placed once; due
    dates are respected and never changed.
 2. **Pages**, one request per step, which the browser runs in order:
-   - ``front``: home page, Start here, and the instructor guide;
+   - ``front-home``, ``front-start``, ``front-guide``: one page each;
    - ``week-N``: the week's overview (with an exact checklist of items, due
      dates and points added by the app, not the AI) and instructor notes;
    - ``week-N-items-K`` (full build only): course pages rewritten into a
@@ -176,7 +176,8 @@ def _call(client, prompt, schema, max_tokens):
         from ai_client import AIResponseError
         if isinstance(exc, AIResponseError):
             raise BuildError(str(exc)) from None
-        raise BuildError("The AI provider request failed. Check your key, model and connection, then retry.") from None
+        from ai_client import provider_failure
+        raise BuildError(provider_failure(exc)) from None
     if isinstance(raw, str):
         try:
             raw = json.loads(raw)
@@ -305,7 +306,7 @@ def steps(build, model, documents):
     plan = build.get("blueprint")
     if not plan:
         return []
-    result = [{"id": "front", "label": "Home, Start here and the instructor guide"}]
+    result = [{"id": step, "label": spec[4]} for step, spec in FRONT_PAGES.items()]
     for week in plan["weeks"]:
         result.append({"id": f"week-{week['number']}", "label": f"Week {week['number']}: overview and instructor notes"})
         if build["mode"] == "full":
@@ -314,7 +315,10 @@ def steps(build, model, documents):
                 chunk = items[k:k + ITEMS_PER_CALL]
                 result.append({"id": f"week-{week['number']}-items-{k // ITEMS_PER_CALL + 1}",
                                "label": f"Week {week['number']}: course pages ({len(chunk)})"})
-    return [s for s in result if s["id"] not in build.get("done", [])]
+    done = set(build.get("done", []))
+    if "front" in done:  # built before the front pages were separate steps
+        done |= set(FRONT_PAGES)
+    return [s for s in result if s["id"] not in done]
 
 
 def _set_page(build, page):
@@ -340,7 +344,28 @@ def _week(build, number):
     return week
 
 
-def _front(build, model, consult_state, plan, documents, client):
+FRONT_PAGES = {
+    # step: (page id, kind, schema key, audience, label, what to write, length)
+    "front-home": ("home", "home", "home_html", "student", "Home page",
+                   "the course home page: a short welcome, what the course is about and why it matters, what "
+                   "students will be able to do (outcomes), and how to get started (link to item:module--start).",
+                   "250-400 words"),
+    "front-start": ("start-here", "start", "start_here_html", "student", "Start here",
+                    "the Start here orientation page: how the course works week by week, what is expected, how "
+                    "grading works in brief, how to get help, and the AI policy in plain words.",
+                    "400-700 words"),
+    "front-guide": ("instructor-guide", "instructor", "instructor_guide_html", "instructor", "Instructor guide",
+                    "the instructor guide, for the instructor only: the course design and the reasoning behind it, "
+                    "the weekly rhythm, what changed from the original course and why, how to facilitate, and what "
+                    "to prepare before term.",
+                    "600-900 words"),
+}
+FRONT_TOKENS = 5000
+WEEK_TOKENS = 6000
+
+
+def _front(build, step, model, consult_state, plan, documents, client):
+    page_id, kind, key, audience, label, task, length = FRONT_PAGES[step]
     bp = build["blueprint"]
     titles = _items_by_id(model)
     outline = "\n".join(f"Week {w['number']}: {w['title']} — {w['theme']}" for w in bp["weeks"])
@@ -355,22 +380,14 @@ def _front(build, model, consult_state, plan, documents, client):
         "ORIGINAL SYLLABUS (for facts such as contact details, materials and policies):\n"
         + (syllabus_text[:20000] or "(none)"),
         "ACCEPTED CHANGES:\n" + _changes(consult_state),
-        "TASK: Write three pages. (1) home_html: the course home page: a short welcome, what the course is "
-        "about and why it matters, what students will be able to do (outcomes), and how to get started "
-        "(link to item:module--start). Link the syllabus as item:syllabus and the schedule as item:schedule. "
-        "(2) start_here_html: orientation: how the course works week by week, what "
-        "is expected, how grading works in brief, how to get help, and the AI policy in plain words. "
-        "(3) instructor_guide_html: for the instructor only: the course design and the reasoning behind it, "
-        "the weekly rhythm, what changed from the original course and why, how to facilitate, and what "
-        "to prepare before term. Use [Instructor to add: ...] for anything not supplied.",
+        f"TASK: Write {task} Link the Start here page as item:module--start, the syllabus as item:syllabus "
+        f"and the schedule as item:schedule where useful. Length: {length}; be concise and scannable "
+        "(short paragraphs, lists). Use [Instructor to add: ...] for anything not supplied.",
     ])
-    raw = _call(client, prompt, _object({"home_html": TEXT, "start_here_html": TEXT, "instructor_guide_html": TEXT}),
-                PAGE_TOKENS)
+    raw = _call(client, prompt, _object({key: TEXT}), FRONT_TOKENS)
     known = {i["id"] for i in model["items"]} | {"module--start", "syllabus", "schedule"}
-    _set_page(build, _page("home", "home", model["course"]["title"], _html(raw.get("home_html"), known, "home page")))
-    _set_page(build, _page("start-here", "start", "Start here", _html(raw.get("start_here_html"), known, "Start here page")))
-    _set_page(build, _page("instructor-guide", "instructor", "Instructor guide",
-                           _html(raw.get("instructor_guide_html"), known, "instructor guide"), audience="instructor"))
+    title = model["course"]["title"] if page_id == "home" else label
+    _set_page(build, _page(page_id, kind, title, _html(raw.get(key), known, label.lower()), audience=audience))
 
 
 def checklist_html(week, model):
@@ -414,9 +431,10 @@ def _week_step(build, number, model, consult_state, plan, documents, client):
         "together and in what order to do them (link each item), and tips or where to get help. Do NOT list "
         "due dates or points; the app adds an exact checklist below your text. (2) instructor_notes_html: "
         "practical notes for the instructor: what to prepare, how to facilitate, likely sticking points, "
-        "feedback to give, and where the accepted changes apply this week.",
+        "feedback to give, and where the accepted changes apply this week. Length: overview 250-450 words, "
+        "instructor notes 150-300 words; concise and scannable.",
     ])
-    raw = _call(client, prompt, _object({"overview_html": TEXT, "instructor_notes_html": TEXT}), PAGE_TOKENS)
+    raw = _call(client, prompt, _object({"overview_html": TEXT, "instructor_notes_html": TEXT}), WEEK_TOKENS)
     known = set(items)
     overview = _html(raw.get("overview_html"), known, "week overview")
     _set_page(build, _page(f"week-{number}", "week", f"Week {number}: {week['title']}",
@@ -467,7 +485,8 @@ def _items_step(build, number, chunk_number, model, consult_state, plan, documen
         "instructions, requirements, policies, dates and points wherever the accepted changes do not call for "
         "a change: reorganise and add headings and short connecting sentences rather than rephrasing. Apply "
         "only the accepted changes listed. Never invent requirements, dates or points. For quizzes, describe "
-        "the quiz and how to prepare; never include questions or answers. Return one page per item ID.",
+        "the quiz and how to prepare; never include questions or answers. Each page should be about as long as "
+        "the original plus headings and a few connecting sentences. Return one page per item ID.",
     ])
     schema = _object({"pages": {"type": "array", "items": _object({"item_id": TEXT, "html": TEXT})}})
     raw = _call(client, prompt, schema, PAGE_TOKENS)
@@ -488,8 +507,8 @@ def run_step(build, step_id, model, consult_state, plan, documents, client):
     if not build or not build.get("blueprint"):
         raise BuildError("Propose the course structure first.")
     build = json.loads(json.dumps(build))
-    if step_id == "front":
-        _front(build, model, consult_state, plan, documents, client)
+    if step_id in FRONT_PAGES:
+        _front(build, step_id, model, consult_state, plan, documents, client)
     elif m := re.fullmatch(r"week-(\d+)", step_id or ""):
         _week_step(build, int(m.group(1)), model, consult_state, plan, documents, client)
     elif (m := re.fullmatch(r"week-(\d+)-items-(\d+)", step_id or "")) and build["mode"] == "full":
@@ -590,9 +609,9 @@ def site_items(build, model, documents, consult_state=None):
     instructor section.
     """
     import course_site
-    if not build or not build.get("blueprint") or "front" not in build.get("done", []):
+    pages = {p["id"]: p for p in (build or {}).get("pages", [])}
+    if not build or not build.get("blueprint") or "home" not in pages or "start-here" not in pages:
         return None
-    pages = {p["id"]: p for p in build["pages"]}
     items_by_id = _items_by_id(model)
     result = []
 
@@ -636,7 +655,9 @@ def site_items(build, model, documents, consult_state=None):
             if item_id in items_by_id:
                 add_course_item(item_id, "Additional resources")
     section = "Instructor (not shown to students)"
-    add("module--instructor", "Instructor guide", "pages", pages["instructor-guide"]["html"], section, "instructor")
+    guide = pages.get("instructor-guide")
+    add("module--instructor", "Instructor guide", "pages",
+        guide["html"] if guide else "<p>The instructor guide has not been written yet.</p>", section, "instructor")
     accepted_rows = "".join(f"<li><strong>{escape(p['title'])}</strong>: {escape(p['change'])} "
                             f"<em>Why:</em> {escape(p['rationale'])}</li>" for p in accepted(consult_state))
     if accepted_rows:

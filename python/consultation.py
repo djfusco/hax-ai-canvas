@@ -436,7 +436,8 @@ def respond(state, history, model, course_map, client, *, mode="turn", message=N
         from ai_client import AIResponseError
         if isinstance(exc, AIResponseError):
             raise ConsultationError(str(exc)) from None
-        raise ConsultationError("The AI provider request failed. Check your key, model and connection, then retry.") from None
+        from ai_client import provider_failure
+        raise ConsultationError(provider_failure(exc)) from None
     return apply_response(state, raw, known, item_ids=item_ids)
 
 

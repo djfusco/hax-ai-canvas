@@ -43,8 +43,64 @@ def _retryable(exc):
         status = getattr(exc, "code", None)
     if type(status) is int:
         return status in (408, 409, 429) or 500 <= status <= 599
-    return (isinstance(exc, (httpx.TransportError, TimeoutError, ConnectionError))
-            or type(exc).__name__ in ("APIConnectionError", "APITimeoutError"))
+    # A timed-out request is not retried: a second wait cannot fit in the request limit.
+    if isinstance(exc, (httpx.TimeoutException, TimeoutError)) or type(exc).__name__ == "APITimeoutError":
+        return False
+    return (isinstance(exc, (httpx.TransportError, ConnectionError))
+            or type(exc).__name__ == "APIConnectionError")
+
+
+def _json_only(text):
+    """The JSON object in an answer, tolerating code fences or a sentence around it."""
+    if not isinstance(text, str):
+        return text
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        stripped = stripped.split("\n", 1)[1] if "\n" in stripped else ""
+        stripped = stripped.rsplit("```", 1)[0].strip()
+    try:
+        json.loads(stripped)
+        return stripped
+    except ValueError:
+        pass
+    start, end = stripped.find("{"), stripped.rfind("}")
+    if 0 <= start < end:
+        candidate = stripped[start:end + 1]
+        try:
+            json.loads(candidate)
+            return candidate
+        except ValueError:
+            pass
+    return text
+
+
+def provider_failure(exc):
+    """A specific, safe message for a failed provider request (never the provider's own text,
+    which can echo credentials). The status and error type are logged for diagnosis."""
+    status = getattr(exc, "status_code", None)
+    if type(status) is not int:
+        status = getattr(exc, "code", None) if type(getattr(exc, "code", None)) is int else None
+    name = type(exc).__name__
+    logger.warning("AI provider request failed: %s (status %s)", name, status)
+    if name in ("APITimeoutError", "ReadTimeout", "TimeoutException") or isinstance(exc, TimeoutError) or status == 408:
+        return ("The AI took too long to answer this step and the request timed out. Try again; if it keeps "
+                "happening, choose a faster recommended model.")
+    if status in (401, 403):
+        return "The AI provider rejected your key. Check the key (or reconnect OpenRouter), then retry."
+    if status == 402:
+        return "Your AI account is out of credit or over its spending limit. Add credit or raise the limit, then retry."
+    if status == 404:
+        return "The selected model is not available to your key. Refresh the model list and choose another."
+    if status == 429:
+        return "The AI provider is limiting requests right now (rate limit). Wait a minute, then retry."
+    if status == 413 or status == 400:
+        return ("The AI provider refused this request (it may be too large for the model, or the model does not "
+                "support structured answers). Try a recommended model.")
+    if type(status) is int and status >= 500:
+        return "The AI provider had a temporary problem. Wait a moment, then retry."
+    if name in ("APIConnectionError", "ConnectError") or isinstance(exc, ConnectionError):
+        return "Could not reach the AI provider. Check the connection, then retry."
+    return "The AI provider request failed. Check your key, model and connection, then retry."
 
 
 def _anthropic_text(response, max_tokens=None):
@@ -407,8 +463,8 @@ class AIClient:
             try:
                 if response_schema is None:
                     return self._call_once(system, prompt, max_tokens, timeout)
-                return self._call_once(system, prompt, max_tokens, timeout,
-                                       response_schema=response_schema)
+                return _json_only(self._call_once(system, prompt, max_tokens, timeout,
+                                                  response_schema=response_schema))
             except Exception as exc:
                 last_exc = exc
                 if not _retryable(exc):
@@ -439,8 +495,15 @@ class AIClient:
         plan = (self.preflight(system, prompt, max_tokens, response_schema=response_schema)
                 if self.isolated_credentials else None)
         schema = (response_schema if plan and plan["capabilities"]["structured_outputs"] else None)
+        if response_schema is not None and schema is None:
+            # The model cannot take a schema natively: describe the expected answer instead.
+            system = ((system + "\n\n") if system else "") + (
+                "Answer with one JSON object only: no introduction, no explanation and no code fences. "
+                "It must match this JSON Schema:\n" + json.dumps(response_schema, separators=(",", ":")))
         output = plan["max_output_tokens"] if plan else max_tokens
-        effective_timeout = timeout or max(60, 30 + output // 100)
+        # Long answers (a whole syllabus, a course structure) can take minutes; stay inside the
+        # hosting platform's 300-second request limit.
+        effective_timeout = timeout or min(270, max(90, 30 + output // 40))
 
         if p in ("anthropic", "nebula"):
             options = {"max_tokens": output}

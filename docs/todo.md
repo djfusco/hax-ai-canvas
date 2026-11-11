@@ -18,6 +18,8 @@ Work that is not finished yet. Tick items off as they are done.
     network settings, and revoke it in Vercel (Account Settings → Tokens).
 - [ ] **Remove the OpenRouter testing key** saved in the Claude cloud environment's network settings
   (host `openrouter.ai`) when testing is done, and revoke or limit it in OpenRouter.
+- [ ] **Remove `drive.usercontent.google.com`** from the Claude cloud environment's allowed hosts
+  (added to download a shared Canvas export for testing).
 
 ## To test or verify
 - [ ] **Real evaluation run.** With your own key:

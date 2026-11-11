@@ -13,7 +13,7 @@ import json
 
 CHARS_PER_TOKEN = 4
 OUTPUT = {"consult": 1200, "plan": 1800, "document": 2500, "rubric": 1500,
-          "blueprint": 2500, "front": 3500, "week": 2000, "pages": 4500}
+          "blueprint": 2500, "front": 1500, "week": 1200, "pages": 4500}
 REASONING_EXTRA = 2000  # thinking tokens a reasoning model may add per request (upper estimate)
 QUICK_MAX_DOCUMENTS = 13
 
@@ -115,7 +115,7 @@ def _build_steps(full, model, state, plan, documents, build):
     if need_blueprint:
         result.append(("Propose the week-by-week structure", 1, 1, blueprint_in, OUTPUT["blueprint"]))
     syllabus = len(model["course"].get("syllabus_html") or "")
-    result.append(("Home, Start here and instructor guide", 1, 1,
+    result.append(("Home, Start here and instructor guide", 3, 3,
                    _tokens(cb.SYSTEM) + (header + min(syllabus, 20000) + 4000) // CHARS_PER_TOKEN, OUTPUT["front"]))
     result.append(("Weekly overviews and instructor notes", low_weeks, high_weeks,
                    _tokens(cb.SYSTEM) + (header + 4000) // CHARS_PER_TOKEN, OUTPUT["week"]))

@@ -209,7 +209,8 @@ def generate(kind, model, course_map, consult_state, plan, client, *, item_id=No
         from ai_client import AIResponseError
         if isinstance(exc, AIResponseError):
             raise DocumentError(str(exc)) from None
-        raise DocumentError("The AI provider request failed. Check your key, model and connection, then retry.") from None
+        from ai_client import provider_failure
+        raise DocumentError(provider_failure(exc)) from None
     if isinstance(raw, str):
         try:
             raw = json.loads(raw)
@@ -293,7 +294,8 @@ def revise(document, instruction, model, course_map, consult_state, plan, client
         from ai_client import AIResponseError
         if isinstance(exc, AIResponseError):
             raise DocumentError(str(exc)) from None
-        raise DocumentError("The AI provider request failed. Check your key, model and connection, then retry.") from None
+        from ai_client import provider_failure
+        raise DocumentError(provider_failure(exc)) from None
     if isinstance(raw, str):
         try:
             raw = json.loads(raw)

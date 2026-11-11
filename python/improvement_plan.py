@@ -209,7 +209,8 @@ def draft_plan(plan, model, course_map, consult_state, client):
         from ai_client import AIResponseError
         if isinstance(exc, AIResponseError):
             raise PlanError(str(exc)) from None
-        raise PlanError("The AI provider request failed. Check your key, model and connection, then retry.") from None
+        from ai_client import provider_failure
+        raise PlanError(provider_failure(exc)) from None
     if isinstance(raw, str):
         try:
             raw = json.loads(raw)
