@@ -217,8 +217,24 @@ def _html(value, known_ids, field):
 
 # ── blueprint ────────────────────────────────────────────────────────────────
 
+INSTRUCTOR_TITLE = re.compile(r"^\s*(\[?\s*)(for instructors?|instructors? only|instructor resources?|"
+                              r"instructor[- ]only|keep hidden|hidden|do not publish|teacher only|answer key|"
+                              r"solutions?\b)", re.I)
+
+
+def instructor_only(item):
+    """Items whose title or Canvas state says students must not see them."""
+    return bool(INSTRUCTOR_TITLE.search(item["title"])) or item.get("published") is False
+
+
+def _aliases(model):
+    """Short labels (i1, i2, ...) for item IDs in prompts: long IDs slow the answer and invite typos."""
+    return {f"i{n}": item["id"] for n, item in enumerate(model["items"], 1)}
+
+
 def _blueprint_prompt(model, consult_state, plan, documents):
     modules = _module_titles(model)
+    labels = {v: k for k, v in _aliases(model).items()}
     rows = []
     for item in model["items"]:
         if item["kind"] in ("external_tool",):
@@ -226,16 +242,22 @@ def _blueprint_prompt(model, consult_state, plan, documents):
         text, _ = html_text(_item_html(model, documents, item))
         details = _details(model, item["id"])
         extras = "; ".join(f"{k}: {v}" for k, v in details.items())
-        rows.append(f"- {item['id']} | {item['kind']} | {item['title']} | module: {modules.get(item['id'], '-')}"
-                    f" | {len(text.split())} words" + (f" | {extras}" if extras else ""))
+        hidden = " | UNPUBLISHED in Canvas" if item.get("published") is False else ""
+        rows.append(f"- {labels[item['id']]} | {item['kind']} | {item['title']} | module: {modules.get(item['id'], '-')}"
+                    f" | {len(text.split())} words" + (f" | {extras}" if extras else "") + hidden)
     return "\n\n".join([
         _course_header(model, plan),
         "ACCEPTED CHANGES FROM THE CONSULTATION:\n" + _changes(consult_state),
-        "COURSE ITEMS (ID | kind | title | original module | length | details):\n" + "\n".join(rows),
+        "COURSE ITEMS (label | kind | title | original module | length | details):\n" + "\n".join(rows),
         "TASK: Propose a week-by-week structure for the course. Decide the number of weeks from the term and "
-        "the content (usually 10-16; at most 20). Place every course item exactly once, in a sensible order "
-        "within its week, by ID. Keep items with due dates in the week they are due. For each week give a short "
-        "title, a one-sentence theme, 2-4 measurable learning objectives that serve the course outcomes, an "
+        "the content (usually 10-16; at most 20). Refer to items by their label (i1, i2, ...). Sort every item "
+        "into exactly one place: (a) start_items: orientation for students (welcome, getting started, academic "
+        "integrity, how to get help, community resources); (b) instructor_items: anything only for instructors "
+        "(solutions, answer keys, instructor notes or resources, change logs, items marked hidden or "
+        "unpublished, admin tools); (c) a week, in a sensible order, for everything students use while "
+        "learning, including lecture videos and reference material, placed in the week they support. Keep "
+        "items with due dates in the week they are due. For each week give a short title WITHOUT the week "
+        "number, a one-sentence theme, 2-4 measurable learning objectives that serve the course outcomes, an "
         "estimate of student hours, and one sentence on what the instructor should focus on. Also give a short "
         "summary of the course design and why it is organised this way.",
     ])
@@ -245,7 +267,9 @@ def _blueprint_schema():
     week = _object({"title": TEXT, "theme": TEXT, "objectives": {"type": "array", "items": TEXT},
                     "items": {"type": "array", "items": TEXT}, "hours": {"type": "number"},
                     "instructor_focus": TEXT})
-    return _object({"summary": TEXT, "weeks": {"type": "array", "items": week}})
+    labels = {"type": "array", "items": TEXT}
+    return _object({"summary": TEXT, "start_items": labels, "instructor_items": labels,
+                    "weeks": {"type": "array", "items": week}})
 
 
 def _clean_text(value, maximum, field):
@@ -254,37 +278,59 @@ def _clean_text(value, maximum, field):
     return value.strip()[:maximum]
 
 
+WEEK_PREFIX = re.compile(r"^\s*(week|wk|module|unit)\s*\d+\s*[:.\-–—]?\s*", re.I)
+
+
 def validate_blueprint(raw, model):
-    """Check a blueprint (from the AI or edited by the instructor); place every item once."""
+    """Check a blueprint (from the AI or edited by the instructor); place every item once.
+
+    Items whose title or Canvas state marks them instructor-only always go to the instructor
+    section, whatever the AI or an edit says. Unplaced unpublished items go there too; other
+    unplaced items become "Additional resources".
+    """
     if not isinstance(raw, dict) or not isinstance(raw.get("weeks"), list):
         raise BuildError("The course structure is missing its weeks. Try again.")
     weeks_in = raw["weeks"][:MAX_WEEKS]
     if not weeks_in:
         raise BuildError("The course structure has no weeks. Try again.")
-    known = {i["id"] for i in model["items"]}
-    placed, weeks = set(), []
+    items = {i["id"]: i for i in model["items"]}
+    aliases = _aliases(model)
+    hidden = {i for i, item in items.items() if INSTRUCTOR_TITLE.search(item["title"])}
+    placed = set()
+
+    def take(values):
+        result = []
+        for value in values if isinstance(values, list) else []:
+            item_id = aliases.get(value, value) if isinstance(value, str) else None
+            if item_id in items and item_id not in placed and item_id not in hidden:
+                result.append(item_id)
+                placed.add(item_id)
+        return result
+
+    instructor = take(raw.get("instructor_items"))
+    start = take(raw.get("start_items"))
+    weeks = []
     for number, week in enumerate(weeks_in, 1):
         if not isinstance(week, dict):
             raise BuildError("A week in the course structure is malformed. Try again.")
-        items = []
-        for item_id in week.get("items") or []:
-            if isinstance(item_id, str) and item_id in known and item_id not in placed:
-                items.append(item_id)
-                placed.add(item_id)
+        week_items = take(week.get("items"))
         objectives = [o.strip()[:300] for o in week.get("objectives") or [] if isinstance(o, str) and o.strip()][:6]
         hours = week.get("hours")
+        title = WEEK_PREFIX.sub("", _clean_text(week.get("title"), 160, "week title")) or f"Week {number}"
         weeks.append({
-            "number": number,
-            "title": _clean_text(week.get("title"), 160, "week title"),
+            "number": number, "title": title[:160],
             "theme": (week.get("theme") or "").strip()[:500] if isinstance(week.get("theme"), str) else "",
-            "objectives": objectives, "items": items,
+            "objectives": objectives, "items": week_items,
             "hours": round(float(hours), 1) if isinstance(hours, (int, float)) and 0 < hours <= 60 else None,
             "instructor_focus": (week.get("instructor_focus") or "").strip()[:600]
             if isinstance(week.get("instructor_focus"), str) else "",
         })
-    unplaced = [i["id"] for i in model["items"] if i["id"] not in placed and i["kind"] != "external_tool"]
+    rest = [i for i, item in items.items() if i not in placed and item["kind"] != "external_tool"]
+    instructor += [i for i in rest if i in hidden or items[i].get("published") is False]
+    unplaced = [i for i in rest if i not in instructor]
     summary = raw.get("summary") if isinstance(raw.get("summary"), str) else ""
-    return {"summary": summary.strip()[:3000], "weeks": weeks, "unplaced": unplaced}
+    return {"summary": summary.strip()[:3000], "weeks": weeks, "start_items": start,
+            "instructor_items": instructor, "unplaced": unplaced}
 
 
 def blueprint(build, model, consult_state, plan, documents, client):
@@ -619,17 +665,17 @@ def site_items(build, model, documents, consult_state=None):
         result.append({"id": ident, "title": title, "type": kind, "html": html, "revised": revised,
                        "module": module, "audience": audience})
 
-    def add_course_item(item_id, module):
+    def add_course_item(item_id, module, audience="student"):
         item = items_by_id[item_id]
         built = pages.get(f"item-{item_id}")
         html = built["html"] if built else _templated_item(model, documents, item)
         if built and (facts := re.match(r"(<ul class=\"item-facts\">.*?</ul>)", _templated_item(model, documents, item))):
             html = facts.group(1) + html
-        add(item_id, item["title"], course_site.TYPE.get(item["kind"], "pages"), html, module,
+        add(item_id, item["title"], course_site.TYPE.get(item["kind"], "pages"), html, module, audience,
             revised=bool(built or _latest_revision(documents, item_id)))
         rubric = course_site._approved(documents, "rubric", item_id)
         if rubric:
-            add(f"{item_id}--rubric", rubric["title"], "pages", rubric["html"], module)
+            add(f"{item_id}--rubric", rubric["title"], "pages", rubric["html"], module, audience)
 
     add("home", pages["home"]["title"], "pages", pages["home"]["html"])
     add("module--start", "Start here", "pages", pages["start-here"]["html"], "Start here")
@@ -638,6 +684,9 @@ def site_items(build, model, documents, consult_state=None):
     if syllabus_html.strip():
         add("syllabus", "Syllabus", "syllabus", syllabus_html, "Start here")
     add("schedule", "Course schedule", "pages", _schedule_html(build, model), "Start here")
+    for item_id in build["blueprint"].get("start_items", []):
+        if item_id in items_by_id:
+            add_course_item(item_id, "Start here")
     for week in build["blueprint"]["weeks"]:
         title = f"Week {week['number']}: {week['title']}"
         overview = pages.get(f"week-{week['number']}")
@@ -662,6 +711,9 @@ def site_items(build, model, documents, consult_state=None):
                             f"<em>Why:</em> {escape(p['rationale'])}</li>" for p in accepted(consult_state))
     if accepted_rows:
         add("design-decisions", "Design decisions", "pages", f"<ol>{accepted_rows}</ol>", section, "instructor")
+    for item_id in build["blueprint"].get("instructor_items", []):
+        if item_id in items_by_id:
+            add_course_item(item_id, section, audience="instructor")
     for week in build["blueprint"]["weeks"]:
         notes = pages.get(f"week-{week['number']}-notes")
         if notes:

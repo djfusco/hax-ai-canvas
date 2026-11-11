@@ -1183,11 +1183,17 @@
 
   function renderWeeks(blueprint, titles) {
     const weeks = blueprint.weeks;
-    const options = selected => [el('option', { value: '0', text: 'Additional resources', selected: selected === 0 }),
-      ...weeks.map(w => el('option', { value: String(w.number), text: `Week ${w.number}`, selected: w.number === selected }))];
-    const itemRow = (id, week) => el('li', {}, el('span', { text: titles[id] || id }), ' ',
-      el('select', { 'data-item': id, class: 'cc-build-move', 'aria-label': `Week for ${titles[id] || id}` }, options(week)));
+    // Where an item can go: Start here ('s'), a week (number), additional resources ('0'), instructor only ('i').
+    const options = selected => [el('option', { value: 's', text: 'Start here', selected: selected === 's' }),
+      ...weeks.map(w => el('option', { value: String(w.number), text: `Week ${w.number}`, selected: String(w.number) === String(selected) })),
+      el('option', { value: '0', text: 'Additional resources', selected: selected === '0' }),
+      el('option', { value: 'i', text: 'Instructor only', selected: selected === 'i' })];
+    const itemRow = (id, place) => el('li', {}, el('span', { text: titles[id] || id }), ' ',
+      el('select', { 'data-item': id, class: 'cc-build-move', 'aria-label': `Where to put ${titles[id] || id}` }, options(place)));
+    const group = (heading, ids, place, note) => ids.length ? el('div', { class: 'cc-build-week' }, el('strong', { text: heading }),
+      note ? el('p', { class: 'cc-muted', text: note }) : null, el('ol', { class: 'cc-list' }, ids.map(id => itemRow(id, place)))) : '';
     $('cc-build-weeks').replaceChildren(
+      group('Start here (orientation)', blueprint.start_items || [], 's'),
       ...weeks.map(w => el('div', { class: 'cc-build-week' },
         el('div', { class: 'cc-row' }, el('label', { for: `cc-week-${w.number}`, text: `Week ${w.number}` }),
           el('input', { id: `cc-week-${w.number}`, class: 'cc-week-title', value: w.title, maxlength: 160 }),
@@ -1195,8 +1201,9 @@
         w.theme ? el('p', { class: 'cc-muted', text: w.theme }) : null,
         w.objectives.length ? el('ul', { class: 'cc-list' }, w.objectives.map(o => el('li', { text: o }))) : null,
         el('ol', { class: 'cc-list' }, w.items.map(id => itemRow(id, w.number))))),
-      blueprint.unplaced.length ? el('div', { class: 'cc-build-week' }, el('strong', { text: 'Additional resources (not in a week)' }),
-        el('ol', { class: 'cc-list' }, blueprint.unplaced.map(id => itemRow(id, 0)))) : '');
+      group('Additional resources (not in a week)', blueprint.unplaced, '0'),
+      group('Instructor only (students never see these)', blueprint.instructor_items || [], 'i',
+        'Includes items titled for instructors (such as “For Instructors” or “KEEP HIDDEN”) and items unpublished in Canvas.'));
   }
 
   function buildPageCard(p) {
@@ -1300,11 +1307,15 @@
     run('Saving the structure…', async () => {
       const weeks = blueprint.weeks.map(w => ({ title: $(`cc-week-${w.number}`).value.trim() || w.title, theme: w.theme,
         objectives: w.objectives, hours: w.hours, instructor_focus: w.instructor_focus, items: [] }));
+      const start = [], instructor = [];
       for (const select of $('cc-build-weeks').querySelectorAll('select[data-item]')) {
-        const number = Number(select.value);
-        if (number > 0) weeks[number - 1].items.push(select.dataset.item);
+        const place = select.value;
+        if (place === 's') start.push(select.dataset.item);
+        else if (place === 'i') instructor.push(select.dataset.item);
+        else if (Number(place) > 0) weeks[Number(place) - 1].items.push(select.dataset.item);
       }
-      state.build = await api(base() + '/build/blueprint', { method: 'PUT', json: { weeks } });
+      state.build = await api(base() + '/build/blueprint', { method: 'PUT',
+        json: { weeks, start_items: start, instructor_items: instructor } });
       renderBuild();
     }, 'Structure saved. Build the course when you are ready.');
   });

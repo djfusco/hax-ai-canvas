@@ -79,6 +79,34 @@ class CourseBuildTests(unittest.TestCase):
         with self.assertRaises(cb.BuildError):
             cb.validate_blueprint({"weeks": []}, self.model)
 
+    def test_placement_rules_keep_instructor_material_from_students(self):
+        welcome = next(i for i in self.model["items"] if i["id"] == "page-11")
+        solutions = dict(welcome, id="page-sol", title="For Instructors: Lab Solutions", html="<p>Answers</p>")
+        hidden = dict(welcome, id="page-hid", title="Draft notes", published=False, html="<p>Draft</p>")
+        self.model["items"] += [solutions, hidden]
+        aliases = {v: k for k, v in cb._aliases(self.model).items()}
+        raw = {"summary": "s", "start_items": [aliases["page-11"]], "instructor_items": [],
+               "weeks": [{"title": "Week 1: Cells", "theme": "", "objectives": [], "hours": 5, "instructor_focus": "",
+                          "items": [aliases["assignment-201"], "page-sol", aliases["quiz-31"]]}]}
+        bp = cb.validate_blueprint(raw, self.model)
+        self.assertEqual(bp["weeks"][0]["title"], "Cells", "the week number is not repeated")
+        self.assertEqual(bp["weeks"][0]["items"], ["assignment-201", "quiz-31"], "labels map to IDs; solutions removed")
+        self.assertEqual(bp["start_items"], ["page-11"])
+        self.assertIn("page-sol", bp["instructor_items"], "instructor titles always go to the instructor section")
+        self.assertIn("page-hid", bp["instructor_items"], "unplaced unpublished items stay hidden")
+        self.assertNotIn("page-sol", bp["unplaced"])
+        self.assertIn("i1", cb._blueprint_prompt(self.model, self.state, self.plan, []))
+        self.assertIn("UNPUBLISHED in Canvas", cb._blueprint_prompt(self.model, self.state, self.plan, []))
+        build = dict(cb.new_build("essential"), blueprint=bp)
+        for step in ("front-home", "front-start", "front-guide"):
+            build = cb.run_step(build, step, self.model, self.state, self.plan, [], FakeAI())
+        items = {i["id"]: i for i in cb.site_items(build, self.model, [], self.state)}
+        self.assertEqual((items["page-11"]["module"], items["page-11"]["audience"]), ("Start here", "student"))
+        self.assertEqual(items["page-sol"]["audience"], "instructor")
+        self.assertEqual(items["page-hid"]["audience"], "instructor")
+        self.assertTrue(all(i["audience"] == "instructor" for i in items.values()
+                            if i["module"] == "Instructor (not shown to students)"))
+
     def test_essential_build_and_site(self):
         build, ai = self.build("essential")
         self.assertEqual(build["done"], ["front-home", "front-start", "front-guide", "week-1", "week-2"])

@@ -1328,7 +1328,11 @@ def create_mentor_blueprint(root_provider):
         if not build or not build.get("blueprint"):
             raise ValueError("Propose the course structure first.")
         try:
-            blueprint = cb.validate_blueprint({"summary": build["blueprint"]["summary"], "weeks": data.get("weeks")}, model)
+            current = build["blueprint"]
+            blueprint = cb.validate_blueprint({
+                "summary": current["summary"], "weeks": data.get("weeks"),
+                "start_items": data.get("start_items", current.get("start_items", [])),
+                "instructor_items": data.get("instructor_items", current.get("instructor_items", []))}, model)
         except cb.BuildError as exc:
             raise ValueError(str(exc)) from None
         build = dict(build, blueprint=blueprint, pages=[], done=[], updated_at=cb._now())
