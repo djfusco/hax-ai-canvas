@@ -60,7 +60,7 @@ MAX_FACTS = 40
 MAX_LIST = 20
 MAX_PROPOSALS = 60
 MAX_TEXT = 600
-MAX_TOKENS = 3500
+MAX_TOKENS = 8000  # answers with several proposals for a large course run long
 HISTORY_TURNS = 12
 
 SYSTEM = """You are Course Consultant, an experienced instructional designer helping a faculty member
@@ -77,6 +77,8 @@ How you work:
   learning activities, a course AI tutor or practice resource, and AI tools for the instructor.
   AI is not always the answer; say so when it is not.
 - Be warm, concise and collegial. Never condescend. Ask at most two questions at a time.
+- Keep the answer compact: propose at most three changes per turn, and keep each change and
+  rationale to two or three sentences.
 - Record what you learn in topic_updates. Only cite evidence IDs that were supplied.
 - Only propose a change when the instructor has engaged with the topic; never mark anything accepted.
 - Never invent facts about the course. If the evidence is missing, ask.

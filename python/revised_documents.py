@@ -30,7 +30,7 @@ MAX_VERSIONS = 10
 STATUSES = ("draft", "approved")
 MAX_DOCUMENTS = 60
 MAX_HTML = 100_000
-MAX_TOKENS = 6000
+MAX_TOKENS = 12000  # a full syllabus or assignment with rubric
 ASSESSABLE = ("assignment", "quiz", "discussion")
 REVISABLE = ("page", "assignment", "quiz", "discussion")
 

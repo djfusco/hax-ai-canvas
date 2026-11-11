@@ -22,7 +22,7 @@ MAX_VISION = 3000
 MAX_OUTCOMES = 20
 MAX_QUESTIONS = 30
 MAX_POLICY = 4000
-MAX_TOKENS = 3000
+MAX_TOKENS = 6000
 AI_LABELS = {
     "none": "No AI component", "resilient_assessment": "AI-resilient assessment",
     "integrated_learning": "AI-integrated learning", "course_tutor": "Course AI tutor",

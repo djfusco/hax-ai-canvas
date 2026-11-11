@@ -95,10 +95,10 @@ def _openai_chat_text(response):
     choice = choices[0]
     reason = _field(choice, "finish_reason")
     if reason == "length":
-        raise AIResponseError("The AI exhausted its output allowance before completing the answer. No incomplete assessment or automatic retry was accepted.")
+        raise AIResponseError("The AI ran out of room before finishing its answer, so nothing from this step was saved. Try again; if it keeps happening, choose one of the recommended models (very large “thinking” models such as Opus are slower and use more room).")
     message = _field(choice, "message")
     if reason == "content_filter" or _field(message, "refusal"):
-        raise AIResponseError("The AI declined or filtered this request. No assessment was fabricated or automatically retried.")
+        raise AIResponseError("The AI declined or filtered this request; nothing was saved.")
     if reason != "stop":
         raise AIResponseError("The selected model did not complete a text answer. Its API or tool-only response is incompatible with this request.")
     text = _field(message, "content")
@@ -110,9 +110,9 @@ def _openai_chat_text(response):
 def _openai_response_text(response):
     status = _field(response, "status")
     if status == "incomplete":
-        raise AIResponseError("The AI response was incomplete, possibly because its reasoning and answer reached the output cap. No automatic retry was made.")
+        raise AIResponseError("The AI ran out of room before finishing its answer, so nothing from this step was saved. Try again; if it keeps happening, choose one of the recommended models (very large “thinking” models such as Opus are slower and use more room).")
     if status != "completed":
-        raise AIResponseError("The selected model did not complete its response; no assessment or automatic retry was accepted.")
+        raise AIResponseError("The selected model did not complete its response; nothing was saved. Try again or choose another model.")
     output = _field(response, "output")
     if not isinstance(output, list):
         raise AIResponseError("The model returned an invalid response format.")
@@ -130,7 +130,7 @@ def _openai_response_text(response):
             raise AIResponseError("The model returned invalid answer content.")
         for block in content:
             if _field(block, "type") == "refusal":
-                raise AIResponseError("The AI declined this request; no assessment was fabricated.")
+                raise AIResponseError("The AI declined this request; nothing was saved.")
             text = _field(block, "text")
             if _field(block, "type") != "output_text" or not isinstance(text, str):
                 raise AIResponseError("The model returned unsupported answer content.")
@@ -149,16 +149,16 @@ def _enum_name(value):
 def _gemini_text(response):
     blocked = _enum_name(_field(_field(response, "prompt_feedback"), "block_reason"))
     if blocked and blocked not in ("BLOCK_REASON_UNSPECIFIED", "UNSPECIFIED"):
-        raise AIResponseError("The AI blocked this request. No assessment was fabricated or automatically retried.")
+        raise AIResponseError("The AI blocked this request; nothing was saved.")
     candidates = _field(response, "candidates")
     if not isinstance(candidates, list) or len(candidates) != 1:
         raise AIResponseError("The AI returned no single completed text answer.")
     candidate = candidates[0]
     reason = _enum_name(_field(candidate, "finish_reason"))
     if reason == "MAX_TOKENS":
-        raise AIResponseError("The AI exhausted its thinking/answer allowance before completing the response. No automatic retry was made.")
+        raise AIResponseError("The AI ran out of room before finishing its answer, so nothing from this step was saved. Try again; if it keeps happening, choose one of the recommended models (very large “thinking” models such as Opus are slower and use more room).")
     if reason != "STOP":
-        raise AIResponseError("The AI response was blocked, incomplete or incompatible; no assessment was fabricated.")
+        raise AIResponseError("The AI response was blocked, incomplete or incompatible; nothing was saved.")
     content = _field(_field(candidate, "content"), "parts")
     if not isinstance(content, list):
         raise AIResponseError("The AI returned an invalid text response.")

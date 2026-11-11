@@ -585,9 +585,14 @@ def create_mentor_blueprint(root_provider):
         return saved
 
     def public_models(provider, saved):
+        import copy
+        from model_advice import advise, annotate
         catalog = saved.get("catalog", {})
-        return {**catalog, "models": catalog.get("models", []),
-                "selected": saved.get("model", ""), "version": saved.get("version"),
+        models = copy.deepcopy(catalog.get("models", []))
+        selected = saved.get("model", "")
+        return {**catalog, "models": models, "suggested": annotate(models),
+                "selected_advice": advise(selected, capabilities_for_values(provider, saved)) if selected else None,
+                "selected": selected, "version": saved.get("version"),
                 "selected_capabilities": capabilities_for_values(provider, saved),
                 "manual_allowed": provider == "nebula",
                 "expired": saved.get("catalog_expires", 0) <= time.time()}

@@ -5,6 +5,13 @@
 <div class="cc" id="cc">
   <p id="cc-error" class="cc-banner cc-banner-error" role="alert" hidden></p>
   <p id="cc-status" class="cc-status" role="status" aria-live="polite"></p>
+  <section id="cc-progress" class="cc-progress" aria-label="Progress" hidden>
+    <div class="cc-progress-head">
+      <div><strong id="cc-progress-title"></strong> <span id="cc-progress-time" class="cc-muted"></span></div>
+      <button id="cc-progress-cancel" type="button" class="cc-btn cc-btn-quiet">Cancel</button>
+    </div>
+    <ol id="cc-progress-steps" class="cc-progress-steps" aria-live="polite"></ol>
+  </section>
 
   <!-- Sign in (cloud) -->
   <section id="cc-signin" class="cc-card cc-narrow" hidden aria-labelledby="cc-signin-title">

@@ -34,6 +34,7 @@
     return node;
   }
 
+  const CANCELLED = 'Cancelled. Everything finished before you cancelled is saved. The step that was running may still finish on the server; click the button again to continue from where it stopped.';
   function status(text) { $('cc-status').textContent = text || ''; }
   function showError(message) {
     $('cc-error').textContent = message || '';
@@ -50,7 +51,14 @@
     } else if (options.form) {
       init.body = options.form;
     }
-    const response = await fetch(path, init);
+    if (state.job && state.job.controller) init.signal = state.job.controller.signal; // Cancel stops waiting
+    let response;
+    try {
+      response = await fetch(path, init);
+    } catch (error) {
+      if (error.name === 'AbortError') throw new Error(CANCELLED);
+      throw error;
+    }
     const body = await response.json().catch(() => ({}));
     if (!response.ok) {
       const error = new Error(body.error || `Request failed (${response.status}).`);
@@ -163,18 +171,41 @@
     if (provider && configured(provider) && state.models) {
       const select = $('cc-model');
       select.replaceChildren(el('option', { value: '', text: state.models.models.length ? 'Choose a model…' : 'Refresh to list models' }));
-      for (const model of state.models.models) {
+      const option = model => {
         const price = model.pricing && model.pricing.input_per_million !== undefined
           ? ` · $${model.pricing.input_per_million}/$${model.pricing.output_per_million} per M tokens` : '';
-        select.append(el('option', { value: model.id, text: (model.name || model.id) + price, selected: model.id === state.models.selected }));
+        const tag = { slow: ' (slow for this app)', limited: ' (small limits)' }[(model.advice || {}).tier] || '';
+        return el('option', { value: model.id, text: (model.name || model.id) + tag + price, selected: model.id === state.models.selected });
+      };
+      const suggested = (state.models.suggested || []).map(id => state.models.models.find(m => m.id === id)).filter(Boolean);
+      if (suggested.length) {
+        select.append(el('optgroup', { label: 'Recommended for Course Consultant' }, ...suggested.map(option)),
+          el('optgroup', { label: 'All models' }, ...state.models.models.map(option)));
+      } else {
+        select.append(...state.models.models.map(option));
       }
-      const capabilities = state.models.selected_capabilities;
-      $('cc-model-note').textContent = capabilities
-        ? `${capabilities.structured_outputs ? 'Supports structured answers. ' : 'Structured answers not verified; responses are checked strictly. '}`
-          + (capabilities.input_limit ? `Reads up to about ${Math.round(capabilities.input_limit / 1000)}k tokens.` : '')
-        : (state.models.expired ? 'The model list has expired; refresh it to change models.' : '');
+      renderModelNote();
     }
   }
+
+  // Advice for the model highlighted in the list (or the one in use).
+  function renderModelNote() {
+    if (!state.models) return;
+    const id = $('cc-model').value || state.models.selected;
+    const model = state.models.models.find(m => m.id === id);
+    const advice = model && model.advice;
+    const label = { recommended: 'Recommended. ', ok: '', slow: 'Not ideal. ', small: 'Budget option. ', limited: 'Not recommended. ' };
+    const parts = [];
+    if (advice) parts.push(label[advice.tier] + advice.note);
+    const capabilities = model && model.capabilities;
+    if (capabilities && capabilities.input_limit) parts.push(`Reads up to about ${Math.round(capabilities.input_limit / 1000)}k tokens.`);
+    if (!model && state.models.expired) parts.push('The model list has expired; refresh it to change models.');
+    if (!id && (state.models.suggested || []).length) {
+      parts.push('Not sure? Pick one under “Recommended for Course Consultant”: capable models that answer in a minute or two per step.');
+    }
+    $('cc-model-note').textContent = parts.join(' ');
+  }
+  $('cc-model').addEventListener('change', renderModelNote);
 
   async function loadModels() {
     state.models = null;
@@ -513,37 +544,123 @@
     });
   }
 
+  // ── progress panel for long, multi-step jobs (pinned at the top, with Cancel) ──
+  // The site header is sticky too; keep the panel just below it (its height wraps on phones).
+  const measureHeader = () => {
+    const header = document.querySelector('.app-header');
+    document.documentElement.style.setProperty('--cc-header-h', `${header ? header.offsetHeight : 0}px`);
+  };
+  measureHeader();
+  window.addEventListener('resize', measureHeader);
+  function minutes(ms) {
+    const s = Math.round(ms / 1000);
+    return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
+  }
+  function renderJob() {
+    const job = state.job;
+    $('cc-progress').hidden = !job;
+    if (!job) return;
+    const now = job.finished || Date.now();
+    $('cc-progress-title').textContent = job.title;
+    $('cc-progress-time').textContent = job.finished
+      ? `${job.outcome} after ${minutes(now - job.started)}`
+      : `running for ${minutes(now - job.started)}` + (job.stepStarted ? ` · this step ${minutes(now - job.stepStarted)}` : '');
+    $('cc-progress-cancel').textContent = job.finished ? 'Close' : (job.cancelled ? 'Cancelling…' : 'Cancel');
+    $('cc-progress-cancel').disabled = Boolean(job.cancelled && !job.finished);
+    const icon = { pending: '○', active: '◐', done: '✓', failed: '✕', skipped: '–' };
+    $('cc-progress-steps').replaceChildren(...job.steps.map(s => el('li', { 'data-status': s.status },
+      el('span', { class: 'cc-progress-icon', 'aria-hidden': 'true', text: icon[s.status] }),
+      el('span', {}, el('strong', { text: s.label }), s.detail ? el('span', { class: 'cc-muted', text: ' ' + s.detail }) : null))));
+  }
+  function startJob(title, labels) {
+    state.job = { title, steps: labels.map(label => ({ label, status: 'pending', detail: '' })), started: Date.now(),
+      stepStarted: null, cancelled: false, finished: null, controller: new AbortController() };
+    clearInterval(state.jobTimer);
+    state.jobTimer = setInterval(renderJob, 1000);
+    renderJob();
+  }
+  function jobStep(index, detail) {
+    const job = state.job;
+    job.steps.forEach((s, i) => { if (i < index && s.status === 'active') s.status = 'done'; });
+    if (job.steps[index].status !== 'active') job.stepStarted = Date.now();
+    job.steps[index].status = 'active';
+    job.steps[index].detail = detail || '';
+    renderJob();
+    if (job.cancelled) throw new Error(CANCELLED);
+  }
+  function endJob(outcome, error) {
+    const job = state.job;
+    if (!job) return;
+    clearInterval(state.jobTimer);
+    job.finished = Date.now();
+    job.controller = null; // later requests are not tied to this job
+    job.outcome = outcome;
+    for (const s of job.steps) {
+      if (s.status === 'active') s.status = error ? 'failed' : 'done';
+      if (error && s.status === 'failed' && error.message !== CANCELLED) s.detail = error.message;
+    }
+    renderJob();
+  }
+  $('cc-progress-cancel').addEventListener('click', () => {
+    const job = state.job;
+    if (!job) return;
+    if (job.finished) { state.job = null; renderJob(); return; }
+    job.cancelled = true;
+    job.controller.abort();
+    renderJob();
+  });
+
   /** Quick AI version: the AI advises and decides; every step is a separate, resumable request. */
   async function quickVersion() {
     requireAi();
     const ws = () => `/mentor/api/workspaces/${state.workspace.id}`;
-    const step = (n, total, text) => status(`Quick AI version, step ${n} of ${total}: ${text}`);
-    // 1. The advisor works through every topic not yet covered.
-    let view = await api(ws() + '/consult');
-    const open = () => view.state ? view.topics.filter(t => !['covered', 'skipped'].includes(view.state.topics[t.id].status)).length : view.topics.length;
-    let guard = 0;
-    while (open() && guard++ < 8) {
-      const label = view.state ? view.topics.find(t => t.id === view.state.current_topic).label : view.topics[0].label;
-      step(1, 4, `advising on ${label}…`);
-      view = await api(ws() + '/consult', { method: 'POST', json: { mode: 'auto', provider: state.provider } });
-      state.consult = view;
-    }
-    // 2. Accept the advisor's proposals on the instructor's behalf (labelled AI-decided).
-    step(2, 4, 'accepting the advisor\'s changes…');
-    state.plan = await api(ws() + '/consult/proposals/accept-all', { method: 'POST', json: {} });
-    if (state.consult && state.consult.state) state.consult.state.proposals = state.plan.proposals;
-    // 3. Draft the plan.
-    step(3, 4, 'drafting the improvement plan…');
-    state.plan = await api(ws() + '/plan/draft', { method: 'POST', json: { provider: state.provider } });
-    // 4. Write revised documents: syllabus, then assessments touched by accepted changes, with rubrics.
-    const docs = await api(ws() + '/documents');
-    const have = new Set(docs.documents.filter(d => d.status === 'approved').map(d => `${d.kind}:${d.item_id || ''}`));
-    const wanted = docs.targets.filter(t => t.kind === 'syllabus' || t.proposals.length).slice(0, 13)
-      .filter(t => !have.has(`${t.kind}:${t.item_id || ''}`));
-    for (const [index, target] of wanted.entries()) {
-      step(4, 4, `writing ${target.title} (${index + 1} of ${wanted.length})…`);
-      state.docs = await api(ws() + '/documents/generate', { method: 'POST',
-        json: { provider: state.provider, kind: target.kind, item_id: target.item_id, approve: true } });
+    startJob('Quick AI version', ['Consultation: the advisor works through each topic', 'Accept the advisor\'s changes',
+      'Draft the improvement plan', 'Write revised documents']);
+    try {
+      // 1. The advisor works through every topic not yet covered.
+      let view = await api(ws() + '/consult');
+      const open = () => view.state ? view.topics.filter(t => !['covered', 'skipped'].includes(view.state.topics[t.id].status)).length : view.topics.length;
+      const topicLine = current => view.topics.map(t => {
+        const status = view.state ? view.state.topics[t.id].status : 'not_started';
+        const mark = ['covered', 'skipped'].includes(status) ? '✓' : (t.id === current ? '…' : '');
+        return t.label + (mark ? ' ' + mark : '');
+      }).join(' · ');
+      let guard = 0;
+      while (open() && guard++ < 8) {
+        const current = view.state ? view.state.current_topic : view.topics[0].id;
+        const label = view.topics.find(t => t.id === current).label;
+        jobStep(0, `now: ${label}. ${topicLine(current)}`);
+        status(`Quick AI version: advising on ${label}…`);
+        view = await api(ws() + '/consult', { method: 'POST', json: { mode: 'auto', provider: state.provider } });
+        state.consult = view;
+      }
+      jobStep(0, topicLine(null));
+      // 2. Accept the advisor's proposals on the instructor's behalf (labelled AI-decided).
+      jobStep(1);
+      status('Quick AI version: accepting the advisor\'s changes…');
+      state.plan = await api(ws() + '/consult/proposals/accept-all', { method: 'POST', json: {} });
+      if (state.consult && state.consult.state) state.consult.state.proposals = state.plan.proposals;
+      state.job.steps[1].detail = `${state.plan.proposals.filter(p => p.status === 'accepted').length} changes accepted`;
+      // 3. Draft the plan.
+      jobStep(2);
+      status('Quick AI version: drafting the improvement plan…');
+      state.plan = await api(ws() + '/plan/draft', { method: 'POST', json: { provider: state.provider } });
+      // 4. Write revised documents: syllabus, then assessments touched by accepted changes, with rubrics.
+      const docs = await api(ws() + '/documents');
+      const have = new Set(docs.documents.filter(d => d.status === 'approved').map(d => `${d.kind}:${d.item_id || ''}`));
+      const wanted = docs.targets.filter(t => t.kind === 'syllabus' || t.proposals.length).slice(0, 13)
+        .filter(t => !have.has(`${t.kind}:${t.item_id || ''}`));
+      for (const [index, target] of wanted.entries()) {
+        jobStep(3, `${index + 1} of ${wanted.length}: ${target.title}`);
+        status(`Quick AI version: writing ${target.title} (${index + 1} of ${wanted.length})…`);
+        state.docs = await api(ws() + '/documents/generate', { method: 'POST',
+          json: { provider: state.provider, kind: target.kind, item_id: target.item_id, approve: true } });
+      }
+      jobStep(3, wanted.length ? `${wanted.length} written` : 'already written');
+      endJob('Finished');
+    } catch (error) {
+      endJob(error.message === CANCELLED ? 'Cancelled' : 'Stopped', error);
+      throw error;
     }
     renderPlanCount();
     selectTab('docs'); // its own loader is skipped while this task runs, so load here
@@ -552,10 +669,11 @@
   }
   $('cc-quick').addEventListener('click', async () => {
     if (!aiReady()) { requireAiPrompt(); return; }
+    if (state.busy) { showError('Something is still running. Wait for it to finish, or cancel it at the top of the page.'); return; }
     const cost = await estimateText('quick');
     if (!window.confirm('Create the quick AI version?\n\nThe AI will answer the consultation itself, accept its own proposed '
-      + 'changes (labelled AI-decided), draft the plan and write revised documents. It takes a few minutes and '
-      + 'you can change any part afterwards.\n\n' + cost)) return;
+      + 'changes (labelled AI-decided), draft the plan and write revised documents. It takes a few minutes; progress '
+      + 'shows at the top of the page, where you can cancel. You can change any part afterwards.\n\n' + cost)) return;
     run('Starting the quick AI version…', quickVersion,
       'Quick AI version ready. Preview the course site, then refine anything: consult further, change decisions, or ask for changes to any document.');
   });

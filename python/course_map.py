@@ -346,7 +346,7 @@ def _validate(raw, outcome_ids, item_ids, extract):
     return result
 
 
-def propose_alignment(model, client, *, max_tokens=4000):
+def propose_alignment(model, client, *, max_tokens=6000):
     """One structured AI call; returns a validated alignment proposal."""
     extract = not model["outcomes"]
     if extract and not model["course"].get("syllabus_html", "").strip():

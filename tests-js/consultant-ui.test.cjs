@@ -29,6 +29,8 @@ PROPOSAL = {"topic": "assessment", "title": "Add a graded outline before the ess
             "rationale": "Spreads the stakes and gives early feedback.", "principle": "Formative assessment",
             "evidence": [], "affected_items": [], "effort": "small", "ai_dimension": "resilient_assessment"}
 
+SLOW_ONCE = []
+
 class FakeAI:
     def __init__(self, provider, model=None, **kwargs):
         self.provider, self.model, self.capabilities = provider, model, kwargs.get("capabilities")
@@ -40,6 +42,10 @@ class FakeAI:
                                "outcomes": [{"text": "Construct a scientific argument from evidence.", "note": "unchanged"}],
                                "ai_policy": "You may use AI to practise; cite any AI help.",
                                "open_questions": ["Keep the final exam?"]})
+        if "QUICK AI VERSION" in prompt and "Topic: Engagement" in prompt and not SLOW_ONCE:
+            SLOW_ONCE.append(1)  # the first Engagement turn is slow, so the test can cancel it
+            import time
+            time.sleep(4)
         if "QUICK AI VERSION" in prompt:
             return json.dumps({"reply": "I reviewed this topic and decided on the strongest options.",
                                "topic_updates": [], "proposed_changes": [PROPOSAL] if "Topic: Assessment" in prompt else [],
@@ -335,11 +341,25 @@ test('quick AI version, site preview and asking for changes', { skip: !playwrigh
     await page.click('#cc-slim-import');
     await page.locator('#cc-course').waitFor({ state: 'visible' });
 
-    // Quick AI version from the course screen.
+    // Quick AI version from the course screen: the progress panel shows each step and can cancel.
+    await page.click('#cc-quick');
+    await page.locator('#cc-progress').waitFor({ state: 'visible' });
+    await page.waitForFunction(() => /now: Engagement/.test(document.querySelector('#cc-progress-steps').textContent));
+    assert.match(await page.textContent('#cc-progress-steps'), /Purpose and learners ✓/);
+    await page.click('#cc-progress-cancel');
+    await page.waitForFunction(() => /^Cancelled after/.test(document.querySelector('#cc-progress-time').textContent));
+    assert.match(await page.textContent('#cc-error'), /Cancelled\. Everything finished before you cancelled is saved/);
+    await page.click('#cc-progress-cancel'); // Close
+    assert.equal(await page.locator('#cc-progress').isHidden(), true);
+    // The server finishes the cancelled turn; starting again resumes where it stopped.
+    await page.waitForTimeout(4500);
     await page.click('#cc-quick');
     await page.locator('#view-docs').waitFor({ state: 'visible', timeout: 60000 });
-    assert.match(dialogs.at(-1), /About 8–20 AI requests and [\d,]+–[\d,]+ tokens\./, 'quick confirm shows the estimate');
+    assert.match(dialogs[0], /About 8–20 AI requests and [\d,]+–[\d,]+ tokens\./, 'quick confirm shows the estimate');
+    assert.match(dialogs.at(-1), /About 2–14 AI requests/, 'the second run only estimates what is left');
     await page.waitForFunction(() => document.querySelector('#cc-status').textContent.includes('Quick AI version ready'));
+    assert.match(await page.textContent('#cc-progress-time'), /^Finished after/);
+    assert.equal(await page.locator('#cc-progress-steps li[data-status=done]').count(), 4);
     await page.locator('.cc-document .cc-tag:has-text("AI-approved")').waitFor();
     assert.equal(await page.locator('#cc-plan-count').isHidden(), true, 'no undecided changes remain');
     await shot(page, '7-quick-docs');
