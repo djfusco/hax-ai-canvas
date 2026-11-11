@@ -87,7 +87,8 @@ class CourseMapTests(unittest.TestCase):
         self.assertEqual(outcome["proposed_items"], [lab])
         self.assertNotIn("Lab", mapped["outcome_coverage"]["graded_items_without_outcome"])
         prompt, schema = client.prompts[0]
-        self.assertIn(lab, schema["properties"]["alignments"]["items"]["properties"]["item_ids"]["items"]["enum"])
+        self.assertNotIn("enum", schema["properties"]["alignments"]["items"]["properties"]["item_ids"]["items"],
+                         "no list of every item ID (too complex for some providers); IDs are checked locally")
 
     def test_alignment_extracts_syllabus_outcomes(self):
         model = course()
@@ -104,10 +105,11 @@ class CourseMapTests(unittest.TestCase):
         self.assertIn("syllabus_excerpt", client.prompts[0][0])
 
     def test_alignment_rejects_bad_references(self):
+        real = self.model["items"][0]["id"]
         bad_item = FakeClient({"alignments": [{"outcome_id": self.model["outcomes"][0]["id"],
-                                               "item_ids": ["invented"], "rationale": ""}]})
-        with self.assertRaisesRegex(cmap.CourseMapError, "does not exist"):
-            cmap.propose_alignment(self.model, bad_item)
+                                               "item_ids": ["invented", real], "rationale": ""}]})
+        result = cmap.propose_alignment(self.model, bad_item)
+        self.assertEqual(result["alignments"][0]["item_ids"], [real], "unknown item IDs are dropped")
         bad_outcome = FakeClient({"alignments": [{"outcome_id": "nope", "item_ids": [], "rationale": ""}]})
         with self.assertRaisesRegex(cmap.CourseMapError, "unknown or repeated outcome"):
             cmap.propose_alignment(self.model, bad_outcome)

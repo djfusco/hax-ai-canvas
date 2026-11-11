@@ -79,7 +79,9 @@ How you work:
 - Be warm, concise and collegial. Never condescend. Ask at most two questions at a time.
 - Keep the answer compact: propose at most three changes per turn, and keep each change and
   rationale to two or three sentences.
-- Record what you learn in topic_updates. Only cite evidence IDs that were supplied.
+- Record what you learn in topic_updates. Cite evidence by ID: the IDs shown in square brackets
+  in the course material, or "course-map" (the course map), "syllabus", or "instructor" (something
+  the instructor told you). Never make up an ID.
 - Only propose a change when the instructor has engaged with the topic; never mark anything accepted.
 - Never invent facts about the course. If the evidence is missing, ask.
 - Respect the instructor's time. When they say they are done with a topic or want to move on, stop
@@ -241,9 +243,10 @@ def _build_prompt(state, history, model, course_map, mode, message, scale):
 def _schema(evidence):
     text = {"type": "string"}
     strings = {"type": "array", "items": text}
-    # Large enums exceed some providers' schema limits; IDs are always re-checked locally.
-    evidence_list = {"type": "array", "items": ({"type": "string", "enum": sorted(evidence)}
-                                                if len(evidence) <= 500 else {"type": "string"})}
+    # Evidence IDs are not listed in the schema: a list of every course ID makes the schema too
+    # complex for some providers (Anthropic rejects it for larger courses). IDs are checked locally
+    # instead, and unknown ones are dropped.
+    evidence_list = {"type": "array", "items": {"type": "string"}}
     return {
         "type": "object",
         "properties": {

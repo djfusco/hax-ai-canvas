@@ -257,7 +257,9 @@ SYSTEM = ("You are a careful instructional designer mapping course outcomes to c
 
 
 def _schema(outcome_ids, item_ids, extract):
-    item_enum = {"type": "string", "enum": item_ids} if item_ids else {"type": "string"}
+    # Item IDs are not listed in the schema (too complex for some providers on larger courses);
+    # they are checked locally and unknown ones are dropped.
+    item_enum = {"type": "string"}
     alignment = {
         "type": "object",
         "properties": {
@@ -338,8 +340,9 @@ def _validate(raw, outcome_ids, item_ids, extract):
             raise CourseMapError("The AI referenced an unknown or repeated outcome.")
         seen.add(outcome_id)
         ids = row.get("item_ids")
-        if not isinstance(ids, list) or any(i not in allowed_items for i in ids):
-            raise CourseMapError("The AI referenced a course item that does not exist.")
+        if not isinstance(ids, list):
+            raise CourseMapError("An outcome alignment is malformed.")
+        ids = [i for i in ids if i in allowed_items]  # unknown IDs are dropped, never attributed
         rationale = row.get("rationale", "")
         result["alignments"].append({"outcome_id": outcome_id, "item_ids": list(dict.fromkeys(ids))[:100],
                                      "rationale": rationale[:600] if isinstance(rationale, str) else ""})
