@@ -158,7 +158,7 @@
 
   function renderAi() {
     const provider = state.provider;
-    for (const card of document.querySelectorAll('.cc-provider')) {
+    for (const card of document.querySelectorAll('.cc-provider[data-provider]')) {
       card.setAttribute('aria-checked', String(card.dataset.provider === provider));
     }
     const ready = provider && state.models && state.models.selected;
@@ -225,9 +225,9 @@
   }
 
   // Approximate AI use for an action, as text for a confirm dialog.
-  async function estimateText(action, count = 1) {
+  async function estimateText(action, count = 1, extra = {}) {
     try {
-      const params = new URLSearchParams({ action, count: String(count), provider: state.provider || '' });
+      const params = new URLSearchParams({ action, count: String(count), provider: state.provider || "", ...extra });
       const e = await api(`${base()}/estimate?${params}`);
       const range = ([a, b]) => (a === b ? a.toLocaleString() : `${a.toLocaleString()}–${b.toLocaleString()}`);
       const tokens = [e.input_tokens[0] + e.output_tokens[0], e.input_tokens[1] + e.output_tokens[1]];
@@ -252,7 +252,7 @@
     $('cc-ai').hidden = !open;
     $('cc-ai-toggle').setAttribute('aria-expanded', String(open));
   });
-  for (const card of document.querySelectorAll('.cc-provider')) {
+  for (const card of document.querySelectorAll('.cc-provider[data-provider]')) {
     card.addEventListener('click', () => run('Loading models…', async () => {
       state.provider = card.dataset.provider;
       store.set('provider', state.provider);
@@ -336,15 +336,16 @@
 
   function selectTab(name) {
     state.tab = name;
-    for (const tab of ['course', 'consult', 'plan', 'docs']) {
+    for (const tab of ['course', 'consult', 'plan', 'docs', 'build']) {
       $('tab-' + tab).setAttribute('aria-selected', String(tab === name));
       $('view-' + tab).hidden = tab !== name;
     }
     if (name === 'consult') renderConsult();
     if (name === 'plan') run('Loading the plan…', loadPlan);
     if (name === 'docs') run('Loading documents…', loadDocuments);
+    if (name === 'build') run('Loading the course build…', loadBuild);
   }
-  for (const tab of ['course', 'consult', 'plan', 'docs']) $('tab-' + tab).addEventListener('click', () => selectTab(tab));
+  for (const tab of ['course', 'consult', 'plan', 'docs', 'build']) $('tab-' + tab).addEventListener('click', () => selectTab(tab));
 
   // ── course intake ────────────────────────────────────────────────────────
 
@@ -1132,6 +1133,197 @@
       renderDocuments();
     });
   }
+
+  // ── 5. Build the finished course ─────────────────────────────────────────
+  const FRAME_STYLE = `<!doctype html><meta charset=utf-8><style>body{font:15px/1.55 system-ui;margin:12px;color:#1d2330}
+    table{border-collapse:collapse}td,th{border:1px solid #ccd;padding:6px;vertical-align:top;text-align:left}
+    .item-facts{list-style:none;padding:8px 12px;border:1px solid #dce4ee;border-radius:8px;display:flex;flex-wrap:wrap;gap:4px 16px}
+    @media (prefers-color-scheme:dark){body{background:#1d2129;color:#e7eaf0}}</style>`;
+  state.buildMode = 'essential';
+
+  async function loadBuild() {
+    state.build = await api(base() + '/build');
+    if (state.build.build) state.buildMode = state.build.build.mode;
+    renderBuild();
+    estimateBuildOptions();
+  }
+  async function estimateBuildOptions() {
+    for (const mode of ['essential', 'full']) {
+      const text = await estimateText('build_' + mode);
+      document.querySelector(`.cc-build-cost[data-mode="${mode}"]`).textContent = text.split('\n').slice(0, 2).join(' ');
+    }
+  }
+
+  function renderBuild() {
+    const view = state.build;
+    if (!view) return;
+    const build = view.build;
+    for (const card of document.querySelectorAll('.cc-provider[data-mode]')) {
+      card.setAttribute('aria-checked', String(card.dataset.mode === state.buildMode));
+    }
+    $('cc-build-preview').href = base() + '/site/index.html';
+    const blueprint = build && build.blueprint;
+    $('cc-build-structure').hidden = !blueprint;
+    $('cc-build-pages').hidden = !view.ready;
+    $('cc-build-propose').textContent = blueprint ? 'Propose a new structure' : 'Propose the week-by-week structure';
+    if (blueprint) {
+      $('cc-build-summary').textContent = `${build.mode === 'full' ? 'Full' : 'Essential'} build. ${blueprint.summary}`;
+      renderWeeks(blueprint, view.item_titles);
+      $('cc-build-run').textContent = !view.steps.length ? 'Built' : (view.ready || build.done.length
+        ? `Continue building (${view.steps.length} step${view.steps.length === 1 ? '' : 's'} left)` : 'Build the course');
+      $('cc-build-run').disabled = !view.steps.length;
+      $('cc-build-estimate').textContent = view.steps.length
+        ? 'You will see the estimated AI use before it starts.' : 'Every step is built. Rebuild a page by asking for changes below.';
+    }
+    if (view.ready) renderBuildPages(build);
+    $('cc-build-imscc').href = base() + '/documents/export?format=imscc';
+    $('cc-build-zip').href = base() + '/documents/export?format=hax';
+    $('cc-build-docs').href = base() + '/documents/export';
+  }
+
+  function renderWeeks(blueprint, titles) {
+    const weeks = blueprint.weeks;
+    const options = selected => [el('option', { value: '0', text: 'Additional resources', selected: selected === 0 }),
+      ...weeks.map(w => el('option', { value: String(w.number), text: `Week ${w.number}`, selected: w.number === selected }))];
+    const itemRow = (id, week) => el('li', {}, el('span', { text: titles[id] || id }), ' ',
+      el('select', { 'data-item': id, class: 'cc-build-move', 'aria-label': `Week for ${titles[id] || id}` }, options(week)));
+    $('cc-build-weeks').replaceChildren(
+      ...weeks.map(w => el('div', { class: 'cc-build-week' },
+        el('div', { class: 'cc-row' }, el('label', { for: `cc-week-${w.number}`, text: `Week ${w.number}` }),
+          el('input', { id: `cc-week-${w.number}`, class: 'cc-week-title', value: w.title, maxlength: 160 }),
+          w.hours ? el('span', { class: 'cc-muted', text: `about ${w.hours} hours` }) : null),
+        w.theme ? el('p', { class: 'cc-muted', text: w.theme }) : null,
+        w.objectives.length ? el('ul', { class: 'cc-list' }, w.objectives.map(o => el('li', { text: o }))) : null,
+        el('ol', { class: 'cc-list' }, w.items.map(id => itemRow(id, w.number))))),
+      blueprint.unplaced.length ? el('div', { class: 'cc-build-week' }, el('strong', { text: 'Additional resources (not in a week)' }),
+        el('ol', { class: 'cc-list' }, blueprint.unplaced.map(id => itemRow(id, 0)))) : '');
+  }
+
+  function buildPageCard(p) {
+    const label = { ai: 'AI-written', instructor: 'Edited by you' }[p.built_by] || p.built_by;
+    const body = el('div', {});
+    const box = el('details', { class: 'cc-a11y-item cc-build-page' },
+      el('summary', {}, el('strong', { text: p.title }), ' ',
+        p.audience === 'instructor' ? el('span', { class: 'cc-tag warn', text: 'Instructor only' }) : null, ' ',
+        el('span', { class: 'cc-tag' + (p.built_by === 'ai' ? ' ai' : ' good'), text: label }), ' ',
+        typeof p.kept === 'number' ? el('span', { class: 'cc-tag', text: `keeps ${Math.round(p.kept * 100)}% of the original wording` }) : null),
+      body);
+    const fill = () => {
+      const iframe = el('iframe', { sandbox: '', title: p.title, class: 'cc-doc-frame' });
+      iframe.srcdoc = FRAME_STYLE + p.html;
+      const ask = el('textarea', { rows: 2, maxlength: 4000, 'aria-label': `Ask for changes to ${p.title}`,
+        placeholder: 'Ask for changes, e.g. “Shorter, and add a reading check before the quiz”' });
+      const form = el('form', { class: 'cc-ask' }, ask, el('button', { type: 'submit', class: 'cc-btn', text: 'Ask for changes' }));
+      form.addEventListener('submit', event => {
+        event.preventDefault();
+        if (!ask.value.trim()) return;
+        run('Revising the page… this can take a minute', async () => {
+          requireAi();
+          state.build = await api(`${base()}/build/pages/${encodeURIComponent(p.id)}/revise`, { method: 'POST',
+            json: { provider: state.provider, instruction: ask.value } });
+          renderBuild();
+        }, `Revised “${p.title}”.`);
+      });
+      const edit = el('button', { type: 'button', class: 'cc-btn cc-btn-quiet', text: 'Edit HTML', onclick: () => {
+        const area = el('textarea', { rows: 14, class: 'cc-code', 'aria-label': `HTML of ${p.title}` });
+        area.value = p.html;
+        body.replaceChildren(area, el('div', { class: 'cc-row' },
+          el('button', { type: 'button', class: 'cc-btn', text: 'Save', onclick: () => run('Saving…', async () => {
+            state.build = await api(`${base()}/build/pages/${encodeURIComponent(p.id)}`, { method: 'PUT', json: { html: area.value } });
+            renderBuild();
+          }, `Saved “${p.title}”.`) }),
+          el('button', { type: 'button', class: 'cc-btn cc-btn-quiet', text: 'Cancel', onclick: fill })));
+      } });
+      const versions = (p.history || []).map((h, i) => el('option', { value: String(i),
+        text: `${h.at ? h.at.slice(0, 16).replace('T', ' ') : 'Earlier version'} (${({ ai: 'AI', instructor: 'you' })[h.built_by] || h.built_by})` })).reverse();
+      const select = el('select', { 'aria-label': `Earlier versions of ${p.title}` }, ...versions);
+      const restore = el('button', { type: 'button', class: 'cc-btn cc-btn-quiet', text: 'Restore this version',
+        onclick: () => run('Restoring…', async () => {
+          state.build = await api(`${base()}/build/pages/${encodeURIComponent(p.id)}/restore`, { method: 'POST',
+            json: { index: Number(select.value) } });
+          renderBuild();
+        }, `Restored “${p.title}”.`) });
+      body.replaceChildren(iframe, form, el('div', { class: 'cc-row' }, edit, versions.length ? select : null, versions.length ? restore : null));
+    };
+    box.addEventListener('toggle', () => { if (box.open && !body.childNodes.length) fill(); });
+    return box;
+  }
+
+  function renderBuildPages(build) {
+    const rank = p => p.id === 'home' ? 0 : p.id === 'start-here' ? 1 : p.audience === 'instructor'
+      ? 10000 + (p.week || 0) : 100 * (p.week || 0) + (p.kind === 'week' ? 0 : 1);
+    const pages = [...build.pages].sort((a, b) => rank(a) - rank(b));
+    $('cc-build-list').replaceChildren(
+      el('p', { class: 'cc-muted', text: `${pages.length} pages written for the course. Course pages that were not rewritten keep their content in the same layout; see them in the preview.` }),
+      ...pages.map(buildPageCard));
+  }
+
+  /** Run the remaining build steps, front pages first, then weekly overviews, then course pages. */
+  async function buildCourse() {
+    requireAi();
+    const group = id => (id === 'front' ? 0 : /-items-/.test(id) ? 2 : 1);
+    const pending = [...state.build.steps].sort((a, b) => group(a.id) - group(b.id));
+    const labels = ['Home, Start here and the instructor guide', 'Weekly overviews and instructor notes', 'Course pages, reorganised'];
+    const used = [...new Set(pending.map(s => group(s.id)))];
+    startJob('Building the course', used.map(g => labels[g]));
+    try {
+      for (const step of pending) {
+        const g = group(step.id);
+        const inGroup = pending.filter(s => group(s.id) === g);
+        jobStep(used.indexOf(g), `${inGroup.indexOf(step) + 1} of ${inGroup.length}: ${step.label}`);
+        status(`Building the course: ${step.label}…`);
+        state.build = await api(base() + '/build/step', { method: 'POST', json: { provider: state.provider, step: step.id } });
+      }
+      endJob('Finished');
+    } catch (error) {
+      endJob(error.message === CANCELLED ? 'Cancelled' : 'Stopped', error);
+      throw error;
+    }
+    renderBuild();
+  }
+
+  for (const card of document.querySelectorAll('.cc-provider[data-mode]')) {
+    card.addEventListener('click', () => { state.buildMode = card.dataset.mode; renderBuild(); });
+  }
+  $('cc-build-propose').addEventListener('click', () => {
+    if (!aiReady()) { requireAiPrompt(); return; }
+    if (state.build && state.build.build
+      && !window.confirm('Propose a new structure? This replaces the current structure and any pages built so far.')) return;
+    run('Proposing the week-by-week structure… this can take a minute or two', async () => {
+      state.build = await api(base() + '/build/blueprint', { method: 'POST', json: { provider: state.provider, mode: state.buildMode } });
+      renderBuild();
+    }, 'Structure proposed. Review the weeks, move items if you like, then build the course.');
+  });
+  $('cc-build-save').addEventListener('click', () => {
+    const blueprint = state.build.build.blueprint;
+    if (state.build.ready && !window.confirm('Saving changes to the structure clears the pages built so far. Continue?')) return;
+    run('Saving the structure…', async () => {
+      const weeks = blueprint.weeks.map(w => ({ title: $(`cc-week-${w.number}`).value.trim() || w.title, theme: w.theme,
+        objectives: w.objectives, hours: w.hours, instructor_focus: w.instructor_focus, items: [] }));
+      for (const select of $('cc-build-weeks').querySelectorAll('select[data-item]')) {
+        const number = Number(select.value);
+        if (number > 0) weeks[number - 1].items.push(select.dataset.item);
+      }
+      state.build = await api(base() + '/build/blueprint', { method: 'PUT', json: { weeks } });
+      renderBuild();
+    }, 'Structure saved. Build the course when you are ready.');
+  });
+  $('cc-build-run').addEventListener('click', async () => {
+    if (!aiReady()) { requireAiPrompt(); return; }
+    if (state.busy) { showError('Something is still running. Wait for it to finish, or cancel it at the top of the page.'); return; }
+    const cost = await estimateText('build_' + state.build.build.mode, 1, { structure: 'current' });
+    if (!window.confirm('Build the course now? Progress shows at the top of the page, where you can cancel; '
+      + 'finished steps are kept.\n\n' + cost)) return;
+    run('Building the course…', buildCourse,
+      'Course built. Preview it, review the pages below, then download it or import it into Canvas.');
+  });
+  $('cc-build-discard').addEventListener('click', () => {
+    if (!window.confirm('Discard the built course? The previews and downloads go back to your course with its revised documents.')) return;
+    run('Discarding…', async () => {
+      state.build = await api(base() + '/build', { method: 'DELETE' });
+      renderBuild();
+    }, 'The built course was discarded.');
+  });
 
   // Read-only share link.
   function renderShare(share) {

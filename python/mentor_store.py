@@ -349,7 +349,7 @@ class MentorStore:
 
     def save_consultant_fields(self, owner, id, *, release=False, **fields):
         """Save plan/documents/consultation fields; optionally release the AI lease."""
-        allowed = {"consultation", "plan", "documents"}
+        allowed = {"consultation", "plan", "documents", "build"}
         if not set(fields) <= allowed:
             raise ValueError("Invalid consultant field.")
         values = {key: _object({"value": value})["value"] for key, value in fields.items()}

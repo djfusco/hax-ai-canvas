@@ -37,6 +37,27 @@ class FakeAI:
     def preflight_structured(self, *args, **kwargs):
         return {}
     def call_structured(self, system, prompt, schema, max_tokens=4096):
+        if "building a complete course site" in system:
+            keys = set(schema["properties"])
+            if "weeks" in keys:
+                ids = [line[2:].split(" | ")[0] for line in prompt.splitlines() if line.startswith("- ") and " | " in line]
+                half = len(ids) // 2
+                return json.dumps({"summary": "Two weeks: foundations, then argument.", "weeks": [
+                    {"title": "Foundations", "theme": "Cells.", "objectives": ["Describe a cell."], "items": ids[:half],
+                     "hours": 6, "instructor_focus": "Prior knowledge."},
+                    {"title": "Argument", "theme": "Evidence.", "objectives": ["Argue from evidence."], "items": ids[half:],
+                     "hours": 7, "instructor_focus": "Feedback."}]})
+            if "home_html" in keys:
+                return json.dumps({"home_html": "<h2>Welcome to BIO 101</h2><p>Start with <a href=\"item:module--start\">Start here</a>.</p>",
+                                   "start_here_html": "<h2>How this course works</h2><p>One week at a time.</p>",
+                                   "instructor_guide_html": "<h2>Design</h2><p>Weekly rhythm.</p>"})
+            if "overview_html" in keys:
+                return json.dumps({"overview_html": "<p>This week builds the foundations.</p>",
+                                   "instructor_notes_html": "<p>Bring examples.</p>"})
+            if "pages" in keys:
+                ids = [line.split()[1] for line in prompt.splitlines() if line.startswith("ITEM ")]
+                return json.dumps({"pages": [{"item_id": i, "html": "<h2>Purpose</h2><p>Why this matters.</p>"} for i in ids]})
+            return json.dumps({"html": "<p>Shorter page.</p>"})
         if "drafting a Course Improvement Plan" in system:
             return json.dumps({"vision": "A first-year course where students build arguments from evidence.",
                                "outcomes": [{"text": "Construct a scientific argument from evidence.", "note": "unchanged"}],
@@ -419,6 +440,37 @@ test('quick AI version, site preview and asking for changes', { skip: !playwrigh
     await page.click('#cc-quality-run');
     await page.locator('#cc-quality-results .cc-a11y-item').first().waitFor();
     assert.match(await page.textContent('#cc-quality-summary'), /\d+ passed, \d+ to review, \d+ failed/);
+
+    // Build the finished course: choose Full, propose the structure, move an item, build, review.
+    await page.click('#tab-build');
+    await page.waitForFunction(() => /About \d/.test(document.querySelector('.cc-build-cost[data-mode="full"]').textContent));
+    await page.click('.cc-provider[data-mode="full"]');
+    assert.equal(await page.getAttribute('.cc-provider[data-mode="full"]', 'aria-checked'), 'true');
+    assert.equal(await page.getAttribute('.cc-provider[data-provider="openai"]', 'aria-checked'), 'true', 'AI choice unchanged');
+    await page.click('#cc-build-propose');
+    await page.locator('#cc-build-structure').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('.cc-build-week').count() >= 2, true);
+    await page.fill('#cc-week-1', 'Foundations of cells');
+    await page.locator('#cc-build-weeks select[data-item]').first().selectOption('2');
+    await page.click('#cc-build-save');
+    await page.waitForFunction(() => document.querySelector('#cc-status').textContent.includes('Structure saved'));
+    assert.equal(await page.inputValue('#cc-week-1'), 'Foundations of cells');
+    await page.click('#cc-build-run');
+    await page.locator('#cc-build-pages').waitFor({ state: 'visible', timeout: 60000 });
+    assert.match(await page.textContent('#cc-progress-time'), /^Finished after/);
+    assert.equal(await page.textContent('#cc-build-run'), 'Built');
+    await page.locator('.cc-build-page summary').first().click();
+    await page.locator('.cc-build-page .cc-doc-frame').first().waitFor();
+    assert.ok(await page.locator('.cc-build-page:has-text("Instructor only")').count() > 0);
+    const built = await page.context().newPage();
+    await built.goto(ORIGIN + await page.getAttribute('#cc-build-preview', 'href'));
+    assert.match(await built.textContent('body'), /Welcome to BIO 101/);
+    assert.match(await built.textContent('nav'), /Week 1: Foundations of cells/);
+    await built.click('text=Week 1: Foundations of cells');
+    assert.match(await built.textContent('main'), /This week's checklist/);
+    await shot(built, '9-built-week');
+    await built.close();
+    await shot(page, '8-build');
 
     // The plan shows the advisor's decisions as AI-decided, and they can be changed.
     await page.click('#tab-plan');

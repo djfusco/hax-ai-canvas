@@ -80,14 +80,15 @@ def check_html(html):
     return found
 
 
-def course_report(model, documents):
-    """Accessibility report for the whole course site."""
+def course_report(model, documents, workspace=None):
+    """Accessibility report for the whole course site (the built course when there is one)."""
     import course_site
-    items = course_site.build_items(model, documents)
+    items = (course_site.course_items(model, workspace) if workspace is not None
+             else course_site.build_items(model, documents))
     results, totals = [], {}
     for item in items:
-        if item["id"].startswith("module--"):
-            continue  # generated module overview pages
+        if item["id"].startswith("module--") and "audience" not in item:
+            continue  # the plain site's generated module lists (built courses' section pages are checked)
         issues = check_html(item["html"])
         for rule, count in issues.items():
             totals[rule] = totals.get(rule, 0) + count
@@ -107,7 +108,7 @@ def course_report(model, documents):
     severity_rank = {"error": 0, "warning": 1}
     results.sort(key=lambda r: (min(severity_rank[i["severity"]] for i in r["issues"]), r["title"]))
     return {
-        "items_checked": sum(1 for i in items if not i["id"].startswith("module--")),
+        "items_checked": sum(1 for i in items if not i["id"].startswith("module--") or "audience" in i),
         "items_with_issues": len(results), "totals": totals,
         "errors": sum(c for rule, c in totals.items() if RULES[rule][0] == "error"),
         "warnings": sum(c for rule, c in totals.items() if RULES[rule][0] == "warning"),

@@ -52,11 +52,26 @@ Design: [`docs/superpowers/specs/2026-11-09-course-consultant.md`](docs/superpow
    a new tab; **Preview in HAX theme** renders it with HAX's Clean One theme in
    the browser (sandboxed, no HAX server); **Download course site (ZIP)** is a
    static HAX site plus an offline preview.
-8. **Accessibility check.** Automatic WCAG 2.1 checks of what students would
+8. **Build the course.** The AI turns the course, consultation, plan and revised
+   documents into a finished week-by-week course that follows standard
+   course-design practice (backward design, alignment, a steady weekly rhythm,
+   Quality Matters, TILT, UDL, balanced workload): a home page, Start here, a
+   course schedule, an overview and exact checklist (due dates, points, from
+   the course, never from the AI) for every week, and an instructor section
+   (guide, design decisions, weekly notes) that students don't see. Two
+   options: **Essential** (structure, front pages, weekly overviews and notes;
+   course pages keep their content in a consistent layout) and **Full** (every
+   course page reorganised into purpose / what to do / how it's graded / using
+   AI / getting help, keeping the instructor's wording, with a "keeps N% of the
+   original wording" measure). Review the proposed structure (rename weeks,
+   move items) before building; afterwards edit, revise or restore any page.
+   Both previews, the ZIP downloads and the Canvas import file (one module per
+   section, for a new course) all use the built course.
+9. **Accessibility check.** Automatic WCAG 2.1 checks of what students would
    see (image descriptions, link text, headings, tables, frames, captions),
    with **Fix with AI** for any page. It states what automatic checks cannot
    judge.
-9. **Share a read-only link** with a colleague or instructional designer:
+10. **Share a read-only link** with a colleague or instructional designer:
    the plan and course site, no sign-in needed, revocable at any time
    (90-day maximum).
 
@@ -97,6 +112,8 @@ decision, ask for changes to any document, and the site follows.
 | Revised documents (syllabus, assignment, rubric; exports) | `python/revised_documents.py` |
 | Institutional Canvas connection (OAuth2, server-side reader) | `python/canvas_oauth.py`, `python/canvas_collect.py` |
 | Whole-course site (preview, download) | `python/course_site.py` |
+| Building the finished course | `python/course_build.py` |
+| Model suggestions | `python/model_advice.py` |
 | Canvas import package (.imscc) | `python/canvas_package.py` |
 | Accessibility checks | `python/accessibility.py` |
 | AI cost estimate | `python/cost_estimate.py` |
@@ -127,6 +144,9 @@ from its catalog; nothing is silently truncated.
 | `GET /accessibility` | Accessibility report |
 | `GET /estimate?action=quick\|turn\|plan\|document\|bulk&count=n&provider=p` | AI use and cost estimate |
 | `GET/POST/DELETE /share` → `/mentor/shared/<signed>/` | Read-only share link |
+| `GET /build`, `POST /build/blueprint` (`mode: essential\|full`), `PUT /build/blueprint` | Build the course: state, propose the structure, edit it |
+| `POST /build/step` (`step: front\|week-N\|week-N-items-K`), `DELETE /build` | Build one step; discard the built course |
+| `PUT /build/pages/<id>`, `POST /build/pages/<id>/revise\|restore` | Edit, revise or restore a built page |
 | `POST /intake/canvas` | Import a course through the institutional Canvas connection |
 | `POST /consult` with `mode: auto` / `advance` | Quick AI version advisor turn / move on to the next topic |
 | `POST /consult/proposals/accept-all` | Quick AI version: accept proposals as AI-decided |

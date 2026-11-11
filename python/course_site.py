@@ -106,6 +106,15 @@ def build_items(model, documents):
     return items
 
 
+def course_items(model, workspace):
+    """The course as students and instructors will see it: the AI-built course when one has been
+    built, otherwise the original course with approved revisions in place."""
+    import course_build
+    documents = workspace.get("documents") or []
+    built = course_build.site_items(workspace.get("build"), model, documents, workspace.get("consultation"))
+    return built if built is not None else build_items(model, documents)
+
+
 def locations(items):
     """Stable page addresses (same across requests), keyed by item id."""
     result, seen = {}, set()
@@ -160,7 +169,7 @@ def package(workspace_id, title, items, destination):
     }
     for item in items:
         slug = places[item["id"]].split("/")[1]
-        files[f"pages/{slug}/index.html"] = hax_preview.page_html(item)
+        files[f"pages/{slug}/index.html"] = hax_preview.page_html(item, places)
         files[f"preview/{places[item['id']]}"] = render(title, items, places[item["id"]])
     package_path = destination.with_suffix(".zip")
     with zipfile.ZipFile(package_path, "x", zipfile.ZIP_DEFLATED) as archive:

@@ -39,7 +39,8 @@ def site_json(site_id, title, items, places):
             "id": "item-" + slug, "title": item["title"], "location": f"pages/{slug}/index.html",
             "slug": slug, "order": order, "indent": 0 if is_module or item.get("module") is None else 1,
             "parent": None if is_module or item.get("module") is None else parent,
-            "description": "", "metadata": {"published": True, "revised": bool(item.get("revised"))},
+            "description": "", "metadata": {"published": True, "revised": bool(item.get("revised")),
+                         "audience": item.get("audience", "student")},
         })
         if is_module:
             parent = "item-" + slug
@@ -88,10 +89,17 @@ def config_js():
             "globalThis.__appCDNBlockFallback = true;\n")
 
 
-def page_html(item):
-    """A HAX page is an HTML fragment (already sanitized by the course pipeline)."""
-    from imscc_content import sanitize_import_html
-    return sanitize_import_html(item["html"])
+def page_html(item, places=None):
+    """A HAX page is an HTML fragment (already sanitized by the course pipeline).
+
+    Links between course pages become links to the other page's address in
+    the HAX site (``<slug>``, relative to the site root, as HAX routes them).
+    """
+    from imscc_content import rewrite_import_item_links, sanitize_import_html
+    html = sanitize_import_html(item["html"])
+    if places:
+        html = rewrite_import_item_links(html, {i: loc.split("/")[1] for i, loc in places.items()})
+    return html
 
 
 def policy(app_origin):

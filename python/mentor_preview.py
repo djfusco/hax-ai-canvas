@@ -59,6 +59,11 @@ a:focus-visible, summary:focus-visible { outline: 3px solid #d27400; outline-off
   .preview-main { padding: 24px 20px; }
   .preview-pagination { flex-direction: column; }
 }
+.preview-nav-section { margin-top: 10px; font-weight: 700; }
+.preview-nav-child { padding-left: 14px; }
+.preview-nav-instructor a { color: #7a4b00; }
+.preview-badge { display: inline-block; background: #fff1d6; color: #7a4b00; border-radius: 999px; padding: 0 8px; font-weight: 700; }
+.item-facts { list-style: none; padding: 10px 14px; border: 1px solid #dce4ee; border-radius: 10px; background: #f7f9fc; display: flex; flex-wrap: wrap; gap: 6px 18px; }
 """
 PREVIEW_STYLE_HASH = "sha256-" + base64.b64encode(hashlib.sha256(PREVIEW_CSS.encode()).digest()).decode()
 TYPE_LABELS = {"pages": "Page", "assignments": "Assignment", "discussions": "Discussion",
@@ -123,13 +128,30 @@ def render_preview(workspace, locations, assets, *, position=None):
     current = items[position] if position is not None else None
     course_title = escape(workspace["title"])
     title = escape(current["title"]) if current else course_title
+    built = bool(items) and items[0]["id"] == "home" and "audience" in items[0]
     navigation = [f'<li><a href="{prefix}index.html"' +
-                  (' aria-current="page"' if current is None else '') + '>Course overview</a></li>']
+                  (' aria-current="page"' if current is None else '') +
+                  f'>{"Home" if built else "Course overview"}</a></li>']
     for number, item in enumerate(items, 1):
+        if built and item["id"] == "home":
+            continue  # the home page is the site's front page
         active = ' aria-current="page"' if current and current["id"] == item["id"] else ""
-        navigation.append(f'<li><a href="{prefix}{locations[item["id"]]}"{active}>'
-                          f'{number}. {escape(item["title"])}</a></li>')
-    if current is None:
+        label = escape(item["title"]) if built else f'{number}. {escape(item["title"])}'
+        if built:
+            css = "preview-nav-section" if item["id"].startswith("module--") else "preview-nav-child"
+            if item.get("audience") == "instructor":
+                css += " preview-nav-instructor"
+            navigation.append(f'<li class="{css}"><a href="{prefix}{locations[item["id"]]}"{active}>{label}</a></li>')
+        else:
+            navigation.append(f'<li><a href="{prefix}{locations[item["id"]]}"{active}>{label}</a></li>')
+    if current is None and built:
+        content, _ = preview_content(items[0]["html"], locations, assets, prefix)
+        sections = "".join(f'<li><a href="{locations[item["id"]]}">{escape(item["title"])}'
+                           f'<small>{"Instructor only" if item.get("audience") == "instructor" else "Section"}</small></a></li>'
+                           for item in items if item["id"].startswith("module--"))
+        body = (f'<h1>{course_title}</h1><article class="approved-content">{content}</article>'
+                f'<h2>Course sections</h2><ol class="preview-item-list">{sections}</ol>')
+    elif current is None:
         cards = "".join(f'<li><a href="{locations[item["id"]]}">{escape(item["title"])}'
                         f'<small>{escape(TYPE_LABELS.get(item.get("type"), "Course item"))}</small></a></li>'
                         for item in items)
@@ -144,7 +166,8 @@ def render_preview(workspace, locations, assets, *, position=None):
         first = soup.find(True)
         if first and first.name == "h1" and first.get_text(" ", strip=True) == current["title"].strip():
             first.decompose()
-        previous = '<a href="../../index.html" rel="prev">Previous: Course overview</a>' if position == 0 else (
+        previous = '<a href="../../index.html" rel="prev">Previous: Course overview</a>' if position == 0 or (
+            built and position == 1) else (
             f'<a href="{prefix}{locations[items[position - 1]["id"]]}" rel="prev">'
             f'Previous: {escape(items[position - 1]["title"])}</a>')
         following = (f'<a href="{prefix}{locations[items[position + 1]["id"]]}" rel="next">'
@@ -152,8 +175,12 @@ def render_preview(workspace, locations, assets, *, position=None):
                          '<a href="../../index.html">Back to course overview</a>')
         notice = ('<p class="preview-note">Some linked resources were not retained, or are hosted externally. '
                   'They are not loaded in this private preview.</p>') if unavailable else ""
-        body = (f'<p class="preview-kicker">Item {position + 1} of {len(items)} · '
-                f'{escape(TYPE_LABELS.get(current.get("type"), "Course item"))}</p><h1>{title}</h1>'
+        kind = escape(TYPE_LABELS.get(current.get("type"), "Course item"))
+        kicker = (f'{escape(current.get("module") or "Course")} · {kind}' if built
+                  else f'Item {position + 1} of {len(items)} · {kind}')
+        if current.get("audience") == "instructor":
+            kicker = '<span class="preview-badge">Instructor only</span> ' + kicker
+        body = (f'<p class="preview-kicker">{kicker}</p><h1>{title}</h1>'
                 f'<article class="approved-content">{soup}</article>{notice}'
                 f'<nav class="preview-pagination" aria-label="Previous and next items">{previous}{following}</nav>')
     return ('<!doctype html><html lang="en"><head><meta charset="utf-8">'

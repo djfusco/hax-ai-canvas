@@ -511,11 +511,16 @@ def to_docx(document):
     return buffer.getvalue()
 
 
-def zip_package(course_title, documents, plan_files):
-    """A ZIP of approved documents (HTML and Word) plus the plan files."""
+def zip_package(course_title, documents, plan_files, course_pages=None):
+    """A ZIP of approved documents (HTML and Word) plus the plan files.
+
+    With ``course_pages`` (the built course's site items) it also holds every
+    page of the finished course as HTML, in order, and the whole course as one
+    Word document; instructor-only pages go in their own folder.
+    """
     from improvement_plan import safe_filename
     approved = [d for d in documents if d["status"] == "approved"]
-    if not approved:
+    if not approved and not course_pages:
         raise DocumentError("Approve at least one document first.")
     buffer = io.BytesIO()
     used = set()
@@ -529,7 +534,26 @@ def zip_package(course_title, documents, plan_files):
             used.add(stem)
             archive.writestr(f"documents/{stem}.html", standalone_html(document))
             archive.writestr(f"documents/{stem}.docx", to_docx(document))
+        if course_pages:
+            from urllib.parse import quote
+            from imscc_content import rewrite_import_item_links
+            combined, names = [], {}
+            for number, page in enumerate(course_pages, 1):
+                folder = "instructor/" if page.get("audience") == "instructor" else ""
+                names[page["id"]] = folder + f"{number:03d} " + safe_filename(page["title"], "") + ".html"
+            for page in course_pages:
+                up = "../" if names[page["id"]].startswith("instructor/") else ""
+                links = {i: up + quote(name, safe="/") for i, name in names.items()}
+                html = rewrite_import_item_links(page["html"], links)
+                archive.writestr("course/" + names[page["id"]], standalone_html(dict(page, html=html)))
+                label = " (instructor only)" if page.get("audience") == "instructor" else ""
+                combined.append(f"<h1>{escape(page['title'])}{label}</h1>{page['html']}")
+            archive.writestr("course/Whole course.docx",
+                             to_docx({"title": course_title, "html": "".join(combined)}))
         archive.writestr("README.txt", f"{course_title}: revised documents from Course Consultant.\n"
-                                       "Each document is provided as HTML (paste into Canvas) and Word.\n")
+                                       "Each document is provided as HTML (paste into Canvas) and Word.\n"
+                                       + ("course/ holds every page of the built course in order, and the whole "
+                                          "course as one Word document; course/instructor/ is for the instructor "
+                                          "only.\n" if course_pages else ""))
     return buffer.getvalue()
 

@@ -91,6 +91,7 @@
       <button role="tab" id="tab-consult" aria-controls="view-consult" aria-selected="false" type="button">2 · Consultation</button>
       <button role="tab" id="tab-plan" aria-controls="view-plan" aria-selected="false" type="button">3 · Plan <span id="cc-plan-count" class="cc-count" hidden></span></button>
       <button role="tab" id="tab-docs" aria-controls="view-docs" aria-selected="false" type="button">4 · Revised documents</button>
+      <button role="tab" id="tab-build" aria-controls="view-build" aria-selected="false" type="button">5 · Build the course</button>
     </nav>
 
     <!-- 1. Course -->
@@ -322,6 +323,59 @@
         <button id="cc-bulk-run" type="button" class="cc-btn">Revise selected</button>
       </details>
       <div id="cc-documents"></div>
+    </section>
+
+    <!-- 5. Build the finished course -->
+    <section id="view-build" role="tabpanel" aria-labelledby="tab-build" hidden>
+      <div class="cc-head">
+        <div><h1>Build the course</h1>
+          <p class="cc-muted">The AI turns your course, the consultation, the plan and the revised documents into a
+            finished week-by-week course: a home page, a Start here page, a course schedule, an overview and checklist
+            for every week, and an instructor section that students don't see. Once built, both previews, the
+            downloads and the Canvas import file all use the built course.</p></div>
+        <div class="cc-row">
+          <a id="cc-build-preview" class="cc-btn cc-btn-quiet" href="#" target="_blank" rel="noopener">Preview course site ↗</a>
+          <button type="button" class="cc-btn cc-btn-quiet cc-hax-preview">Preview in HAX theme ↗</button>
+        </div>
+      </div>
+      <article class="cc-card" id="cc-build-start">
+        <h2>1. Choose how much the AI builds</h2>
+        <div class="cc-providers" role="radiogroup" aria-label="Build option">
+          <button type="button" class="cc-provider" role="radio" aria-checked="true" data-mode="essential">
+            <strong>Essential (cheaper)</strong>
+            <span>Week-by-week structure, home and Start here pages, a schedule, weekly overviews with checklists, and
+              instructor notes. Your course pages keep their content, shown in a consistent layout.</span>
+            <span class="cc-build-cost" data-mode="essential"></span></button>
+          <button type="button" class="cc-provider" role="radio" aria-checked="false" data-mode="full">
+            <strong>Full (more AI work)</strong>
+            <span>Everything in Essential, and every course page is reorganised into the same student-friendly
+              structure (purpose, what to do, how it's graded, using AI, getting help), keeping your wording.</span>
+            <span class="cc-build-cost" data-mode="full"></span></button>
+        </div>
+        <button id="cc-build-propose" type="button" class="cc-btn">Propose the week-by-week structure</button>
+      </article>
+      <article class="cc-card cc-plan" id="cc-build-structure" hidden>
+        <h2>2. Review the structure</h2>
+        <p id="cc-build-summary" class="cc-muted"></p>
+        <div id="cc-build-weeks"></div>
+        <div class="cc-row">
+          <button id="cc-build-save" type="button" class="cc-btn cc-btn-quiet">Save changes to the structure</button>
+          <button id="cc-build-run" type="button" class="cc-btn">Build the course</button>
+        </div>
+        <p id="cc-build-estimate" class="cc-muted"></p>
+      </article>
+      <article class="cc-card cc-plan" id="cc-build-pages" hidden>
+        <div class="cc-head"><h2>3. Review the pages</h2>
+          <div class="cc-row">
+            <a id="cc-build-imscc" class="cc-btn cc-btn-quiet" href="#" download>Download for Canvas (.imscc)</a>
+            <a id="cc-build-zip" class="cc-btn cc-btn-quiet" href="#" download>Download course site (ZIP)</a>
+            <a id="cc-build-docs" class="cc-btn cc-btn-quiet" href="#" download>Download all pages (Word + HTML)</a>
+          </div></div>
+        <p class="cc-muted">Import the Canvas file into a new, empty Canvas course: everything arrives unpublished, as
+          one module per section. Keep the instructor section unpublished.</p>
+        <div id="cc-build-list"></div>
+        <button id="cc-build-discard" type="button" class="cc-btn cc-btn-quiet">Discard the built course</button>
+      </article>
     </section>
   </div>
 </div>

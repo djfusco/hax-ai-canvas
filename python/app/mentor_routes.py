@@ -1086,7 +1086,7 @@ def create_mentor_blueprint(root_provider):
         if model is None:
             return jsonify({"error": "Import a course first."}), 404
         title = ((workspace.get("source") or {}).get("course_model") or {}).get("title") or workspace["title"]
-        html = course_site.render(title, course_site.build_items(model, workspace.get("documents") or []), path)
+        html = course_site.render(title, course_site.course_items(model, workspace), path)
         if html is None:
             return jsonify({"error": "That page is not part of the course site."}), 404
         response = Response(html, mimetype="text/html")
@@ -1133,7 +1133,7 @@ def create_mentor_blueprint(root_provider):
         if model is None:
             return respond("Not found.", "text/plain", 404)
         title = ((workspace.get("source") or {}).get("course_model") or {}).get("title") or workspace["title"]
-        items = course_site.build_items(model, workspace.get("documents") or [])
+        items = course_site.course_items(model, workspace)
         places = course_site.locations(items)
         if path in ("", "index.html") or ("." not in path.rsplit("/", 1)[-1] and not path.startswith("pages/")):
             # The site shell; HAX's router reads page addresses like ".../week-1" itself.
@@ -1148,7 +1148,7 @@ def create_mentor_blueprint(root_provider):
             item = next((i for i in items if slug and places[i["id"]].split("/")[1] == slug), None)
             if item is None:
                 return respond("Not found.", "text/plain", 404)
-            body, mimetype = hax_preview.page_html(item), "text/html"
+            body, mimetype = hax_preview.page_html(item, places), "text/html"
         return respond(body, mimetype)
 
     # ── Read-only share link (signed, revocable) ─────────────────────────────
@@ -1216,7 +1216,7 @@ def create_mentor_blueprint(root_provider):
         if path == "plan":
             return respond(ip.render_html(title, workspace.get("plan") or ip.new_plan(), workspace.get("consultation")))
         if path.startswith("site/"):
-            html = course_site.render(title, course_site.build_items(model, workspace.get("documents") or []),
+            html = course_site.render(title, course_site.course_items(model, workspace),
                                       path[len("site/"):] or "index.html")
             if html is None:
                 return respond("<!doctype html><title>Not found</title><p>That page is not part of the course site.</p>", 404)
@@ -1286,7 +1286,101 @@ def create_mentor_blueprint(root_provider):
         return jsonify(ce.estimate(request.args.get("action", ""), model=model, course_map=course_map,
                                    consult_state=workspace.get("consultation"), history=history,
                                    plan=workspace.get("plan"), count=count, capabilities=capabilities,
-                                   pricing=pricing))
+                                   pricing=pricing, documents=workspace.get("documents") or [],
+                                   build=workspace.get("build") if request.args.get("structure") == "current" else None))
+
+    # ── Build the finished course ────────────────────────────────────────────
+
+    def build_view(workspace):
+        import course_build as cb
+        build = workspace.get("build")
+        model = store().get_course_model(g.owner, workspace["id"])
+        items = {i["id"]: i["title"] for i in (model or {}).get("items", [])}
+        return {"build": build, "busy": bool(workspace.get("consult_busy")),
+                "steps": cb.steps(build, model, workspace.get("documents") or []) if build and model else [],
+                "ready": bool(build and model and cb.site_items(build, model, workspace.get("documents") or []) is not None),
+                "item_titles": items, "modes": list(cb.MODES)}
+
+    @bp.get("/api/workspaces/<workspace_id>/build")
+    def build_get(workspace_id):
+        return jsonify(build_view(store().get(g.owner, workspace_id)))
+
+    @bp.post("/api/workspaces/<workspace_id>/build/blueprint")
+    def build_blueprint(workspace_id):
+        import course_build as cb
+        data = payload()
+
+        def work(workspace, ai):
+            model, _ = course_inputs(workspace)
+            return {"build": cb.blueprint(cb.new_build(data.get("mode")), model, workspace.get("consultation"),
+                                          workspace.get("plan"), workspace.get("documents") or [], ai)}
+        workspace, error = ai_step(workspace_id, data, work)
+        return error or jsonify(build_view(workspace))
+
+    @bp.put("/api/workspaces/<workspace_id>/build/blueprint")
+    def build_blueprint_edit(workspace_id):
+        """The instructor edits the structure (titles, order, which week an item is in)."""
+        import course_build as cb
+        data = payload()
+        workspace = store().get(g.owner, workspace_id)
+        model, _ = course_inputs(workspace)
+        build = workspace.get("build")
+        if not build or not build.get("blueprint"):
+            raise ValueError("Propose the course structure first.")
+        try:
+            blueprint = cb.validate_blueprint({"summary": build["blueprint"]["summary"], "weeks": data.get("weeks")}, model)
+        except cb.BuildError as exc:
+            raise ValueError(str(exc)) from None
+        build = dict(build, blueprint=blueprint, pages=[], done=[], updated_at=cb._now())
+        return jsonify(build_view(store().save_consultant_fields(g.owner, workspace_id, build=build)))
+
+    @bp.post("/api/workspaces/<workspace_id>/build/step")
+    def build_step(workspace_id):
+        import course_build as cb
+        data = payload()
+
+        def work(workspace, ai):
+            model, _ = course_inputs(workspace)
+            return {"build": cb.run_step(workspace.get("build"), data.get("step"), model, workspace.get("consultation"),
+                                         workspace.get("plan"), workspace.get("documents") or [], ai)}
+        workspace, error = ai_step(workspace_id, data, work)
+        return error or jsonify(build_view(workspace))
+
+    @bp.put("/api/workspaces/<workspace_id>/build/pages/<page_id>")
+    def build_page_edit(workspace_id, page_id):
+        import course_build as cb
+        workspace = store().get(g.owner, workspace_id)
+        try:
+            build = cb.edit_page(workspace.get("build"), page_id, payload().get("html"))
+        except cb.BuildError as exc:
+            raise ValueError(str(exc)) from None
+        return jsonify(build_view(store().save_consultant_fields(g.owner, workspace_id, build=build)))
+
+    @bp.post("/api/workspaces/<workspace_id>/build/pages/<page_id>/restore")
+    def build_page_restore(workspace_id, page_id):
+        import course_build as cb
+        workspace = store().get(g.owner, workspace_id)
+        try:
+            build = cb.restore_page(workspace.get("build"), page_id, payload().get("index"))
+        except cb.BuildError as exc:
+            raise ValueError(str(exc)) from None
+        return jsonify(build_view(store().save_consultant_fields(g.owner, workspace_id, build=build)))
+
+    @bp.post("/api/workspaces/<workspace_id>/build/pages/<page_id>/revise")
+    def build_page_revise(workspace_id, page_id):
+        import course_build as cb
+        data = payload()
+
+        def work(workspace, ai):
+            model, _ = course_inputs(workspace)
+            return {"build": cb.revise_page(workspace.get("build"), page_id, redact(data.get("instruction") or ""),
+                                            model, workspace.get("plan"), ai)}
+        workspace, error = ai_step(workspace_id, data, work)
+        return error or jsonify(build_view(workspace))
+
+    @bp.delete("/api/workspaces/<workspace_id>/build")
+    def build_delete(workspace_id):
+        return jsonify(build_view(store().save_consultant_fields(g.owner, workspace_id, build=None)))
 
     @bp.get("/api/workspaces/<workspace_id>/quality")
     def quality_report(workspace_id):
@@ -1305,7 +1399,7 @@ def create_mentor_blueprint(root_provider):
         model = store().get_course_model(g.owner, workspace_id)
         if model is None:
             return jsonify({"error": "Import a course first."}), 404
-        report = accessibility.course_report(model, workspace.get("documents") or [])
+        report = accessibility.course_report(model, workspace.get("documents") or [], workspace)
         for entry in report["items"]:
             entry["fix_instruction"] = accessibility.fix_instruction(entry)
         return jsonify(report)
@@ -1385,6 +1479,12 @@ def create_mentor_blueprint(root_provider):
                 model = store().get_course_model(g.owner, workspace_id)
                 if model is None:
                     raise ValueError("Import a course first.")
+                import course_build
+                built = course_build.site_items(workspace.get("build"), model, documents, workspace.get("consultation"))
+                if built and request.args.get("scope") != "revised":
+                    body, _ = canvas_package.build_course(title, model, documents, built)
+                    return file_response(body, ip.safe_filename(title + " course for Canvas", ".imscc"),
+                                         "application/zip")
                 body, _ = canvas_package.build(title, model, documents)
                 return file_response(body, ip.safe_filename(title + " revised for Canvas", ".imscc"),
                                      "application/zip")
@@ -1394,14 +1494,18 @@ def create_mentor_blueprint(root_provider):
                 if model is None:
                     raise ValueError("Import a course first.")
                 with tempfile.TemporaryDirectory(prefix="hax-package-") as temp:
-                    result = course_site.package(workspace_id, title, course_site.build_items(model, documents),
+                    result = course_site.package(workspace_id, title, course_site.course_items(model, workspace),
                                                  Path(temp) / "site")
                     body = Path(result["path"]).read_bytes()
                 return file_response(body, ip.safe_filename(title + " course site", ".zip"), "application/zip")
             plan = workspace.get("plan") or ip.new_plan()
             plan_files = [("Improvement plan.html", ip.render_html(title, plan, workspace.get("consultation"))),
                           ("Improvement plan.docx", ip.render_docx(title, plan, workspace.get("consultation")))]
-            return file_response(rd.zip_package(title, documents, plan_files),
+            import course_build
+            model = store().get_course_model(g.owner, workspace_id)
+            built = model and course_build.site_items(workspace.get("build"), model, documents,
+                                                      workspace.get("consultation"))
+            return file_response(rd.zip_package(title, documents, plan_files, built or None),
                             ip.safe_filename(title + " revised documents", ".zip"), "application/zip")
         except rd.DocumentError as exc:
             raise ValueError(str(exc)) from None

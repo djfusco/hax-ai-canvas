@@ -195,33 +195,46 @@ def build(course_title, model, documents):
             summary["pages"] += 1
 
     module_id = _id("module", course_title)
-    module_rows = "".join(
-        f"<item identifier=\"{_id('module-item', ref)}\"><content_type>{content}</content_type>"
-        f"<workflow_state>unpublished</workflow_state><title>{_x(title)}</title>"
-        f"<identifierref>{ref}</identifierref><position>{n}</position><new_tab/><indent>0</indent></item>"
-        for n, (ref, title, content) in enumerate(module_items, 1))
+    return _package(course_title + SUFFIX, [(module_id, MODULE_TITLE, module_items)], resources, files, rubrics,
+                    "Revised course items from Course Consultant."), summary
+
+
+def _package(manifest_title, modules, resources, files, rubrics, note):
+    """Write module_meta.xml, rubrics.xml, the manifest and the ZIP. ``modules`` is
+    [(identifier, title, [(resource ref, title, Canvas content type), ...]), ...]."""
+    module_xml = []
+    for position, (module_id, module_title, entries) in enumerate(modules, 1):
+        rows = "".join(
+            f"<item identifier=\"{_id('module-item', module_id, ref)}\"><content_type>{content}</content_type>"
+            f"<workflow_state>unpublished</workflow_state><title>{_x(title)}</title>"
+            f"<identifierref>{ref}</identifierref><position>{n}</position><new_tab/><indent>0</indent></item>"
+            for n, (ref, title, content) in enumerate(entries, 1))
+        module_xml.append(
+            f'<module identifier="{module_id}"><title>{_x(module_title)}</title>'
+            f"<workflow_state>unpublished</workflow_state><position>{position}</position>"
+            f"<require_sequential_progress>false</require_sequential_progress><locked>false</locked>"
+            f"<items>{rows}</items></module>")
     files["course_settings/module_meta.xml"] = (
-        f'<?xml version="1.0" encoding="UTF-8"?>\n<modules {CANVAS_SCHEMA}>\n<module identifier="{module_id}">'
-        f"<title>{MODULE_TITLE}</title><workflow_state>unpublished</workflow_state><position>1</position>"
-        f"<require_sequential_progress>false</require_sequential_progress><locked>false</locked>"
-        f"<items>{module_rows}</items></module>\n</modules>\n")
+        f'<?xml version="1.0" encoding="UTF-8"?>\n<modules {CANVAS_SCHEMA}>\n' + "\n".join(module_xml) + "\n</modules>\n")
     files["course_settings/rubrics.xml"] = (
         f'<?xml version="1.0" encoding="UTF-8"?>\n<rubrics {CANVAS_SCHEMA}>\n'
         + "\n".join(_rubric_xml(ref, rubric) for ref, rubric in rubrics) + "\n</rubrics>\n")
     files["course_settings/canvas_export.txt"] = (
-        "Revised course items from Course Consultant. Import with Course Settings > Import Course Content > "
-        "Common Cartridge 1.x Package.\n")
+        note + " Import with Course Settings > Import Course Content > Common Cartridge 1.x Package.\n")
     settings_files = "".join(f'<file href="course_settings/{n}"/>' for n in
                              ("canvas_export.txt", "module_meta.xml", "rubrics.xml"))
-    resources.insert(0, f'<resource identifier="{_id("settings", course_title)}" '
-                        f'type="associatedcontent/imscc_xmlv1p1/learning-application-resource" '
-                        f'href="course_settings/canvas_export.txt">{settings_files}</resource>')
-    organization = "".join(f'<item identifier="{_id("org-item", ref)}" identifierref="{ref}"><title>{_x(title)}</title></item>'
-                           for ref, title, _ in module_items)
+    resources = [f'<resource identifier="{_id("settings", manifest_title)}" '
+                 f'type="associatedcontent/imscc_xmlv1p1/learning-application-resource" '
+                 f'href="course_settings/canvas_export.txt">{settings_files}</resource>'] + resources
+    organization = "".join(
+        f'<item identifier="{module_id}"><title>{_x(module_title)}</title>'
+        + "".join(f'<item identifier="{_id("org-item", module_id, ref)}" identifierref="{ref}"><title>{_x(title)}</title></item>'
+                  for ref, title, _ in entries) + "</item>"
+        for module_id, module_title, entries in modules)
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     files["imsmanifest.xml"] = (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
-        f'<manifest identifier="{_id("manifest", course_title, stamp)}" '
+        f'<manifest identifier="{_id("manifest", manifest_title, stamp)}" '
         'xmlns="http://www.imsglobal.org/xsd/imsccv1p1/imscp_v1p1" '
         'xmlns:lom="http://ltsc.ieee.org/xsd/imsccv1p1/LOM/resource" '
         'xmlns:lomimscc="http://ltsc.ieee.org/xsd/imsccv1p1/LOM/manifest" '
@@ -231,17 +244,84 @@ def build(course_title, model, documents):
         'http://ltsc.ieee.org/xsd/imsccv1p1/LOM/resource http://www.imsglobal.org/profile/cc/ccv1p1/LOM/ccv1p1_lomresource_v1p0.xsd '
         'http://ltsc.ieee.org/xsd/imsccv1p1/LOM/manifest http://www.imsglobal.org/profile/cc/ccv1p1/LOM/ccv1p1_lommanifest_v1p0.xsd">\n'
         "<metadata><schema>IMS Common Cartridge</schema><schemaversion>1.1.0</schemaversion>"
-        f"<lomimscc:lom><lomimscc:general><lomimscc:title><lomimscc:string>{_x(course_title)}{SUFFIX}"
+        f"<lomimscc:lom><lomimscc:general><lomimscc:title><lomimscc:string>{_x(manifest_title)}"
         "</lomimscc:string></lomimscc:title></lomimscc:general>"
         f"<lomimscc:lifeCycle><lomimscc:contribute><lomimscc:date><lomimscc:dateTime>{stamp}</lomimscc:dateTime>"
         "</lomimscc:date></lomimscc:contribute></lomimscc:lifeCycle></lomimscc:lom></metadata>\n"
         f'<organizations><organization identifier="org_1" structure="rooted-hierarchy">'
-        f'<item identifier="LearningModules"><item identifier="{module_id}"><title>{MODULE_TITLE}</title>'
-        f"{organization}</item></item></organization></organizations>\n"
+        f'<item identifier="LearningModules">{organization}</item></organization></organizations>\n'
         f"<resources>{''.join(resources)}</resources>\n</manifest>\n")
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("imsmanifest.xml", files.pop("imsmanifest.xml"))
         for name, body in files.items():
             archive.writestr(name, body)
-    return buffer.getvalue(), summary
+    return buffer.getvalue()
+
+
+def build_course(course_title, model, documents, items):
+    """The whole built course as a Canvas package: one module per section (Start here, each week,
+    resources, instructor), assignments with their settings and rubrics, and pages linked to each
+    other. Meant for a new, empty Canvas course; everything arrives unpublished."""
+    from imscc_content import rewrite_import_item_links
+    if not items:
+        raise PackageError("Build the course first.")
+    files, resources, rubrics, modules = {}, [], [], []
+    used, refs, links = set(), {}, {}
+    rubric_docs = {d.get("item_id"): d for d in _latest(documents) if d["kind"] == "rubric" and d.get("rubric")}
+    # Plan every resource first so pages can link to each other.
+    for item in items:
+        identifier = _id("built", item["id"])
+        is_assignment = item["id"] in model["assignments"] and item.get("type") == "assignments"
+        slug = _slug(item["title"], used)
+        refs[item["id"]] = (identifier, slug, is_assignment)
+        links[item["id"]] = (f"$CANVAS_OBJECT_REFERENCE$/assignments/{identifier}" if is_assignment
+                             else f"$WIKI_REFERENCE$/pages/{slug}")
+    summary = {"pages": 0, "assignments": 0, "rubrics": 0, "modules": 0}
+    current = None
+    for item in items:
+        if item["id"].endswith("--rubric"):
+            continue  # rubrics are attached to their assignment
+        identifier, slug, is_assignment = refs[item["id"]]
+        html = rewrite_import_item_links(item["html"], links)
+        if current is None or item["id"].startswith("module--") or item["id"] == "home":
+            if item["id"] == "home":
+                title = "Start here"
+            else:
+                title = item.get("module") or item["title"]
+            if current is None or current[1] != title:
+                current = (_id("built-module", title), title, [])
+                modules.append(current)
+        if is_assignment:
+            details = model["assignments"][item["id"]]
+            rubric_ref = None
+            if item["id"] in rubric_docs:
+                rubric_ref = _id("rubric", rubric_docs[item["id"]]["id"])
+                rubrics.append((rubric_ref, _rubric_from_document(rubric_docs[item["id"]])))
+            elif details.get("rubric_id") in model["rubrics"]:
+                rubric_ref = _id("rubric", details["rubric_id"])
+                rubrics.append((rubric_ref, model["rubrics"][details["rubric_id"]]))
+            html_path = f"{identifier}/{slug}.html"
+            files[html_path] = _assignment_html(item["title"], html)
+            files[f"{identifier}/assignment_settings.xml"] = _assignment_settings(identifier, item["title"],
+                                                                                  details, rubric_ref)
+            resources.append(
+                f'<resource identifier="{identifier}" type="associatedcontent/imscc_xmlv1p1/learning-application-resource" '
+                f'href="{html_path}"><file href="{html_path}"/><file href="{identifier}/assignment_settings.xml"/></resource>')
+            current[2].append((identifier, item["title"], "Assignment"))
+            summary["assignments"] += 1
+        else:
+            path = f"wiki_content/{slug}.html"
+            files[path] = _page_html(identifier, item["title"], html)
+            resources.append(f'<resource identifier="{identifier}" type="webcontent" href="{path}">'
+                             f'<file href="{path}"/></resource>')
+            current[2].append((identifier, item["title"], "WikiPage"))
+            summary["pages"] += 1
+    unique = {}
+    for ref, rubric in rubrics:
+        unique.setdefault(ref, rubric)
+    rubrics = list(unique.items())
+    summary["rubrics"], summary["modules"] = len(rubrics), len(modules)
+    note = (f"{course_title}: the course built with Course Consultant. Import into a new, empty Canvas course; "
+            "everything arrives unpublished, and the instructor section should stay unpublished.")
+    return _package(course_title, modules, resources, files, rubrics, note), summary
