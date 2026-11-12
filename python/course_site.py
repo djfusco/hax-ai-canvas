@@ -140,7 +140,7 @@ def render(title, items, path):
     return None
 
 
-def package(workspace_id, title, items, destination):
+def package(workspace_id, title, items, destination, theme_element=None):
     """The downloadable course site: a static HAX site plus an offline plain preview.
 
     Top level: HAX's site shell (index.html, config.js), a HAX-format site.json
@@ -157,7 +157,7 @@ def package(workspace_id, title, items, destination):
     files = {
         "index.html": hax_preview.index_html(title, "./"),
         "config.js": hax_preview.config_js(),
-        "site.json": json.dumps(hax_preview.site_json(workspace_id, title, items, places), indent=2),
+        "site.json": json.dumps(hax_preview.site_json(workspace_id, title, items, places, theme_element), indent=2),
         "preview/index.html": render(title, items, "index.html"),
         "README.txt": (
             f"{title}: course site from Course Consultant\n\n"

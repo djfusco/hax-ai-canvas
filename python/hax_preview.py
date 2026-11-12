@@ -18,8 +18,24 @@ import json
 import os
 
 DEFAULT_CDN = "https://cdn.hax.cloud/cdn/"
-THEME = {"element": "clean-one", "path": "@haxtheweb/clean-one/clean-one.js", "name": "Clean One",
-         "variables": {}}
+# HAX themes offered for the course site, chosen after rendering real built courses in each:
+# Learn Two (sidebar course outline) reads most like a course; the others are cleaner alternatives.
+THEMES = {
+    "learn-two-theme": ("Learn Two", "@haxtheweb/learn-two-theme/learn-two-theme.js"),
+    "clean-two": ("Clean Two", "@haxtheweb/clean-two/clean-two.js"),
+    "twenty-six-theme": ("Twenty Six", "@haxtheweb/twenty-six-theme/twenty-six-theme.js"),
+    "clean-one": ("Clean One", "@haxtheweb/clean-one/clean-one.js"),
+}
+DEFAULT_THEME = "learn-two-theme"
+
+
+def theme(element=None):
+    element = element if element in THEMES else DEFAULT_THEME
+    name, path = THEMES[element]
+    return {"element": element, "path": path, "name": name, "variables": {}}
+
+
+THEME = theme()
 TOKEN_SECONDS = 2 * 3600
 
 
@@ -28,7 +44,7 @@ def cdn():
     return value if value.endswith("/") else value + "/"
 
 
-def site_json(site_id, title, items, places):
+def site_json(site_id, title, items, places, theme_element=None):
     """HAX JSON Outline Schema manifest for the course site."""
     entries = []
     parent = None
@@ -47,7 +63,7 @@ def site_json(site_id, title, items, places):
     return {
         "id": site_id, "title": title, "author": "", "description": f"Course site for {title}",
         "license": "by-sa",
-        "metadata": {"site": {"name": title, "created": 0, "updated": 0}, "theme": THEME,
+        "metadata": {"site": {"name": title, "created": 0, "updated": 0}, "theme": theme(theme_element),
                      "node": {"fields": {}}},
         "items": entries,
     }

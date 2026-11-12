@@ -61,7 +61,7 @@ server.serve_forever()
   });
 }
 
-test('course renders as a HAX site with the Clean One theme, sandboxed', { skip: !playwright || !CDN_DIR, timeout: 120000 },
+test('course renders as a HAX site with the Learn Two theme, sandboxed', { skip: !playwright || !CDN_DIR, timeout: 120000 },
   async () => {
     const cdn = await cdnServer();
     const cdnUrl = `http://localhost:${cdn.address().port}/cdn/`;
@@ -113,14 +113,14 @@ with zipfile.ZipFile(sys.argv[1], "w", zipfile.ZIP_DEFLATED) as z:
       }
       // HAX's site builder loads the theme declared in site.json and renders the course (in shadow DOM;
       // Playwright's text locators pierce it).
-      await preview.waitForFunction(() => document.querySelector('clean-one') && customElements.get('clean-one'),
+      await preview.waitForFunction(() => document.querySelector('learn-two-theme') && customElements.get('learn-two-theme'),
         null, { timeout: 60000 });
       await preview.getByText('Office hours Tuesday').first().waitFor({ timeout: 30000 });
       await preview.getByText('Week 1', { exact: true }).first().waitFor();
       await preview.getByText('Week 2', { exact: true }).first().waitFor();
       // Deep link to an assignment page, as HAX's router addresses it.
       const manifest = await (await preview.request.get(url + 'site.json')).json();
-      assert.equal(manifest.metadata.theme.element, 'clean-one');
+      assert.equal(manifest.metadata.theme.element, 'learn-two-theme');
       const essay = manifest.items.find(item => item.title === 'Essay');
       assert.ok(essay.parent, 'assignments sit under their module');
       await preview.goto(url + essay.slug);
@@ -184,7 +184,7 @@ with zipfile.ZipFile(sys.argv[1], "w", zipfile.ZIP_DEFLATED) as z:
       await new Promise(resolve => site.listen(0, '127.0.0.1', resolve));
       const hax = await browser.newPage({ viewport: { width: 1280, height: 900 } });
       await hax.goto(`http://127.0.0.1:${site.address().port}/`);
-      await hax.waitForFunction(() => customElements.get('clean-one'), null, { timeout: 60000 });
+      await hax.waitForFunction(() => customElements.get('learn-two-theme'), null, { timeout: 60000 });
       await hax.getByText('Office hours Tuesday').first().waitFor({ timeout: 30000 });
       await hax.getByText('Week 2', { exact: true }).first().waitFor();
       if (process.env.CC_SCREENSHOTS) await hax.screenshot({ path: path.join(process.env.CC_SCREENSHOTS, '10-hax-download.png') });

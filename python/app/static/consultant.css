@@ -163,3 +163,4 @@
 .cc-build-cost { color: var(--cc-accent); }
 .cc-build-page summary { cursor: pointer; }
 .cc-build-page[open] summary { margin-bottom: 8px; }
+.cc .cc-build-theme { width: auto; margin-top: 10px; }

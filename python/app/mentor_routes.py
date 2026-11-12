@@ -1141,7 +1141,7 @@ def create_mentor_blueprint(root_provider):
         elif path == "config.js":
             body, mimetype = hax_preview.config_js(), "text/javascript"
         elif path == "site.json":
-            body = json.dumps(hax_preview.site_json(claim["workspace"], title, items, places))
+            body = json.dumps(hax_preview.site_json(claim["workspace"], title, items, places, workspace.get("site_theme")))
             mimetype = "application/json"
         else:
             slug = path.split("/")[1] if path.startswith("pages/") and path.endswith("/index.html") else None
@@ -1293,13 +1293,16 @@ def create_mentor_blueprint(root_provider):
 
     def build_view(workspace):
         import course_build as cb
+        import hax_preview
         build = workspace.get("build")
         model = store().get_course_model(g.owner, workspace["id"])
         items = {i["id"]: i["title"] for i in (model or {}).get("items", [])}
         return {"build": build, "busy": bool(workspace.get("consult_busy")),
                 "steps": cb.steps(build, model, workspace.get("documents") or []) if build and model else [],
                 "ready": bool(build and model and cb.site_items(build, model, workspace.get("documents") or []) is not None),
-                "item_titles": items, "modes": list(cb.MODES)}
+                "item_titles": items, "modes": list(cb.MODES),
+                "theme": workspace.get("site_theme") or hax_preview.DEFAULT_THEME,
+                "themes": [{"id": k, "name": v[0]} for k, v in hax_preview.THEMES.items()]}
 
     @bp.get("/api/workspaces/<workspace_id>/build")
     def build_get(workspace_id):
@@ -1385,6 +1388,15 @@ def create_mentor_blueprint(root_provider):
     @bp.delete("/api/workspaces/<workspace_id>/build")
     def build_delete(workspace_id):
         return jsonify(build_view(store().save_consultant_fields(g.owner, workspace_id, build=None)))
+
+    @bp.put("/api/workspaces/<workspace_id>/site-theme")
+    def site_theme(workspace_id):
+        import hax_preview
+        element = payload().get("theme")
+        if element not in hax_preview.THEMES:
+            raise ValueError("Choose one of the offered themes.")
+        store().save_consultant_fields(g.owner, workspace_id, site_theme=element)
+        return jsonify({"theme": element})
 
     @bp.get("/api/workspaces/<workspace_id>/quality")
     def quality_report(workspace_id):
@@ -1499,7 +1511,7 @@ def create_mentor_blueprint(root_provider):
                     raise ValueError("Import a course first.")
                 with tempfile.TemporaryDirectory(prefix="hax-package-") as temp:
                     result = course_site.package(workspace_id, title, course_site.course_items(model, workspace),
-                                                 Path(temp) / "site")
+                                                 Path(temp) / "site", workspace.get("site_theme"))
                     body = Path(result["path"]).read_bytes()
                 return file_response(body, ip.safe_filename(title + " course site", ".zip"), "application/zip")
             plan = workspace.get("plan") or ip.new_plan()

@@ -398,6 +398,7 @@ test('quick AI version, site preview and asking for changes', { skip: !playwrigh
     await site.close();
     await page.click('#tab-docs');
     await page.locator('#view-docs').waitFor({ state: 'visible' });
+    await page.waitForFunction(() => !document.body.hasAttribute('aria-busy'));
 
     // Ask for a change to the syllabus; it returns to draft for review.
     await page.fill('.cc-ask-input', 'Add my office hours');

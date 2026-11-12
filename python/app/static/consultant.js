@@ -1134,6 +1134,10 @@
 
   // ── 5. Build the finished course ─────────────────────────────────────────
   $('cc-docs-next').addEventListener('click', () => selectTab('build'));
+  $('cc-build-theme').addEventListener('change', event => run('Saving the theme…', async () => {
+    await api(base() + '/site-theme', { method: 'PUT', json: { theme: event.target.value } });
+    state.build.theme = event.target.value;
+  }, 'Theme saved. The HAX preview and the downloaded course site use it.'));
   const FRAME_STYLE = `<!doctype html><meta charset=utf-8><style>body{font:15px/1.55 system-ui;margin:12px;color:#1d2330}
     table{border-collapse:collapse}td,th{border:1px solid #ccd;padding:6px;vertical-align:top;text-align:left}
     .item-facts{list-style:none;padding:8px 12px;border:1px solid #dce4ee;border-radius:8px;display:flex;flex-wrap:wrap;gap:4px 16px}
@@ -1161,6 +1165,9 @@
       card.setAttribute('aria-checked', String(card.dataset.mode === state.buildMode));
     }
     $('cc-build-preview').href = base() + '/site/index.html';
+    const themes = $('cc-build-theme');
+    themes.replaceChildren(...(view.themes || []).map(t => el('option', { value: t.id,
+      text: `Theme: ${t.name}${t.id === 'learn-two-theme' ? ' (recommended)' : ''}`, selected: t.id === view.theme })));
     const blueprint = build && build.blueprint;
     $('cc-build-structure').hidden = !blueprint;
     $('cc-build-pages').hidden = !view.ready;

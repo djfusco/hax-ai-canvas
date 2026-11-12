@@ -203,6 +203,12 @@ class CourseBuildTests(unittest.TestCase):
         week_item = next(i for i in items if i["id"] == "module--week-1")
         self.assertIn(f'href="{places["page-11"].split("/")[1]}"', hax_preview.page_html(week_item, places))
 
+    def test_repeated_title_headings_are_removed(self):
+        self.assertEqual(cb.without_title_heading("<h2>Welcome to Week 2: Data Models</h2><p>x</p>", "Week 2: Data Models"),
+                         "<p>x</p>")
+        kept = "<h2>Learning objectives</h2><p>x</p>"
+        self.assertEqual(cb.without_title_heading(kept, "Week 2: Data Models"), kept)
+
     def test_kept_share(self):
         original = "<p>Write a 1500 word essay about cell biology using two sources.</p>"
         self.assertEqual(cb.kept_share(original, "<h2>What to do</h2>" + original), 1.0)
@@ -304,3 +310,10 @@ class BuildApiTests(unittest.TestCase):
         self.assertFalse(view["ready"])
         view = self.call("DELETE", self.base + "/build")
         self.assertIsNone(view["build"])
+        # The HAX theme applies to the HAX site (default Learn Two).
+        self.assertEqual(view["theme"], "learn-two-theme")
+        self.call("PUT", self.base + "/site-theme", {"theme": "nope"}, expected=400)
+        self.call("PUT", self.base + "/site-theme", {"theme": "clean-two"})
+        self.assertEqual(self.call("GET", self.base + "/build")["theme"], "clean-two")
+        site_zip = zipfile.ZipFile(io.BytesIO(self.client.get(self.base + "/documents/export?format=hax").data))
+        self.assertEqual(json.loads(site_zip.read("site.json"))["metadata"]["theme"]["element"], "clean-two")
