@@ -44,10 +44,13 @@ def settings(environ=None):
     missing = [name for name in required if not env.get(name)]
     if missing:
         raise HostedSetupError("Configure deployment variables: " + ", ".join(missing))
-    for key in ("session_secret", "invite_code"):
+    # The session secret signs identities and links, so it must be long and random. The invitation
+    # code is only a gate that people type (attempts are rate-limited, and accounts still verify their
+    # email), so a short, memorable code is allowed.
+    for key, minimum in (("session_secret", 32), ("invite_code", 6)):
         value = env[names[key]]
-        if len(value) < 32 or any(ord(c) < 32 for c in value):
-            raise HostedSetupError(names[key] + " must contain at least 32 printable characters.")
+        if len(value.strip()) < minimum or any(ord(c) < 32 for c in value):
+            raise HostedSetupError(f"{names[key]} must contain at least {minimum} printable characters.")
     if env[names["session_secret"]] == env[names["invite_code"]]:
         raise HostedSetupError("Use different values for the session secret and the invitation code.")
     try:

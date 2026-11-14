@@ -326,7 +326,9 @@ def create_mentor_blueprint(root_provider):
         if not limiter(g.hosted_config, peer):
             return jsonify({"error": "Too many admission attempts. Please wait five minutes."}), 429
         code = data.get("code", "")
-        if not isinstance(code, str) or not hmac.compare_digest(code, g.hosted_config.invite_code):
+        # Forgiving comparison: surrounding spaces and letter case do not matter.
+        expected = g.hosted_config.invite_code.strip().casefold().encode()
+        if not isinstance(code, str) or not hmac.compare_digest(code.strip().casefold().encode(), expected):
             return jsonify({"error": "Invalid beta invitation code."}), 401
         g.admitted = True
         g.mentor_cookie = g.mentor_signer.dumps({"token": g.mentor_token, "admitted": True})

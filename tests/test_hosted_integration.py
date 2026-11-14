@@ -119,6 +119,22 @@ class HostedApiTests(unittest.TestCase):
         self.assertEqual(response.headers["Location"], "https://mentor.example/mentor")
 
 
+class SimpleInvitationCodeTests(HostedApiTests):
+    def setUp(self):
+        super().setUp()
+        extra = patch.dict(os.environ, {"HAX_BETA_ACCESS_CODE": "Faculty2026"})
+        extra.start()
+        self.addCleanup(extra.stop)
+
+    def test_admission_and_removed_endpoints(self):
+        self.request("/mentor/api/login", {"code": "Faculty2025"}, expected=401)
+        self.request("/mentor/api/login", {"code": "  faculty2026 "})
+        self.assertTrue(self.get("/mentor/api/session").json["authenticated"])
+
+    test_alternate_entry_hosts_redirect_to_canonical_without_query_or_cookie = None
+    test_alias_posts_still_reject_origin_and_never_redirect_credentials = None
+
+
 class HostedConfigurationTests(unittest.TestCase):
     def test_missing_and_invalid_config_never_echoes_values(self):
         with self.assertRaises(HostedSetupError) as missing:
@@ -129,6 +145,18 @@ class HostedConfigurationTests(unittest.TestCase):
         with self.assertRaises(HostedSetupError) as invalid:
             settings(env)
         self.assertNotIn("secret@", str(invalid.exception))
+
+    def test_short_memorable_invitation_codes(self):
+        env = fixture_environment()
+        env["HAX_BETA_ACCESS_CODE"] = "Faculty2026"
+        self.assertEqual(settings(env).invite_code, "Faculty2026")
+        env["HAX_BETA_ACCESS_CODE"] = "abc"
+        with self.assertRaises(HostedSetupError):
+            settings(env)
+        env["HAX_BETA_ACCESS_CODE"] = "Faculty2026"
+        env["HAX_SESSION_SECRET"] = "short-secret"
+        with self.assertRaises(HostedSetupError):
+            settings(env)
 
     def test_removed_pipeline_variables_are_not_required(self):
         env = fixture_environment()
