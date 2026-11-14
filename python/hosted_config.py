@@ -38,7 +38,9 @@ def settings(environ=None):
     mode = env.get("HAX_AUTH_MODE", "neon")
     if mode not in ("neon", "browser-beta"):
         raise HostedSetupError("HAX_AUTH_MODE must be neon or browser-beta.")
-    required = [*names.values()]
+    # The invitation code is optional with email accounts: without it, anyone who verifies their
+    # email can sign in. Browser-only mode has no accounts, so it always needs the code.
+    required = [name for key, name in names.items() if key != "invite_code" or mode == "browser-beta"]
     if mode == "neon":
         required.append("NEON_AUTH_BASE_URL")
     missing = [name for name in required if not env.get(name)]
@@ -48,10 +50,12 @@ def settings(environ=None):
     # code is only a gate that people type (attempts are rate-limited, and accounts still verify their
     # email), so a short, memorable code is allowed.
     for key, minimum in (("session_secret", 32), ("invite_code", 6)):
-        value = env[names[key]]
+        value = env.get(names[key], "")
+        if key == "invite_code" and not value:
+            continue
         if len(value.strip()) < minimum or any(ord(c) < 32 for c in value):
             raise HostedSetupError(f"{names[key]} must contain at least {minimum} printable characters.")
-    if env[names["session_secret"]] == env[names["invite_code"]]:
+    if env[names["session_secret"]] == env.get(names["invite_code"]):
         raise HostedSetupError("Use different values for the session secret and the invitation code.")
     try:
         Fernet(env["HAX_MENTOR_ENCRYPTION_KEY"].encode())
@@ -70,6 +74,6 @@ def settings(environ=None):
             validate_auth_url(auth_url)
         except ValueError:
             raise HostedSetupError("NEON_AUTH_BASE_URL must be the HTTPS Auth Base URL from Neon.") from None
-    return HostedSettings(**{key: env[name] for key, name in names.items()},
+    return HostedSettings(**{key: env.get(name, "") for key, name in names.items()},
                           auth_url=auth_url, auth_mode=mode)
 

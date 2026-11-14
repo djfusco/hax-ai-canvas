@@ -104,6 +104,15 @@ class AccountTests(unittest.TestCase):
         return self.post("auth/verify-code", {"email": email, "code": "123456",
                                              "claim_browser": claim}, client)
 
+    def test_without_an_invitation_code_email_sign_in_is_enough(self):
+        os.environ.pop("HAX_BETA_ACCESS_CODE")
+        self.assertFalse(self.session()["invite_required"])
+        self.assertFalse(self.session()["authenticated"], "email verification is still required")
+        self.post("workspaces", {"title": "Denied"}, expected=401)
+        self.sign_in(invite=False)
+        self.assertTrue(self.session()["authenticated"])
+        self.post("workspaces", {"title": "Alice course"}, expected=201)
+
     def test_invitation_alone_does_not_authorize_account_work(self):
         self.post("login", {"code": self.env["HAX_BETA_ACCESS_CODE"]})
         self.assertTrue(self.session()["account_required"])

@@ -158,6 +158,14 @@ class HostedConfigurationTests(unittest.TestCase):
         with self.assertRaises(HostedSetupError):
             settings(env)
 
+    def test_invitation_code_is_optional_with_email_accounts(self):
+        env = fixture_environment()
+        env.pop("HAX_BETA_ACCESS_CODE")
+        with self.assertRaises(HostedSetupError):
+            settings(env)  # browser-only mode has no accounts, so it still needs a code
+        env.update(HAX_AUTH_MODE="neon", NEON_AUTH_BASE_URL="https://ep-fixture.neonauth.us-east-1.aws.neon.tech/neondb/auth")
+        self.assertEqual(settings(env).invite_code, "")
+
     def test_removed_pipeline_variables_are_not_required(self):
         env = fixture_environment()
         self.assertEqual(settings(env).origin, "https://mentor.example")

@@ -56,7 +56,7 @@ Notes:
 | `NEON_AUTH_BASE_URL` | Neon Auth Base URL |
 | `HAX_APP_ORIGIN` | Exact production origin, `https://…`, no trailing slash |
 | `HAX_SESSION_SECRET` | Random, 32+ characters; signs browser identities and links |
-| `HAX_BETA_ACCESS_CODE` | Invitation code new users enter once: 6+ characters, easy to type (case and surrounding spaces are ignored), different from the session secret |
+| `HAX_BETA_ACCESS_CODE` | Optional invitation code new users enter once before email sign-in: 6+ characters, case and spaces ignored. Leave it unset to let anyone with a verified email sign in (required only with `HAX_AUTH_MODE=browser-beta`) |
 | `HAX_MENTOR_ENCRYPTION_KEY` | Fernet key encrypting saved AI keys; keep it, or saved keys become unreadable |
 | `HAX_AUTH_MODE` | Optional: `neon` (default, email accounts) or `browser-beta` |
 | `HAX_ALLOWED_AI_HOSTS` | Optional: reviewed institutional AI gateway hosts |

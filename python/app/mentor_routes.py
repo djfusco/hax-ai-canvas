@@ -193,7 +193,8 @@ def create_mentor_blueprint(root_provider):
         token = identity.get("token") if isinstance(identity, dict) else identity
         if not isinstance(token, str) or not re.fullmatch(r"[a-f0-9]{64}", token):
             token = secrets.token_hex(32)
-        g.admitted = not hosted_mode() or (
+        # Without an invitation code configured, everyone is admitted (email sign-in still applies).
+        g.admitted = not hosted_mode() or not g.hosted_config.invite_code or (
             isinstance(identity, dict) and identity.get("admitted") is True
         )
         g.mentor_token, g.mentor_signer = token, signer
@@ -319,6 +320,8 @@ def create_mentor_blueprint(root_provider):
     def login():
         if not hosted_mode():
             return jsonify({"authenticated": True})
+        if not g.hosted_config.invite_code:
+            return jsonify({"authenticated": not g.account_mode, "account_required": g.account_mode})
         from hosted_auth import allow_login_attempt
         data = payload()
         limiter = current_app.config.get("HOSTED_LOGIN_LIMITER", allow_login_attempt)
