@@ -164,3 +164,5 @@
 .cc-build-page summary { cursor: pointer; }
 .cc-build-page[open] summary { margin-bottom: 8px; }
 .cc .cc-build-theme { width: auto; margin-top: 10px; }
+.cc-hax-lite { margin-top: 12px; max-width: 640px; }
+.cc-hax-lite h3 { margin: 0 0 4px; }

@@ -93,6 +93,8 @@ class FakeAI:
 ai_client.AIClient = FakeAI
 import app as web
 from model_capabilities import resolve_capabilities
+import httpx
+web.app.config.update(HAX_LITE_TRANSPORT=httpx.MockTransport(lambda request: httpx.Response(404, json={"error": "Not found"})))
 web.app.config.update(MENTOR_DATA_ROOT=sys.argv[1], MODEL_DISCOVERY=lambda provider, saved: {
     "models": [{"id": "gpt-4o", "name": "GPT-4o", "compatibility": "text",
                 "capabilities": resolve_capabilities("openai", "gpt-4o")}], "manual_allowed": False})
@@ -480,6 +482,14 @@ test('quick AI version, site preview and asking for changes', { skip: !playwrigh
     await shot(built, '9-built-week');
     await built.close();
     await shot(page, '8-build');
+
+    // Publish to HAX Lite: the form asks for the address, path and title; a HAX Lite with publishing
+    // switched off gives a clear message.
+    await page.click('#cc-hax-lite-open');
+    await page.fill('#cc-hax-lite-address', 'https://lite.test');
+    await page.fill('#cc-hax-lite-slug', 'bio-101');
+    await page.click('#cc-hax-lite button[type=submit]');
+    await page.waitForFunction(() => /does not accept published sites/.test(document.querySelector('#cc-error').textContent));
 
     // The plan shows the advisor's decisions as AI-decided, and they can be changed.
     await page.click('#tab-plan');

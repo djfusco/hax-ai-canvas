@@ -67,6 +67,10 @@ Design: [`docs/superpowers/specs/2026-11-09-course-consultant.md`](docs/superpow
    move items) before building; afterwards edit, revise or restore any page.
    Both previews, the ZIP downloads and the Canvas import file (one module per
    section, for a new course) all use the built course.
+   **Publish to HAX Lite** (step 5) copies the course site into the person's HAX Lite account
+   as a new site, using HAX Lite's "connect and approve" flow: the person approves on their
+   HAX Lite; Course Consultant's server exchanges the approval for a one-use pass, uploads the
+   course-site ZIP and waits for the import. The pass is kept only for that request.
 9. **Accessibility check.** Automatic WCAG 2.1 checks of what students would
    see (image descriptions, link text, headings, tables, frames, captions),
    with **Fix with AI** for any page. It states what automatic checks cannot
@@ -115,6 +119,7 @@ decision, ask for changes to any document, and the site follows.
 | Building the finished course | `python/course_build.py` |
 | Model suggestions | `python/model_advice.py` |
 | Canvas import package (.imscc) | `python/canvas_package.py` |
+| Publish to HAX Lite | `python/hax_lite_publish.py` |
 | Accessibility checks | `python/accessibility.py` |
 | AI cost estimate | `python/cost_estimate.py` |
 | Consultant quality evaluation | `scripts/evaluate_consultant.py`, `python/quality_checks.py` |
@@ -144,6 +149,7 @@ from its catalog; nothing is silently truncated.
 | `GET /accessibility` | Accessibility report |
 | `GET /estimate?action=quick\|turn\|plan\|document\|bulk&count=n&provider=p` | AI use and cost estimate |
 | `GET/POST/DELETE /share` → `/mentor/shared/<signed>/` | Read-only share link |
+| `POST /hax-lite/start` → HAX Lite approval → `/mentor/hax-lite/callback` → `POST /mentor/api/hax-lite/finish` | Publish to HAX Lite (see `HAX_LITE_PUBLISH_CONTRACT.md` in haxiam-orchestrator) |
 | `GET /build`, `POST /build/blueprint` (`mode: essential\|full`), `PUT /build/blueprint` | Build the course: state, propose the structure, edit it |
 | `POST /build/step` (`step: front\|week-N\|week-N-items-K`), `DELETE /build` | Build one step; discard the built course |
 | `PUT /build/pages/<id>`, `POST /build/pages/<id>/revise\|restore` | Edit, revise or restore a built page |

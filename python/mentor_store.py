@@ -373,6 +373,25 @@ class MentorStore:
                               "updated_at": _now()}
         return self._change(owner, id, transition)
 
+    def set_publish_pending(self, owner, id, pending):
+        """Remember one pending 'Publish to HAX Lite' approval (state, PKCE verifier, addresses).
+        Never holds a HAX Lite pass. Starting again replaces it."""
+        pending = _object(pending)
+        return self._change(owner, id, lambda state: state.update(hax_lite_pending=pending))
+
+    def take_publish_pending(self, owner, id, state_value):
+        """Use the pending approval once: returns it if ``state_value`` matches, and clears it either way."""
+        import hmac as _hmac
+        found = {}
+
+        def transition(state):
+            pending = state.pop("hax_lite_pending", None)
+            if (isinstance(pending, dict) and isinstance(state_value, str)
+                    and _hmac.compare_digest(pending.get("state", "").encode(), state_value.encode())):
+                found.update(pending)
+        self._change(owner, id, transition)
+        return found or None
+
     def release_consult(self, owner, id):
         return self._change(owner, id, lambda state: state.update(consult_busy=None))
 

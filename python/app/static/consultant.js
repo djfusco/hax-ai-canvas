@@ -1334,6 +1334,30 @@
     run('Building the course…', buildCourse,
       'Course built. Preview it, review the pages below, then download it or import it into Canvas.');
   });
+  // Publish to HAX Lite: the server checks the HAX Lite, keeps the approval details, and sends the
+  // browser to HAX Lite to approve; HAX Lite returns to /mentor/hax-lite/callback to finish.
+  const haxLiteToggle = open => {
+    $('cc-hax-lite').hidden = !open;
+    $('cc-hax-lite-open').setAttribute('aria-expanded', String(open));
+    if (open) {
+      try { $('cc-hax-lite-address').value ||= localStorage.getItem('cc-hax-lite-address') || ''; } catch (_) { /* optional */ }
+      $('cc-hax-lite-address').focus();
+    }
+  };
+  $('cc-hax-lite-open').addEventListener('click', () => haxLiteToggle($('cc-hax-lite').hidden));
+  $('cc-hax-lite-cancel').addEventListener('click', () => haxLiteToggle(false));
+  $('cc-hax-lite').addEventListener('submit', event => {
+    event.preventDefault();
+    run('Checking your HAX Lite…', async () => {
+      const address = $('cc-hax-lite-address').value.trim();
+      const { authorize_url } = await api(base() + '/hax-lite/start', { method: 'POST', json: {
+        address, slug: $('cc-hax-lite-slug').value.trim(), title: $('cc-hax-lite-title').value.trim() } });
+      try { localStorage.setItem('cc-hax-lite-address', address); } catch (_) { /* optional */ }
+      status('Opening HAX Lite to approve publishing…');
+      window.location.assign(authorize_url);
+    });
+  });
+
   $('cc-build-discard').addEventListener('click', () => {
     if (!window.confirm('Discard the built course? The previews and downloads go back to your course with its revised documents.')) return;
     run('Discarding…', async () => {

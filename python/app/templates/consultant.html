@@ -355,8 +355,28 @@
           <div class="cc-row">
             <a id="cc-build-imscc" class="cc-btn cc-btn-quiet" href="#" download>Download for Canvas (.imscc)</a>
             <a id="cc-build-zip" class="cc-btn cc-btn-quiet" href="#" download>Download course site (ZIP)</a>
+            <button id="cc-hax-lite-open" type="button" class="cc-btn cc-btn-quiet" aria-expanded="false"
+              aria-controls="cc-hax-lite">Publish to HAX Lite</button>
             <a id="cc-build-docs" class="cc-btn cc-btn-quiet" href="#" download>Download all pages (Word + HTML)</a>
           </div></div>
+        <form id="cc-hax-lite" class="cc-card cc-hax-lite" hidden>
+          <h3>Publish to HAX Lite</h3>
+          <p class="cc-muted">Copies this course site into your HAX Lite account as a new site, which you then edit in HAX
+            Lite. You approve it on your HAX Lite; no password or token is typed here. Publishing again creates a new
+            site rather than updating this one.</p>
+          <label for="cc-hax-lite-address">Your HAX Lite address</label>
+          <input id="cc-hax-lite-address" type="url" required placeholder="https://lite.example.edu" autocomplete="url">
+          <label for="cc-hax-lite-slug">Site path</label>
+          <input id="cc-hax-lite-slug" required pattern="[a-z][a-z0-9-]{0,39}" maxlength="40" placeholder="ist-210-fall"
+            aria-describedby="cc-hax-lite-slug-help">
+          <p id="cc-hax-lite-slug-help" class="cc-muted">A lowercase letter, then up to 39 lowercase letters, digits or hyphens.</p>
+          <label for="cc-hax-lite-title">Title (optional)</label>
+          <input id="cc-hax-lite-title" maxlength="200" placeholder="Leave blank to use the course title">
+          <div class="cc-row">
+            <button type="submit" class="cc-btn">Connect and publish</button>
+            <button id="cc-hax-lite-cancel" type="button" class="cc-btn cc-btn-quiet">Cancel</button>
+          </div>
+        </form>
         <p class="cc-muted">Import the Canvas file into a new, empty Canvas course: everything arrives unpublished, as
           one module per section. Keep the instructor section unpublished.</p>
         <div id="cc-build-list"></div>

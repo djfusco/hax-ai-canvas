@@ -164,7 +164,7 @@ def create_mentor_blueprint(root_provider):
     def browser_identity():
         from mentor_credentials import CredentialVault, private_key
         if request.endpoint in ("mentor.openrouter_callback", "mentor.canvas_callback", "mentor.hax_preview_file",
-                                "mentor.shared_view"):
+                                "mentor.shared_view", "mentor.hax_lite_callback"):
             # Callbacks reached by cross-site redirects, and signed links opened by
             # people who are not signed in. Callbacks from openrouter.ai do not
             # carry our SameSite=Strict cookies. Never mint or replace an identity
@@ -1107,6 +1107,88 @@ def create_mentor_blueprint(root_provider):
 
     def preview_origin():
         return settings().origin if hosted_mode() else request.host_url.rstrip("/")
+
+    # ── Publish to HAX Lite (contract section 3A, "connect and approve") ─────
+
+    def hax_lite_callback_uri():
+        return f"{preview_origin()}/mentor/hax-lite/callback"
+
+    def course_site_zip(workspace_id, workspace, model):
+        """The same ZIP that "Download course site" builds."""
+        import course_site
+        title = ((workspace.get("source") or {}).get("course_model") or {}).get("title") or workspace["title"]
+        with tempfile.TemporaryDirectory(prefix="hax-package-") as temp:
+            result = course_site.package(workspace_id, title, course_site.course_items(model, workspace),
+                                         Path(temp) / "site", workspace.get("site_theme"))
+            return Path(result["path"]).read_bytes()
+
+    @bp.post("/api/workspaces/<workspace_id>/hax-lite/start")
+    def hax_lite_start(workspace_id):
+        import hax_lite_publish as hl
+        data = payload()
+        workspace = store().get(g.owner, workspace_id)
+        model = store().get_course_model(g.owner, workspace_id)
+        if model is None:
+            return jsonify({"error": "Import a course first."}), 404
+        try:
+            origin = hl.normalize_address(data.get("address"))
+            if current_app.config.get("HAX_LITE_TRANSPORT") is None:  # tests inject a fake HAX Lite
+                hl.check_public(origin, allow_local=not hosted_mode())
+            slug = hl.check_slug(data.get("slug"))
+            title = data.get("title") or ""
+            if not isinstance(title, str) or len(title) > 200:
+                raise hl.PublishError("Keep the title under 200 characters.")
+            info = hl.discover(origin, current_app.config.get("HAX_LITE_TRANSPORT"))
+            hl.check_size(info, len(course_site_zip(workspace_id, workspace, model)))
+        except hl.PublishError as exc:
+            return jsonify({"error": str(exc)}), 400
+        verifier, challenge = hl.pkce_pair()
+        state = hl.new_state(workspace_id)
+        redirect_uri = hax_lite_callback_uri()
+        store().set_publish_pending(g.owner, workspace_id, {
+            "state": state, "verifier": verifier, "redirect_uri": redirect_uri, "slug": slug, "title": title.strip(),
+            "origin": origin, "maxBytes": info["maxBytes"], "exchange_url": info["token"], "sites_url": info["sites"],
+            "imports_url": info["imports"], "expires": time.time() + hl.PENDING_SECONDS})
+        return jsonify({"authorize_url": hl.authorize_url(info, redirect_uri, challenge, state), "origin": origin})
+
+    @bp.get("/hax-lite/callback")
+    def hax_lite_callback():
+        # Reached by a redirect from HAX Lite, which does not carry our SameSite=Strict cookies.
+        # The page finishes with a same-site request (below).
+        return render_template("hax_lite_callback.html")
+
+    @bp.post("/api/hax-lite/finish")
+    def hax_lite_finish():
+        import hax_lite_publish as hl
+        data = payload()
+        try:
+            workspace_id = hl.workspace_from_state(data.get("state"))
+        except hl.PublishError as exc:
+            return jsonify({"error": str(exc)}), 400
+        try:
+            pending = store().take_publish_pending(g.owner, workspace_id, data.get("state"))
+        except WorkspaceNotFound:
+            pending = None
+        if pending is None:
+            return jsonify({"error": "This approval does not match a publish you started here, or it was already "
+                                     "used. Start publishing again from Course Consultant."}), 400
+        if pending.get("expires", 0) < time.time():
+            return jsonify({"error": "This publish request expired. Start publishing again."}), 400
+        if data.get("error") == "access_denied":
+            return jsonify({"error": "You chose not to allow publishing in HAX Lite, so nothing was published."}), 400
+        if data.get("error"):
+            return jsonify({"error": "HAX Lite did not approve publishing. Start again from Course Consultant."}), 400
+        workspace = store().get(g.owner, workspace_id)
+        model = store().get_course_model(g.owner, workspace_id)
+        if model is None:
+            return jsonify({"error": "Import a course first."}), 404
+        try:
+            result = hl.finish(pending, data.get("code"), course_site_zip(workspace_id, workspace, model),
+                               current_app.config.get("HAX_LITE_TRANSPORT"),
+                               sleep=current_app.config.get("HAX_LITE_SLEEP", time.sleep))
+        except hl.PublishError as exc:
+            return jsonify({"error": str(exc)}), 502
+        return jsonify({**result, "workspace_id": workspace_id, "haxLite": pending["origin"]})
 
     @bp.post("/api/workspaces/<workspace_id>/hax-preview")
     def hax_preview_link(workspace_id):

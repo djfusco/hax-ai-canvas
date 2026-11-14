@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Publishing to HAX Lite{% endblock %}
+{% block content %}
+<section class="handoff hax-lite-result">
+  <h1>Publishing to HAX Lite</h1>
+  <p id="hax-lite-status" role="status" aria-live="polite">Finishing the approval…</p>
+  <p id="hax-lite-error" role="alert" class="banner banner-warn" hidden></p>
+  <div id="hax-lite-result" hidden>
+    <p id="hax-lite-summary"></p>
+    <p id="hax-lite-link" hidden><a id="hax-lite-site" href="#" target="_blank" rel="noopener noreferrer">Open the site in HAX Lite ↗</a></p>
+    <div id="hax-lite-report"></div>
+  </div>
+  <p><a id="hax-lite-back" href="{{ url_for('mentor.page') }}">Back to Course Consultant</a></p>
+</section>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='hax-lite-callback.js') }}"></script>
+{% endblock %}

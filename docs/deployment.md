@@ -80,6 +80,18 @@ used; you can delete them, and the Blob store, from the Vercel project.
 - OpenRouter (PKCE, nothing to register): `https://<origin>/mentor/openrouter/callback`
 - Canvas developer key redirect URI: `https://<origin>/mentor/canvas/callback`
 
+## Publish to HAX Lite
+Course Consultant uses HAX Lite's "connect and approve" door. On each HAX Lite people publish to, a
+Platform Admin must, under Administration → "Registration and hosting defaults":
+1. tick **connect and approve**, and
+2. add Course Consultant's exact origin to **"Websites allowed to publish into accounts"**:
+   `https://hax-ai-canvas-claude.vercel.app` (or your custom domain, matching `HAX_APP_ORIGIN`).
+   For local development add `http://127.0.0.1:5050` and/or `http://localhost:5050`, whichever
+   address you open the app at.
+
+The approval returns to `{origin}/mentor/hax-lite/callback`. HAX Lite addresses must be https
+(http only for localhost, and only when the app runs locally); addresses on private networks are refused.
+
 ## 6. Smoke test after each deployment
 1. `/healthz` returns `{"configured": true}`.
 2. `/mentor`: enter the invitation code, sign in with an emailed code (from
