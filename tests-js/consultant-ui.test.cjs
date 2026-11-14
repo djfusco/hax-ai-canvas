@@ -432,6 +432,7 @@ test('quick AI version, site preview and asking for changes', { skip: !playwrigh
 
     // Share a read-only link (step 5); a visitor without the instructor's cookies can open it.
     await page.click('#tab-build');
+    assert.equal(await page.locator('#cc-hax-lite-open').isVisible(), true, 'publishing is offered before a build too');
     await page.click('#cc-share summary');
     await page.click('#cc-share-start');
     await page.locator('#cc-share-on').waitFor({ state: 'visible' });
