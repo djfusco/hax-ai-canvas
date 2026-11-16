@@ -103,6 +103,25 @@ Verified: a sample export with a real picture was imported through the app, its 
 served statically, and the page opened with HAX's components: the picture loaded from `files/`
 and the missing one showed its note. Not verified: a real HAX Lite publish with files.
 
+## Videos, review and the page check (phase 5)
+
+- **Videos.** The sanitizer removes every embedded frame, which silently dropped embedded videos
+  from pages. A YouTube or Vimeo frame now becomes `<video-player source="...">` (address
+  normalised to the watch page; any other address is refused). Plain outputs get a link.
+- **Spaced review** (PRAW `hax-practice-and-retrieval`: bring each idea back at growing distances;
+  page distance stands in for time). Each week page repeats one practice question from the week
+  before and one from three weeks before, and a closing "Course review" page takes one from every
+  week. No AI: the questions are the ones already checked against the course.
+- **Page check** (`python/page_audit.py`, no AI), from three PRAW audits:
+  - chunking: paragraphs over 200 words, runs over 400 words with no heading, lists over 7 items,
+    with the measured number so a person can judge;
+  - events of instruction (Gagné) per week, rated Complete, Partial or Presentational;
+  - UDL per week: students can respond, a visible goal and a prompt to reflect, more than text.
+  It lists what it cannot judge (whether media teaches, video length, learning guidance).
+
+Verified in a browser against HAX's CDN: the video player recognised the converted YouTube
+address, and week 2 showed week 1's question with its correct answer.
+
 ## Course design by Understanding by Design (phase 4)
 
 PRAW's rule: a HAX course whose goal is understanding is designed with the
@@ -149,10 +168,14 @@ Not verified: the quality of an AI-drafted design with a real model (tests use a
    grounded practice), plain forms, readable slugs.
 2. **Done (pictures):** see "Pictures" below. Still open: pictures for courses brought in through
    the browser extension or the Canvas connection; pictures in the Canvas import file.
-3. **Design in the site:** carry the course design (outcomes, alignment, accepted changes) as a
-   page hidden from the menu, or as a UbD manifest if HAX Lite accepts `.json` in `files/`.
+3. **Met by phase 4 for students:** the "Big ideas and essential questions" page carries the
+   public part of the design in HAX elements with OER Schema. The evidence map and
+   misunderstandings stay out of published sites, by the owner's decision that instructor material
+   is private. A machine-readable UbD manifest in `files/` is not built: it would publish that
+   private part, and whether HAX Lite accepts `.json` there is unknown.
 4. **Done (method):** see "Course design by Understanding by Design" below. Still open from this
    phase: PRAW's page-level audits (UDL beyond "students respond", chunking, instructional events,
    multimedia principles) as checks on built pages.
-5. **More elements** where they fit: `video-player` for linked video, `flash-card` for terms,
-   `lrn-vocab`, `grid-plate`; practice on item pages in the Full build.
+5. **Done in part:** `video-player`, spaced review and the page check (see "Videos, review and the
+   page check"). Still open: `flash-card` and `lrn-vocab` for key terms, `grid-plate`, practice on
+   item pages in the Full build, PRAW's multimedia-principles audit.

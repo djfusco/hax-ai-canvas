@@ -509,6 +509,13 @@ test('quick AI version, site preview and asking for changes', { skip: !playwrigh
     await shot(built, '9-built-week');
     await built.close();
     await shot(page, '8-build');
+    // Page check: HAX's own page audits, on what students will see.
+    await page.click('#cc-pagecheck summary');
+    await page.click('#cc-pagecheck-run');
+    await page.locator('#cc-pagecheck-results .cc-banner').waitFor();
+    assert.match(await page.textContent('#cc-pagecheck-summary'), /\d+ of \d+ pages to look at; 2 of 2 weeks with nothing to answer/);
+    assert.match(await page.textContent('#cc-pagecheck-results'), /Single-path/);
+    assert.match(await page.textContent('#cc-pagecheck-results'), /Missing: .*Ask the learner to do something/);
 
     // Publish to HAX Lite: the form asks for the address, path and title; a HAX Lite with publishing
     // switched off gives a clear message.

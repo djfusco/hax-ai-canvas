@@ -548,6 +548,31 @@
     renderAccessibility(await api(`/mentor/api/workspaces/${state.workspace.id}/accessibility`));
   }));
 
+  function renderPageCheck(report) {
+    const s = report.summary;
+    $('cc-pagecheck-summary').textContent = `${s.pages_with_findings} of ${s.pages_checked} pages to look at`
+      + (s.weeks ? `; ${s.no_response} of ${s.weeks} weeks with nothing to answer` : '');
+    const yes = flag => el('span', { class: 'cc-tag' + (flag ? ' good' : ' warn'), text: flag ? 'yes' : 'no' });
+    $('cc-pagecheck-results').replaceChildren(
+      el('p', { class: 'cc-banner', text: report.overall }),
+      ...(report.weeks.length ? [el('div', { class: 'cc-a11y-item' }, el('strong', { text: 'Each week' }),
+        el('ul', { class: 'cc-list' }, report.weeks.map(w => el('li', {},
+          el('strong', { text: w.title + ': ' }),
+          el('span', { class: 'cc-tag' + (w.rating === 'Complete' ? ' good' : ' warn'), text: w.rating }), ' ',
+          w.missing.length ? `Missing: ${w.missing.join('; ')}. ` : '',
+          'Students respond ', yes(w.udl.action), ' · a goal and a prompt to reflect ', yes(w.udl.engagement),
+          ' · more than text ', yes(w.udl.representation)))),
+        el('p', { class: 'cc-muted', text: `No response: ${report.fixes.no_response} Text only: ${report.fixes.text_only}` }))] : []),
+      ...report.pages.map(page => el('div', { class: 'cc-a11y-item' }, el('strong', { text: page.title }),
+        el('ul', { class: 'cc-list' }, page.findings.map(f => el('li', {}, f.detail + ' ', el('em', { text: f.fix })))))),
+      el('details', { class: 'cc-muted' }, el('summary', { text: 'What this check cannot judge' }),
+        el('ul', { class: 'cc-list' }, report.not_checked.map(text => el('li', { text })))),
+      el('p', { class: 'cc-muted', text: report.source }));
+  }
+  $('cc-pagecheck-run').addEventListener('click', () => run('Checking the pages…', async () => {
+    renderPageCheck(await api(`/mentor/api/workspaces/${state.workspace.id}/page-check`));
+  }));
+
   function renderQuality(report) {
     const { pass, warn, fail } = report.summary;
     $('cc-quality-summary').textContent = `${pass} passed, ${warn} to review, ${fail} failed`;

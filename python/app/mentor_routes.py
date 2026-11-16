@@ -1613,6 +1613,20 @@ def create_mentor_blueprint(root_provider):
         return jsonify(quality_checks.evaluate(model, workspace.get("consultation"), workspace.get("messages", []),
                                                workspace.get("plan"), workspace.get("documents") or []))
 
+    @bp.get("/api/workspaces/<workspace_id>/page-check")
+    def page_check(workspace_id):
+        """HAX's page audits (chunking, events of instruction, UDL) on what students will see. No AI."""
+        import course_site
+        import page_audit
+        from imscc_content import sanitize_import_html
+        workspace = store().get(g.owner, workspace_id)
+        model = store().get_course_model(g.owner, workspace_id)
+        if model is None:
+            return jsonify({"error": "Import a course first."}), 404
+        items = [dict(item, html=sanitize_import_html(item["html"]))
+                 for item in course_site.course_items(model, workspace, students_only=True)]
+        return jsonify(page_audit.audit(items, model, workspace.get("build")))
+
     @bp.get("/api/workspaces/<workspace_id>/accessibility")
     def accessibility_report(workspace_id):
         import accessibility

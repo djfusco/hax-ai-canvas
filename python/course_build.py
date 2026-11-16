@@ -705,7 +705,7 @@ def _week_step(build, number, model, consult_state, plan, documents, client):
         parts.append("<h2>Check your understanding</h2><p>Practice only: these are not graded. Try each one "
                      "before you look at the answer.</p>" + "".join(blocks))
     _set_page(build, _page(f"week-{number}", "week", title, "".join(parts) + checklist_html(week, model),
-                           week=number, practice=len(blocks), practice_dropped=dropped))
+                           week=number, practice=len(blocks), practice_dropped=dropped, practice_blocks=blocks))
     review = ""
     if blocks or dropped:
         review = ("<h2>Practice questions to review</h2><p>The week page has "
@@ -882,6 +882,46 @@ def _templated_item(model, documents, item):
     return (f"<ul class=\"item-facts\">{''.join(facts)}</ul>" if facts else "") + body
 
 
+REVIEW_HEADING = "<h2>Review from earlier weeks</h2>"
+CHECKLIST_HEADING = "<h2>This week's checklist</h2>"
+
+
+def spaced_review(pages, number):
+    """Practice questions from earlier weeks to bring back in week ``number`` (no AI).
+
+    Recalling an idea again after a gap is what makes it stick, so each week repeats one question
+    from the week before and one from three weeks before (PRAW, hax-practice-and-retrieval: page
+    distance stands in for time). The questions are the ones already checked against the course.
+    """
+    blocks = []
+    for back, pick in ((1, 0), (3, -1)):
+        earlier = (pages.get(f"week-{number - back}") or {}).get("practice_blocks") or []
+        if earlier and earlier[pick] not in blocks:
+            blocks.append(earlier[pick])
+    return blocks
+
+
+def _with_review(html, pages, number):
+    blocks = spaced_review(pages, number)
+    if not blocks or REVIEW_HEADING in html:
+        return html
+    review = (REVIEW_HEADING + "<p>You met these before. Answer from memory first; that is what makes them stick.</p>"
+              + "".join(blocks))
+    at = html.rfind(CHECKLIST_HEADING)
+    return html[:at] + review + html[at:] if at >= 0 else html + review
+
+
+def course_review_html(build, pages):
+    """A closing page that samples one question from every week (written by the app)."""
+    blocks = [(w["number"], (pages.get(f"week-{w['number']}") or {}).get("practice_blocks") or [])
+              for w in build["blueprint"]["weeks"]]
+    chosen = [(number, found[len(found) // 2]) for number, found in blocks if found]
+    if len(chosen) < 2:
+        return ""
+    return ("<p>One question from each week of the course. Try them from memory, then use the answers to decide "
+            "what to revisit.</p>" + "".join(f"<h2>From week {number}</h2>{block}" for number, block in chosen))
+
+
 def site_items(build, model, documents, consult_state=None, design=None):
     """The built course as ordered site items, or None if there is no built course yet.
 
@@ -934,9 +974,12 @@ def site_items(build, model, documents, consult_state=None, design=None):
             (f"<p>{escape(week['theme'])}</p>" if week["theme"] else "")
             + ("<h2>Learning objectives</h2><ul>" + "".join(f"<li>{escape(o)}</li>" for o in week["objectives"])
                + "</ul>" if week["objectives"] else "") + checklist_html(week, model))
-        add(f"module--week-{week['number']}", title, "pages", html, title)
+        add(f"module--week-{week['number']}", title, "pages", _with_review(html, pages, week["number"]), title)
         for item_id in week["items"]:
             add_course_item(item_id, title)
+    review = course_review_html(build, pages)
+    if review:
+        add("module--review", "Course review", "pages", review, "Course review")
     if build["blueprint"].get("unplaced"):
         add("module--resources", "Additional resources", "pages",
             "<p>Other material from the course.</p>", "Additional resources")

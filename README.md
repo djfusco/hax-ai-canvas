@@ -116,6 +116,16 @@ get the same content as ordinary HTML. Page addresses are readable
 (`week-1-cells`). Design and what was verified:
 [`docs/superpowers/specs/2026-11-16-hax-native-course.md`](docs/superpowers/specs/2026-11-16-hax-native-course.md).
 
+**Videos, review and the page check.** An embedded YouTube or Vimeo video becomes
+HAX's video player (other embedded frames are removed, as before). Each week
+brings back one practice question from the week before and one from three weeks
+before, and a closing Course review page samples every week: recalling an idea
+again after a gap is what makes it stick. A Page check (step 5, no AI) applies
+HAX's own page audits to what students will see: paragraphs and lists too dense
+to read, each week against the events of instruction ("Presentational" when
+students only read), and whether students can respond, see a goal and meet more
+than text (`python/page_audit.py`).
+
 **Quick AI version.** Instead of talking it through, the instructor can have
 the AI work through every consultation topic from the course evidence
 (assumptions marked) and propose changes. It decides nothing: the instructor
@@ -183,6 +193,7 @@ deletion of inactive courses is not built yet (see `docs/todo.md`).
 | HAX elements a page may use, and their plain form | `python/hax_elements.py` |
 | Course design (Understanding by Design) and its check | `python/course_design.py` |
 | Included pictures, and notes for what cannot be shown | `python/course_files.py` |
+| Page check (HAX's chunking, instructional-events and UDL audits) | `python/page_audit.py` |
 | Accessibility checks | `python/accessibility.py` |
 | AI cost estimate | `python/cost_estimate.py` |
 | Consultant quality evaluation | `scripts/evaluate_consultant.py`, `python/quality_checks.py` |
@@ -216,6 +227,7 @@ cannot outlive the hosting platform's request limit.
 | `GET /documents/<id>/export?format=docx\|html`, `GET /documents/export?format=zip\|hax\|imscc` | Downloads (approved only for packages) |
 | `GET /documents/<id>/compare`, `POST /documents/<id>/restore`, `POST /plan/restore` | Before/after and version history |
 | `GET /accessibility` | Accessibility report |
+| `GET /page-check` | HAX's page audits on what students will see |
 | `GET /estimate?action=quick\|turn\|plan\|document\|bulk&count=n&provider=p` | AI use and cost estimate |
 | `GET/POST/DELETE /share` → `/mentor/shared/<signed>/` | Read-only share link |
 | `POST /hax-lite/start` → HAX Lite approval → `/mentor/hax-lite/callback` → `POST /mentor/api/hax-lite/finish` | Publish to HAX Lite (see `HAX_LITE_PUBLISH_CONTRACT.md` in haxiam-orchestrator) |

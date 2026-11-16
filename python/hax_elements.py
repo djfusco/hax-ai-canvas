@@ -11,6 +11,7 @@ answers are marked), not from memory:
   stop-note                              elements/stop-note/stop-note.js
   a11y-collapse                          elements/a11y-collapse/a11y-collapse.js
   oer-schema                             elements/oer-schema/oer-schema.js
+  video-player                           elements/video-player/video-player.js
 
 Two things follow from that:
 
@@ -55,7 +56,27 @@ ELEMENTS = {
     "a11y-collapse": {"attributes": {"heading-button": ("",)}, "slots": ("heading", "content")},
     "oer-schema": {"attributes": {"typeof": OER_CLASSES, "oer-property": ("name", "description"), "text": None},
                    "slots": ()},
+    # ``source`` must be a video page on a known host (checked in clean_element).
+    "video-player": {"attributes": {"source": None, "media-title": None}, "slots": ()},
 }
+VIDEO = (
+    (re.compile(r"^https?://(?:www\.|m\.)?youtube(?:-nocookie)?\.com/(?:embed/|watch\?(?:.*&)?v=|shorts/)([A-Za-z0-9_-]{6,20})"),
+     "https://www.youtube.com/watch?v={}"),
+    (re.compile(r"^https?://youtu\.be/([A-Za-z0-9_-]{6,20})"), "https://www.youtube.com/watch?v={}"),
+    (re.compile(r"^https?://(?:player\.)?vimeo\.com/(?:video/)?(\d{4,12})"), "https://vimeo.com/{}"),
+)
+
+
+def video_source(address):
+    """The watch address for a YouTube or Vimeo video (from its page, short or embed address), or None."""
+    address = str(address or "").strip()
+    if address.startswith("//"):
+        address = "https:" + address
+    for pattern, form in VIDEO:
+        found = pattern.match(address)
+        if found:
+            return form.format(found.group(1))
+    return None
 # An answer option of a question: <input type="checkbox" value="..." data-correct="true" correct="correct">.
 # Both markers are written on purpose. The element's current source reads ``data-correct`` and
 # falls back to ``correct``; the build on HAX's CDN (checked in a browser on 2026-11-16) reads only
@@ -72,6 +93,12 @@ def clean_element(node):
     _keep_attributes(node, spec["attributes"])
     if node.name == "a11y-collapse":
         node["heading-button"] = ""
+    if node.name == "video-player":
+        source = video_source(node.get("source"))
+        if source is None:
+            node.decompose()  # not a video we can vouch for
+        else:
+            node["source"] = source
     return True
 
 
@@ -113,6 +140,15 @@ def objectives(items):
     rows = "".join(f'<li><oer-schema typeof="LearningObjective" oer-property="name" text="{_attr(o, 300)}">'
                    f"</oer-schema></li>" for o in items if str(o).strip())
     return f"<ul>{rows}</ul>" if rows else ""
+
+
+def video(address, title=""):
+    """A video-player for a YouTube or Vimeo address, or "" when it is neither."""
+    source = video_source(address)
+    if source is None:
+        return ""
+    label = f' media-title="{_attr(title, 200)}"' if str(title).strip() else ""
+    return f'<video-player source="{escape(source, quote=True)}"{label}></video-player>'
 
 
 def collapse(heading, content_html):
@@ -235,6 +271,11 @@ def to_plain(html):
                 c.get_text(" ", strip=True) if getattr(c, "get_text", None) else str(c) for c in heading) or "More"))
             for child in children(node, "content") + children(node):
                 box.append(child)
+            node.replace_with(box)
+        elif node.name == "video-player":
+            box = new("p")
+            box.append(new("a", "Watch the video" + (": " + node["media-title"] if node.get("media-title") else ""),
+                           href=node.get("source", "")))
             node.replace_with(box)
         else:  # oer-schema: metadata around text
             node.replace_with(new("span", (node.get("text") or "") + node.get_text(" ", strip=True)))

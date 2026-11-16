@@ -64,13 +64,13 @@ Work that is not finished yet. Tick items off as they are done.
   have no pictures yet (their images become "not included" notes); the Canvas import file does not carry
   included pictures either.
 - [ ] **Storage**: included pictures are up to 6 MiB a course in the database; watch the hosting plan's limit.
-- [ ] Phase 3: carry the course design inside the site (hidden page or UbD manifest).
 - [ ] **Course-design quality with a real model**: draft a design for a real course and judge the
   understandings, questions and evidence map.
-- [ ] PRAW's page-level audits on built pages (UDL, chunking, instructional events, multimedia principles).
+- [ ] PRAW's multimedia-principles audit (the chunking, instructional-events and UDL audits are in the Page check).
 - [ ] The Quick AI cost estimate does not count the course-design request.
 - [ ] Editing an understanding's wording drops its ticks in the evidence list (they are matched by text).
-- [ ] Phase 5: more elements (`video-player`, `flash-card`, `lrn-vocab`, `grid-plate`); practice on item pages.
+- [ ] More elements: `flash-card` and `lrn-vocab` for key terms, `grid-plate`; practice questions on item pages.
+- [ ] Videos other than YouTube and Vimeo (Kaltura, Panopto, Canvas Studio) are still removed with their frame.
 - [ ] The theme picker has no effect on HAX Lite (imported sites start on the default theme).
 - [ ] When HAX's CDN build reads `data-correct`, the extra `correct` marker on answers can go.
 

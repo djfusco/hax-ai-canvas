@@ -433,6 +433,14 @@
         <div id="cc-build-list"></div>
         <button id="cc-build-discard" type="button" class="cc-btn cc-btn-quiet">Discard the built course</button>
       </article>
+      <details class="cc-card cc-a11y" id="cc-pagecheck">
+        <summary><strong>Page check</strong> <span id="cc-pagecheck-summary" class="cc-muted">(HAX's page audits, no AI)</span></summary>
+        <p class="cc-muted">Checks the pages students will see the way HAX audits its own courses: text that is too
+          dense to read, weeks where students only read and are never asked to respond, and weeks with nothing but
+          text. Each finding says which HAX block fixes it.</p>
+        <button id="cc-pagecheck-run" type="button" class="cc-btn cc-btn-quiet">Check the pages</button>
+        <div id="cc-pagecheck-results"></div>
+      </details>
       <details class="cc-card cc-share" id="cc-share">
         <summary>Share a read-only link</summary>
         <p class="cc-muted">Anyone with the link can read the plan and the course site as students would see it (for example an

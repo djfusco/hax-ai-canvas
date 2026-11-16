@@ -185,8 +185,10 @@ def render(title, items, path, stored=None):
     import hax_elements
     from mentor_preview import render_preview
     stored = stored or {}
-    items = [dict(item, html=course_files.resolve(hax_elements.to_plain(item["html"]), stored, "files/"))
-             for item in items]
+    from imscc_content import sanitize_import_html
+    # Sanitize first: that is where an embedded video becomes a HAX element, which then gets its plain form.
+    items = [dict(item, html=course_files.resolve(hax_elements.to_plain(sanitize_import_html(item["html"])),
+                                                  stored, "files/")) for item in items]
     places = locations(items)
     assets = {"files/" + name for name in stored.values()}
     workspace = {"title": title, "draft": {"items": items}}
