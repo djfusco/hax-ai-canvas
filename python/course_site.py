@@ -152,9 +152,35 @@ def locations(items):
     return result
 
 
+def slugs(items):
+    """Readable, unique page addresses for the HAX site, keyed by item id ("week-1-cells").
+
+    HAX keeps the slug it is given as the page's web address, so it should say what the page is.
+    ``x`` is avoided: HAX reserves the ``x/`` routes.
+    """
+    import re
+    result, seen = {}, set()
+    for item in items:
+        base = re.sub(r"[^a-z0-9]+", "-", (item.get("title") or "").lower()).strip("-")[:60].strip("-")
+        if not base or base == "x":
+            base = "page"
+        slug, number = base, 1
+        while slug in seen:
+            number += 1
+            slug = f"{base}-{number}"
+        seen.add(slug)
+        result[item["id"]] = slug
+    return result
+
+
 def render(title, items, path):
-    """HTML for one preview path ('index.html' or a page location), or None."""
+    """HTML for one preview path ('index.html' or a page location), or None.
+
+    This preview runs no JavaScript, so HAX elements are shown in their plain form.
+    """
+    import hax_elements
     from mentor_preview import render_preview
+    items = [dict(item, html=hax_elements.to_plain(item["html"])) for item in items]
     places = locations(items)
     workspace = {"title": title, "draft": {"items": items}}
     if path in ("", "index.html"):
@@ -194,7 +220,7 @@ def package(workspace_id, title, items, destination, theme_element=None):
     }
     for item in items:
         slug = places[item["id"]].split("/")[1]
-        files[f"pages/{slug}/index.html"] = hax_preview.page_html(item, places)
+        files[f"pages/{slug}/index.html"] = hax_preview.page_html(item, slugs(items))
         files[f"preview/{places[item['id']]}"] = render(title, items, places[item["id"]])
     package_path = destination.with_suffix(".zip")
     with zipfile.ZipFile(package_path, "x", zipfile.ZIP_DEFLATED) as archive:

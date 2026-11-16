@@ -199,9 +199,10 @@ class CourseBuildTests(unittest.TestCase):
         week_html = package.read(next(n for n in names if "Week-1-Cells" in n)).decode()
         self.assertIn('href="00', week_html)
         # HAX: links point at the other page's address.
-        places = course_site.locations(items)
+        addresses = course_site.slugs(items)
         week_item = next(i for i in items if i["id"] == "module--week-1")
-        self.assertIn(f'href="{places["page-11"].split("/")[1]}"', hax_preview.page_html(week_item, places))
+        self.assertEqual(addresses["page-11"], "welcome")
+        self.assertIn('href="welcome"', hax_preview.page_html(week_item, addresses))
 
     def test_repeated_title_headings_are_removed(self):
         self.assertEqual(cb.without_title_heading("<h2>Welcome to Week 2: Data Models</h2><p>x</p>", "Week 2: Data Models"),

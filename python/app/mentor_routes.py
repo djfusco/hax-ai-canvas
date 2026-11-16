@@ -1260,7 +1260,7 @@ def create_mentor_blueprint(root_provider):
             item = next((i for i in items if slug and places[i["id"]].split("/")[1] == slug), None)
             if item is None:
                 return respond("Not found.", "text/plain", 404)
-            body, mimetype = hax_preview.page_html(item, places), "text/html"
+            body, mimetype = hax_preview.page_html(item, course_site.slugs(items)), "text/html"
         return respond(body, mimetype)
 
     # ── Read-only share link (signed, revocable) ─────────────────────────────
@@ -1417,6 +1417,11 @@ def create_mentor_blueprint(root_provider):
         model = store().get_course_model(g.owner, workspace["id"])
         items = {i["id"]: i["title"] for i in (model or {}).get("items", [])}
         import improvement_plan as ip
+        import hax_elements
+        if build and build.get("pages"):
+            # The page cards show pages with no JavaScript, so give them the plain form too.
+            build = dict(build, pages=[dict(p, preview_html=hax_elements.to_plain(p["html"]))
+                                       if hax_elements.has_elements(p["html"]) else p for p in build["pages"]])
         return {"build": build, "busy": bool(workspace.get("consult_busy")),
                 "manual": ip.manual_tasks(workspace.get("consultation")),
                 "steps": cb.steps(build, model, workspace.get("documents") or []) if build and model else [],

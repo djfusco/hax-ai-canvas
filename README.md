@@ -89,6 +89,19 @@ Before the quick AI version or bulk revisions, Course Consultant shows an
 estimate of the AI requests and tokens, and the cost when the provider
 publishes prices (OpenRouter).
 
+**HAX-native pages.** Each week page opens with an essential question, lists its
+objectives as OER Schema learning objectives, and ends with up to four practice
+questions (multiple choice, true/false, self-check) written from that week's own
+pages. The AI returns the questions as data and the app writes the HAX markup
+from a closed, verified list of elements (`python/hax_elements.py`), so a page
+never contains an invented tag. A question is kept only when the passage it
+quotes is found in the course item it names; quiz items are never a source; the
+instructor is told how many questions to review. HAX outputs get the real
+elements; the plain preview, Word, the documents ZIP and the Canvas import file
+get the same content as ordinary HTML. Page addresses are readable
+(`week-1-cells`). Design and what was verified:
+[`docs/superpowers/specs/2026-11-16-hax-native-course.md`](docs/superpowers/specs/2026-11-16-hax-native-course.md).
+
 **Quick AI version.** Instead of talking it through, the instructor can have
 the AI work through every consultation topic from the course evidence
 (assumptions marked) and propose changes. It decides nothing: the instructor
@@ -146,6 +159,7 @@ deletion of inactive courses is not built yet (see `docs/todo.md`).
 | Model suggestions | `python/model_advice.py` |
 | Canvas import package (.imscc) | `python/canvas_package.py` |
 | Publish to HAX Lite | `python/hax_lite_publish.py` |
+| HAX elements a page may use, and their plain form | `python/hax_elements.py` |
 | Accessibility checks | `python/accessibility.py` |
 | AI cost estimate | `python/cost_estimate.py` |
 | Consultant quality evaluation | `scripts/evaluate_consultant.py`, `python/quality_checks.py` |

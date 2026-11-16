@@ -562,7 +562,10 @@ def zip_package(course_title, documents, plan_files, course_pages=None):
             from imscc_content import rewrite_import_item_links, sanitize_import_html
             # Pages the AI did not rewrite still hold the imported HTML; these files open from
             # disk with no browser protections, so clean every page here.
-            course_pages = [dict(page, html=sanitize_import_html(page["html"])) for page in course_pages]
+            # They also run no JavaScript, so HAX blocks are written in their plain form.
+            import hax_elements
+            course_pages = [dict(page, html=hax_elements.to_plain(sanitize_import_html(page["html"])))
+                            for page in course_pages]
             combined, names = [], {}
             for number, page in enumerate(course_pages, 1):
                 folder = "instructor/" if page.get("audience") == "instructor" else ""

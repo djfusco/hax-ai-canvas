@@ -72,7 +72,9 @@ Rules:
 - The site shows each page's title above it: never start a page with a heading that repeats or
   restates the title (such as "Welcome to Week 2: ..."); start with the first paragraph.
 - HTML only uses headings (h2, h3), paragraphs, lists, tables, strong/em and links; no scripts,
-  styles or images. Link to course items as <a href="item:ITEM_ID">title</a> using supplied IDs."""
+  styles, images or custom elements. Interactive HAX blocks (practice questions, notes) are added
+  by the app from the data you return, never written by you.
+  Link to course items as <a href="item:ITEM_ID">title</a> using supplied IDs."""
 
 
 class BuildError(ValueError):
@@ -451,7 +453,7 @@ FRONT_PAGES = {
                     "600-900 words"),
 }
 FRONT_TOKENS = 5000
-WEEK_TOKENS = 6000
+WEEK_TOKENS = 9000
 
 
 def _front(build, step, model, consult_state, plan, documents, client):
@@ -509,15 +511,93 @@ def hours_note(week):
     return f"<h2>Estimated student time</h2><p>About {week['hours']:g} hours this week. {seen}</p>"
 
 
+PRACTICE_KINDS = ("multiple_choice", "true_false", "self_check")
+MAX_PRACTICE = 4
+WEEK_EXCERPT = 24000  # characters of course text shared between a week's items, for grounded practice
+
+
+def _week_schema():
+    option = _object({"text": TEXT, "correct": {"type": "boolean"}})
+    practice = _object({"kind": {"type": "string", "enum": list(PRACTICE_KINDS)}, "question": TEXT,
+                        "options": {"type": "array", "items": option}, "explanation": TEXT, "hint": TEXT,
+                        "objective": TEXT, "source_item": TEXT, "evidence": TEXT})
+    return _object({"overview_html": TEXT, "instructor_notes_html": TEXT, "essential_question": TEXT,
+                    "practice": {"type": "array", "items": practice}})
+
+
+def _normal(text):
+    return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
+
+
+def practice_questions(raw, week, texts, titles):
+    """Check the AI's practice questions and write them as HAX elements.
+
+    The AI gives data only; ``hax_elements`` writes the markup. A question is kept only when the
+    passage it quotes as evidence really is in the course item it names, so every question (and
+    its answer) can be traced to the instructor's own material. Returns (html blocks, dropped).
+    """
+    import hax_elements
+    from imscc_content import ITEM_PREFIX
+    blocks, dropped = [], 0
+    for row in raw if isinstance(raw, list) else []:
+        if len(blocks) >= MAX_PRACTICE:
+            break
+        if not isinstance(row, dict) or row.get("kind") not in PRACTICE_KINDS:
+            dropped += 1
+            continue
+        text = row.get("question")
+        explanation = row.get("explanation")
+        source, evidence = row.get("source_item"), row.get("evidence")
+        grounded = (isinstance(source, str) and source in texts and isinstance(evidence, str)
+                    and len(_normal(evidence)) >= 20 and _normal(evidence) in texts[source])
+        if (not isinstance(text, str) or not 8 <= len(text.strip()) <= 500
+                or not isinstance(explanation, str) or not explanation.strip() or not grounded):
+            dropped += 1
+            continue
+        objective = row.get("objective") if row.get("objective") in week["objectives"] else ""
+        link = f'<a href="{ITEM_PREFIX}{escape(source, quote=True)}">{escape(titles[source])}</a>'
+        cited = f"From {link}: “{escape(evidence.strip()[:300])}”"
+        explained = escape(explanation.strip()[:800])
+        if row["kind"] == "self_check":
+            blocks.append(hax_elements.self_check(text.strip(), f"<p>{explained}</p><p>{cited}</p>", objective=objective))
+            continue
+        options = [(o["text"].strip()[:300], o.get("correct") is True) for o in row.get("options") or []
+                   if isinstance(o, dict) and isinstance(o.get("text"), str) and o["text"].strip()]
+        right = sum(1 for _, ok in options if ok)
+        if row["kind"] == "true_false":
+            valid = sorted(label.lower() for label, _ in options) == ["false", "true"] and right == 1
+            options = [("True", dict((label.lower(), ok) for label, ok in options).get("true", False)),
+                       ("False", dict((label.lower(), ok) for label, ok in options).get("false", False))]
+        else:
+            labels = [label.lower() for label, _ in options]
+            valid = 3 <= len(options) <= 6 and 1 <= right < len(options) and len(set(labels)) == len(labels)
+        if not valid:
+            dropped += 1
+            continue
+        hint = row.get("hint") if isinstance(row.get("hint"), str) and row["hint"].strip() else ""
+        blocks.append(hax_elements.question(
+            row["kind"], text.strip(), options, correct_html=explained,
+            incorrect_html=escape(hint.strip()[:400]) if hint else f"Not quite. Look again at {link}.",
+            evidence_html=cited, objective=objective))
+    return blocks, dropped
+
+
 def _week_step(build, number, model, consult_state, plan, documents, client):
+    import hax_elements
     week = _week(build, number)
     items = _items_by_id(model)
-    lines = []
+    # Quizzes are left out: their questions and answers must never be turned into open practice.
+    readable = [i for i in week["items"] if items[i]["kind"] != "quiz"]
+    share = max(600, WEEK_EXCERPT // max(1, len(readable)))
+    lines, texts = [], {}
     for item_id in week["items"]:
         text, _ = html_text(_item_html(model, documents, items[item_id]))
         details = "; ".join(f"{k}: {v}" for k, v in _details(model, item_id).items())
+        excerpt = text[:share] if item_id in readable else text[:600]
+        if item_id in readable and len(_normal(excerpt)) >= 20:
+            texts[item_id] = _normal(excerpt)
         lines.append(f"- {item_id} | {items[item_id]['kind']} | {items[item_id]['title']}"
-                     + (f" | {details}" if details else "") + f"\n  Excerpt: {text[:600]}")
+                     + (f" | {details}" if details else "") + f"\n  Text: {excerpt}")
     weeks = build["blueprint"]["weeks"]
     neighbours = ", ".join(f"Week {w['number']}: {w['title']}" for w in weeks
                            if abs(w["number"] - number) == 1)
@@ -530,21 +610,51 @@ def _week_step(build, number, model, consult_state, plan, documents, client):
         "ACCEPTED CHANGES AFFECTING THIS WEEK:\n" + _changes(consult_state, week["items"]),
         "INSTRUCTOR FOCUS: " + (week["instructor_focus"] or "(none)"),
         "TASK: Write (1) overview_html: the student-facing overview for this week: an introduction that "
-        "connects to last week and the course outcomes, the learning objectives, how this week's items fit "
-        "together and in what order to do them (link each item), and tips or where to get help. Do NOT list "
-        "due dates or points; the app adds an exact checklist below your text. (2) instructor_notes_html: "
-        "practical notes for the instructor: what to prepare, how to facilitate, likely sticking points, "
-        "feedback to give, and where the accepted changes apply this week. Length: overview 250-450 words, "
-        "instructor notes 150-300 words; concise and scannable.",
+        "connects to last week and the course outcomes, how this week's items fit together and in what order "
+        "to do them (link each item), and tips or where to get help. Do NOT list the learning objectives, due "
+        "dates or points; the app adds the objectives above your text and an exact checklist below it. "
+        "(2) instructor_notes_html: practical notes for the instructor: what to prepare, how to facilitate, "
+        "likely sticking points, feedback to give, and where the accepted changes apply this week. "
+        "(3) essential_question: one open, thought-provoking question this week's work helps students "
+        "answer; it has no single right answer and is worth returning to (not a quiz question). "
+        f"(4) practice: up to {MAX_PRACTICE} retrieval-practice questions a student can answer from this "
+        "week's item text above, mixing kinds: multiple_choice (3-5 options, mark which are correct), "
+        "true_false (two options, True and False, one correct) and self_check (an explain-in-your-own-words "
+        "prompt; options empty; explanation is the model answer). For each give: explanation (why the "
+        "answer is right, for the student), hint (what to reread if wrong), objective (one of the objectives "
+        "above, copied exactly, or empty), source_item (the item ID the answer comes from) and evidence (a "
+        "passage copied word for word from that item's text that supports the answer; questions without a "
+        "real passage are discarded). Ask about the ideas, not about dates, points or logistics. Never use "
+        "quiz items as a source. If the text does not support good questions, return fewer or none. "
+        "Length: overview 250-450 words, instructor notes 150-300 words; concise and scannable.",
     ])
-    raw = _call(client, prompt, _object({"overview_html": TEXT, "instructor_notes_html": TEXT}), WEEK_TOKENS)
+    raw = _call(client, prompt, _week_schema(), WEEK_TOKENS)
     known = set(items)
-    overview = without_title_heading(_html(raw.get("overview_html"), known, "week overview"),
-                                     f"Week {number}: {week['title']}")
-    _set_page(build, _page(f"week-{number}", "week", f"Week {number}: {week['title']}",
-                           overview + checklist_html(week, model), week=number))
+    title = f"Week {number}: {week['title']}"
+    overview = without_title_heading(_html(raw.get("overview_html"), known, "week overview"), title)
+    essential = raw.get("essential_question")
+    parts = []
+    if isinstance(essential, str) and 10 <= len(essential.strip()) <= 400:
+        parts.append(hax_elements.stop_note("Essential question", escape(essential.strip())))
+    if week["objectives"]:
+        parts.append("<h2>By the end of this week you will be able to</h2>" + hax_elements.objectives(week["objectives"]))
+    parts.append(overview)
+    blocks, dropped = practice_questions(raw.get("practice"), week, texts, {i: items[i]["title"] for i in items})
+    if blocks:
+        parts.append("<h2>Check your understanding</h2><p>Practice only: these are not graded. Try each one "
+                     "before you look at the answer.</p>" + "".join(blocks))
+    _set_page(build, _page(f"week-{number}", "week", title, "".join(parts) + checklist_html(week, model),
+                           week=number, practice=len(blocks), practice_dropped=dropped))
+    review = ""
+    if blocks or dropped:
+        review = ("<h2>Practice questions to review</h2><p>The week page has "
+                  f"{len(blocks)} practice question{'s' if len(blocks) != 1 else ''} written by AI from this "
+                  "week's pages. Each one quotes the passage its answer comes from. Read them and their answers "
+                  "before students do; edit or remove any on the week page."
+                  + (f" {dropped} more were discarded because their quoted passage was not found in the course."
+                     if dropped else "") + "</p>")
     _set_page(build, _page(f"week-{number}-notes", "instructor", f"Week {number}: instructor notes",
-                           _html(raw.get("instructor_notes_html"), known, "instructor notes") + hours_note(week),
+                           _html(raw.get("instructor_notes_html"), known, "instructor notes") + review + hours_note(week),
                            audience="instructor", week=number))
 
 

@@ -263,9 +263,12 @@ def build_course(course_title, model, documents, items):
     """The whole built course as a Canvas package: one module per section (Start here, each week,
     resources, instructor), assignments with their settings and rubrics, and pages linked to each
     other. Meant for a new, empty Canvas course; everything arrives unpublished."""
+    import hax_elements
     from imscc_content import rewrite_import_item_links
     if not items:
         raise PackageError("Build the course first.")
+    # Canvas removes custom elements, so HAX blocks go in their plain form (nothing is lost).
+    items = [dict(item, html=hax_elements.to_plain(item["html"])) for item in items]
     files, resources, rubrics, modules = {}, [], [], []
     used, refs, links = set(), {}, {}
     rubric_docs = {d.get("item_id"): d for d in _latest(documents) if d["kind"] == "rubric" and d.get("rubric")}

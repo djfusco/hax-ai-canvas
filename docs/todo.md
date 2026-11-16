@@ -56,6 +56,17 @@ Work that is not finished yet. Tick items off as they are done.
 ## Not built yet
 - [ ] LTI 1.3 launch from inside Canvas (needs an institution's registration).
 
+## HAX-native course (see `superpowers/specs/2026-11-16-hax-native-course.md`)
+- [ ] **Publish a built course with the new elements into HAX Lite** and check the questions, note and
+  objectives arrive intact and the answers mark correctly.
+- [ ] **Practice-question quality with a real model**: run a build and read the questions it keeps and drops.
+- [ ] Phase 2: send the images pages use in `files/`.
+- [ ] Phase 3: carry the course design inside the site (hidden page or UbD manifest).
+- [ ] Phase 4: PRAW's Understanding by Design stages and audit skills in place of the generic prompts.
+- [ ] Phase 5: more elements (`video-player`, `flash-card`, `lrn-vocab`, `grid-plate`); practice on item pages.
+- [ ] The theme picker has no effect on HAX Lite (imported sites start on the default theme).
+- [ ] When HAX's CDN build reads `data-correct`, the extra `correct` marker on answers can go.
+
 ## From the November 2026 review: still open
 Done in that round: sanitizer bypass (comments, CDATA); instructor-only pages kept out of published and
 shared sites; replacing a course resets stale work; course and data deletion with a 25-course cap; staff

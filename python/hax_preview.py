@@ -46,14 +46,17 @@ def cdn():
 
 def site_json(site_id, title, items, places, theme_element=None):
     """HAX JSON Outline Schema manifest for the course site."""
+    import course_site
     entries = []
     parent = None
+    addresses = course_site.slugs(items)
     for order, item in enumerate(items):
-        slug = places[item["id"]].split("/")[1]
+        slug = places[item["id"]].split("/")[1]  # the page's folder; its web address is the readable slug
         is_module = item["id"].startswith("module--")
         entries.append({
             "id": "item-" + slug, "title": item["title"], "location": f"pages/{slug}/index.html",
-            "slug": slug, "order": order, "indent": 0 if is_module or item.get("module") is None else 1,
+            "slug": addresses[item["id"]], "order": order,
+            "indent": 0 if is_module or item.get("module") is None else 1,
             "parent": None if is_module or item.get("module") is None else parent,
             "description": "", "metadata": {"published": True, "revised": bool(item.get("revised")),
                          "audience": item.get("audience", "student")},
@@ -105,16 +108,17 @@ def config_js():
             "globalThis.__appCDNBlockFallback = true;\n")
 
 
-def page_html(item, places=None):
+def page_html(item, addresses=None):
     """A HAX page is an HTML fragment (already sanitized by the course pipeline).
 
-    Links between course pages become links to the other page's address in
-    the HAX site (``<slug>``, relative to the site root, as HAX routes them).
+    It keeps the HAX elements listed in ``hax_elements``; HAX loads each one when the page is
+    shown. Links between course pages become links to the other page's address in the HAX site
+    (its slug from ``course_site.slugs``, relative to the site root, as HAX routes them).
     """
     from imscc_content import rewrite_import_item_links, sanitize_import_html
     html = sanitize_import_html(item["html"])
-    if places:
-        html = rewrite_import_item_links(html, {i: loc.split("/")[1] for i, loc in places.items()})
+    if addresses:
+        html = rewrite_import_item_links(html, addresses)
     return html
 
 

@@ -11,6 +11,8 @@ from urllib.parse import unquote, urlsplit
 from bs4 import BeautifulSoup
 from bs4.element import PreformattedString
 
+import hax_elements
+
 ITEM_PREFIX = "$IMSCC_ITEM_REFERENCE$/"
 CONTENT_FIELDS = ("body", "description", "message", "question_text", "text")
 URL_ATTRIBUTES = ("href", "src", "poster")
@@ -23,7 +25,11 @@ PASSIVE_TAGS = set(
 
 
 def sanitize_import_html(content: str) -> str:
-    """Remove active content before rendering uploaded or model-generated HTML."""
+    """Remove active content before rendering uploaded or model-generated HTML.
+
+    Ordinary HTML is limited to passive tags. The only custom elements kept are the HAX elements
+    listed in ``hax_elements`` (and an ``input`` only as an answer option inside a question).
+    """
     soup = BeautifulSoup(content or "", "html.parser")
     # Comments, CDATA sections, declarations and processing instructions are written back
     # verbatim, and browsers end them earlier than this parser does ("<!-->" is a whole
@@ -37,10 +43,23 @@ def sanitize_import_html(content: str) -> str:
         if node.parent is not None:
             node.decompose()
     for node in list(soup.find_all(True)):
+        if node.parent is None:
+            continue  # removed with an element handled earlier
+        # HAX elements from the verified list keep only the attributes they are known to accept.
+        if hax_elements.clean_element(node):
+            continue
+        if node.name == "input":
+            if not hax_elements.clean_input(node):
+                node.decompose()
+            continue
         if node.name not in PASSIVE_TAGS:
             node.unwrap()
             continue
         for attr in list(node.attrs):
+            if attr.lower() == "slot":
+                if not hax_elements.slot_allowed(node):
+                    del node[attr]
+                continue
             if attr.lower() not in (
                 "href", "src", "poster", "id", "class", "title", "alt", "width",
                 "height", "controls", "preload", "type", "colspan", "rowspan",

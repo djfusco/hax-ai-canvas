@@ -1314,11 +1314,12 @@
       el('summary', {}, el('strong', { text: p.title }), ' ',
         p.audience === 'instructor' ? el('span', { class: 'cc-tag warn', text: 'Instructor only' }) : null, ' ',
         el('span', { class: 'cc-tag' + (p.built_by === 'ai' ? ' ai' : ' good'), text: label }), ' ',
-        typeof p.kept === 'number' ? el('span', { class: 'cc-tag', text: `keeps ${Math.round(p.kept * 100)}% of the original wording` }) : null),
+        typeof p.kept === 'number' ? el('span', { class: 'cc-tag', text: `keeps ${Math.round(p.kept * 100)}% of the original wording` }) : null, ' ',
+        p.practice ? el('span', { class: 'cc-tag warn', text: `${p.practice} AI practice question${p.practice === 1 ? '' : 's'}: check the answers` }) : null),
       body);
     const fill = () => {
       const iframe = el('iframe', { sandbox: '', title: p.title, class: 'cc-doc-frame' });
-      iframe.srcdoc = FRAME_STYLE + p.html;
+      iframe.srcdoc = FRAME_STYLE + (p.preview_html || p.html);
       const ask = el('textarea', { rows: 2, maxlength: 4000, 'aria-label': `Ask for changes to ${p.title}`,
         placeholder: 'Ask for changes, e.g. “Shorter, and add a reading check before the quiz”' });
       const form = el('form', { class: 'cc-ask' }, ask, el('button', { type: 'submit', class: 'cc-btn', text: 'Ask for changes' }));
