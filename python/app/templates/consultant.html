@@ -104,7 +104,8 @@
           <article class="cc-card">
             <h2>Upload a Canvas export</h2>
             <p>In Canvas: <em>Settings → Export Course Content → Course</em>. Even multi-gigabyte exports work: videos and
-              other media stay on your computer and are only listed by name.</p>
+              other media stay on your computer and are only listed by name, unless you choose below to include
+              the small pictures your pages show.</p>
             <details class="cc-help"><summary>Make a smaller export</summary>
               <p>Choose <em>Select specific content</em>, then untick <em>Files</em>. The export is quicker to make and download.</p></details>
             <label for="cc-export" class="cc-btn cc-file">Choose export (.imscc)</label>
@@ -114,6 +115,12 @@
               <p id="cc-slim-text" class="cc-muted"></p>
               <fieldset id="cc-docs" hidden><legend>Also include these documents as text? (optional)</legend>
                 <div id="cc-docs-list"></div></fieldset>
+              <fieldset id="cc-images" hidden><legend>Include the pictures your pages show? (optional)</legend>
+                <label><input id="cc-images-include" type="checkbox"> <span id="cc-images-label"></span></label>
+                <p class="cc-muted">Without them, pictures in the built course site appear as “image not included”.
+                  Only small pictures that your pages display are sent (no video, audio or documents). They are
+                  stored with the course, not sent to the AI, and are not checked for student information: leave
+                  this unticked if your pages show pictures of students or their work.</p></fieldset>
               <button id="cc-slim-import" type="button" class="cc-btn" hidden>Import course</button>
               <button id="cc-slim-cancel" type="button" class="cc-btn cc-btn-quiet">Cancel</button>
             </div>

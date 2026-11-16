@@ -18,7 +18,10 @@ Design: [`docs/superpowers/specs/2026-11-09-course-consultant.md`](docs/superpow
 2. **Bring in the course**, one of four ways:
    - **Upload a Canvas export.** The browser reads only the export's text and
      structure. Videos and other media never leave the instructor's computer,
-     so multi-gigabyte exports become a few megabytes.
+     so multi-gigabyte exports become a few megabytes. One optional exception,
+     off by default: the instructor can tick "Include the pictures your pages
+     show", which sends the small images (PNG, JPEG, GIF, WebP; 1 MiB each,
+     6 MiB a course) that pages display, so the built site shows them.
    - **Use the browser extension** (`extension/`, Chrome, Edge and Firefox)
      to send the live course from Canvas using the instructor's existing
      sign-in. No token and no admin approval needed.
@@ -147,6 +150,13 @@ deletion of inactive courses is not built yet (see `docs/todo.md`).
   rubric ratings and outcome descriptions are covered too; file names are
   not. The instructor sees what was removed. This is a safeguard, not a
   guarantee.
+- Pictures are only stored when the instructor ticks the box at upload. They
+  are kept with the course, never sent to an AI provider, not checked for
+  student information (the upload step says so), served only to the
+  instructor, in the HAX site they download or publish, and through a share
+  link they create, and deleted when the course is replaced or deleted. A
+  picture or file that was not included appears in the built course as a
+  short note ("Image not included: …") instead of a broken image or dead link.
 - Uploaded export packages are processed in a temporary directory and never
   kept. Course models, conversations and proposals are stored per user.
 - The extension's permissions and exact data use are in
@@ -172,6 +182,7 @@ deletion of inactive courses is not built yet (see `docs/todo.md`).
 | Publish to HAX Lite | `python/hax_lite_publish.py` |
 | HAX elements a page may use, and their plain form | `python/hax_elements.py` |
 | Course design (Understanding by Design) and its check | `python/course_design.py` |
+| Included pictures, and notes for what cannot be shown | `python/course_files.py` |
 | Accessibility checks | `python/accessibility.py` |
 | AI cost estimate | `python/cost_estimate.py` |
 | Consultant quality evaluation | `scripts/evaluate_consultant.py`, `python/quality_checks.py` |

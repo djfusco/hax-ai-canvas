@@ -563,9 +563,11 @@ def zip_package(course_title, documents, plan_files, course_pages=None):
             # Pages the AI did not rewrite still hold the imported HTML; these files open from
             # disk with no browser protections, so clean every page here.
             # They also run no JavaScript, so HAX blocks are written in their plain form.
+            # Images are not packed here; one that only Canvas could show becomes a short note.
+            import course_files
             import hax_elements
-            course_pages = [dict(page, html=hax_elements.to_plain(sanitize_import_html(page["html"])))
-                            for page in course_pages]
+            course_pages = [dict(page, html=course_files.resolve(
+                hax_elements.to_plain(sanitize_import_html(page["html"])), {}, "files/")) for page in course_pages]
             combined, names = [], {}
             for number, page in enumerate(course_pages, 1):
                 folder = "instructor/" if page.get("audience") == "instructor" else ""

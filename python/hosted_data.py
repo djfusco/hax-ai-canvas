@@ -13,7 +13,7 @@ from cryptography.fernet import Fernet
 
 from mentor_credentials import CredentialVault
 from mentor_store import (
-    COURSE_MODEL_TABLE, INTAKE_CHUNK_TABLE, MentorStore,
+    COURSE_FILE_TABLE, COURSE_MODEL_TABLE, INTAKE_CHUNK_TABLE, MentorStore,
 )
 
 
@@ -79,6 +79,7 @@ class PostgresMentorStore(_Postgres, MentorStore):
             )
             conn.execute(COURSE_MODEL_TABLE)
             conn.execute(INTAKE_CHUNK_TABLE)
+            conn.execute(COURSE_FILE_TABLE)
 
     def _connection(self):
         return self._session()

@@ -257,3 +257,56 @@ test('reads a 5 GiB ZIP64 export with course text beyond 4 GiB, without touching
   const { blob } = await SlimExport.buildSlimPackage(file, scan);
   assert.ok(blob.size < 4096);
 });
+
+test('pictures that pages show are offered, and only read when the instructor includes them', async () => {
+  const exportPath = tmp('course.imscc');
+  const where = JSON.parse(python(String.raw`
+import json, os, sys, zipfile
+sys.path.insert(0, "tests")
+from test_slim_import import text_entries
+entries = text_entries()
+entries["wiki_content/welcome.html"] = entries["wiki_content/welcome.html"].replace(
+    "<p>Welcome to cells.</p>",
+    '<p>Welcome to cells.</p><img src="$IMS-CC-FILEBASE$/img/cell%20diagram.png" alt="A cell">'
+    '<img src="$IMS-CC-FILEBASE$/img/poster.png" alt="Too big">')
+png = b"\x89PNG\r\n\x1a\n" + os.urandom(5000)
+with zipfile.ZipFile(sys.argv[1], "w", zipfile.ZIP_STORED) as z:
+    z.writestr("web_resources/img/cell diagram.png", png)
+    z.writestr("web_resources/img/poster.png", b"\x89PNG\r\n\x1a\n" + os.urandom(1024 * 1024 + 10))
+    z.writestr("web_resources/img/unused.png", png)          # no page shows it
+    z.writestr("web_resources/img/drawing.svg", b"<svg></svg>")
+    for name, data in entries.items():
+        z.writestr(name, data)
+with zipfile.ZipFile(sys.argv[1]) as z:
+    info = z.getinfo("web_resources/img/cell diagram.png")
+    print(json.dumps({"start": info.header_offset + 30 + len(info.filename.encode()), "length": info.compress_size}))
+`, [exportPath]));
+  const file = tracked(await fileBlob(exportPath));
+  const scan = await SlimExport.scanExport(file);
+  assert.deepEqual(scan.images.map(i => i.path), ['web_resources/img/cell diagram.png']);
+  assert.equal(scan.imagesLeftOut, 1, 'the oversized picture is counted, not offered');
+  const touched = () => file.ranges.some(([start, end]) => start < where.start + where.length && end > where.start);
+
+  // Not ticked: the picture's bytes are never read and the package holds no pictures.
+  const plain = await SlimExport.buildSlimPackage(file, scan);
+  assert.equal(touched(), false, 'pictures are not read unless included');
+  assert.equal(plain.summary.imagesIncluded, 0);
+
+  const withImages = await SlimExport.buildSlimPackage(file, scan, { includeImages: true });
+  assert.equal(touched(), true);
+  assert.equal(withImages.summary.imagesIncluded, 1);
+  const slimPath = tmp('slim.zip');
+  fs.writeFileSync(slimPath, Buffer.from(await withImages.blob.arrayBuffer()));
+  const result = JSON.parse(python(String.raw`
+import json, sys, zipfile
+sys.path.insert(0, "python")
+import course_files, slim_import
+files = []
+model = slim_import.import_slim(sys.argv[1], files=files)
+print(json.dumps({"names": [n for n in zipfile.ZipFile(sys.argv[1]).namelist() if n.startswith("course_images/")],
+                  "stored": course_files.stored_names(model), "files": [f["name"] for f in files]}))
+`, [slimPath]));
+  assert.deepEqual(result.names, ['course_images/img/cell diagram.png']);
+  assert.deepEqual(result.stored, { 'web_resources/img/cell diagram.png': 'cell-diagram.png' });
+  assert.deepEqual(result.files, ['cell-diagram.png']);
+});

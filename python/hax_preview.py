@@ -108,7 +108,7 @@ def config_js():
             "globalThis.__appCDNBlockFallback = true;\n")
 
 
-def page_html(item, addresses=None):
+def page_html(item, addresses=None, stored=None):
     """A HAX page is an HTML fragment (already sanitized by the course pipeline).
 
     It keeps the HAX elements listed in ``hax_elements``; HAX loads each one when the page is
@@ -116,10 +116,13 @@ def page_html(item, addresses=None):
     (its slug from ``course_site.slugs``, relative to the site root, as HAX routes them).
     """
     from imscc_content import rewrite_import_item_links, sanitize_import_html
+    import course_files
     html = sanitize_import_html(item["html"])
     if addresses:
         html = rewrite_import_item_links(html, addresses)
-    return html
+    # Images the instructor included are in the site's files/ folder; anything else that only
+    # Canvas could show becomes a short note instead of a broken image or dead link.
+    return course_files.resolve(html, stored or {}, "files/")
 
 
 def policy(app_origin):

@@ -124,7 +124,8 @@ class _SlimImporter:
         result = []
         for info in self.archive.infolist():
             name = info.filename
-            if info.is_dir() or name == "imsmanifest.xml" or name.startswith(MATERIAL_PREFIX):
+            if (info.is_dir() or name == "imsmanifest.xml" or name.startswith(MATERIAL_PREFIX)
+                    or name.startswith("course_images/")):
                 continue
             if name.lower().endswith(TEXT_SUFFIXES) or name.startswith("course_settings/"):
                 continue
@@ -490,8 +491,12 @@ class _SlimImporter:
                                             "role": "reference", "text": material["text"][:cm.MAX_MATERIAL_CHARS]})
 
 
-def import_slim(path, title_hint=None) -> dict:
-    """Import a slim package (or full export) at ``path``; return a validated model."""
+def import_slim(path, title_hint=None, files=None) -> dict:
+    """Import a slim package (or full export) at ``path``; return a validated model.
+
+    When the package carries images the instructor chose to include, they are appended to the
+    ``files`` list (``course_files.collect``) and each is noted on its media inventory entry.
+    """
     path = Path(path)
     if path.stat().st_size > MAX_SLIM_BYTES:
         raise SlimImportError("The slim course package exceeds 48 MiB. Re-run slimming in the browser.")
@@ -500,6 +505,21 @@ def import_slim(path, title_hint=None) -> dict:
         with zipfile.ZipFile(path) as archive:
             importer = _SlimImporter(archive, workdir)
             model = importer.run(title_hint)
+            if files is not None:
+                import course_files
+                images, warnings = course_files.collect(archive, importer.names)
+                by_path = {m["path"]: m for m in model["media_inventory"]}
+                for image in images:
+                    entry = by_path.get(image["path"])
+                    if entry is None and len(model["media_inventory"]) < cm.MAX_MEDIA:
+                        entry = {"path": image["path"], "mime": image["mime"], "bytes": len(image["data"]),
+                                 "referenced_by": []}
+                        model["media_inventory"].append(entry)
+                    if entry is not None:
+                        entry["stored"] = image["name"]
+                        files.append(image)
+                model["provenance"]["warnings"] = (model["provenance"].get("warnings", []) + warnings)[:cm.MAX_WARNINGS]
+                model["provenance"].setdefault("counts", {})["images"] = len(files)
         for item in model["items"]:
             item.pop("source_path", None)
         return cm.validate_course(model)

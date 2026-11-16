@@ -80,6 +80,29 @@ HTML, with answers behind a "Show answer" disclosure.
 - Whether HAX Lite's imported pages get `llms.txt` and per-page Markdown as a native site does.
 - Practice-question quality with a real model. Tests use a scripted model.
 
+## Pictures (phase 2)
+
+A Canvas export refers to its files as `$IMS-CC-FILEBASE$/...`, which only Canvas can resolve, so
+every picture in a built HAX course was a broken image. `python/course_files.py` fixes both cases.
+
+- **An explicit choice, off by default.** The standing promise is that only text leaves the
+  instructor's computer. The upload step now offers "Include the pictures your pages show", with
+  the count and size. Unticked, nothing changes and no picture is read. The note says pictures
+  are not checked for student information.
+- **What is taken:** only images that a course page displays, PNG/JPEG/GIF/WebP by their bytes
+  (the file name is not trusted; SVG is refused), 1 MiB each, 6 MiB and 200 a course. HAX Lite's
+  default archive limit is 10 MiB.
+- **Where they go:** a table of their own, deleted when the course is replaced or deleted. They
+  are served to the instructor's preview, the HAX-theme preview and the share link, and written
+  to `files/` in the HAX site ZIP and the HAX Lite publish, where HAX Lite rewrites references to
+  its own stored names. They are never sent to an AI provider.
+- **Whatever is not included** (a picture left out, a video, a linked PDF, a link into Canvas)
+  becomes a short note in the text. This applies whether or not pictures were included.
+
+Verified: a sample export with a real picture was imported through the app, its HAX site ZIP
+served statically, and the page opened with HAX's components: the picture loaded from `files/`
+and the missing one showed its note. Not verified: a real HAX Lite publish with files.
+
 ## Course design by Understanding by Design (phase 4)
 
 PRAW's rule: a HAX course whose goal is understanding is designed with the
@@ -124,8 +147,8 @@ Not verified: the quality of an AI-drafted design with a real model (tests use a
 
 1. **Done:** verified element list, sanitizer, weekly pages (essential question, objectives,
    grounded practice), plain forms, readable slugs.
-2. **Media:** send the images pages use in `files/`. The browser already reads the export
-   locally, so it can include them within HAX Lite's limits.
+2. **Done (pictures):** see "Pictures" below. Still open: pictures for courses brought in through
+   the browser extension or the Canvas connection; pictures in the Canvas import file.
 3. **Design in the site:** carry the course design (outcomes, alignment, accepted changes) as a
    page hidden from the menu, or as a UbD manifest if HAX Lite accepts `.json` in `files/`.
 4. **Done (method):** see "Course design by Understanding by Design" below. Still open from this

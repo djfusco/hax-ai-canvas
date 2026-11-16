@@ -36,6 +36,12 @@ COURSE_MODEL_TABLE = (
     "workspace_id TEXT PRIMARY KEY, owner TEXT NOT NULL, model TEXT NOT NULL, "
     "updated_at TEXT NOT NULL)"
 )
+# Images the instructor chose to include (course_files); small, and deleted with the course.
+COURSE_FILE_TABLE = (
+    "CREATE TABLE IF NOT EXISTS mentor_course_files ("
+    "workspace_id TEXT NOT NULL, owner TEXT NOT NULL, name TEXT NOT NULL, mime TEXT NOT NULL, "
+    "data BYTEA NOT NULL, PRIMARY KEY(workspace_id, name))"
+)
 _SECRET_FIELDS = frozenset((
     "apikey", "token", "accesstoken", "refreshtoken", "canvastoken",
     "password", "secret", "clientsecret", "authorization", "cookie",
@@ -128,6 +134,7 @@ class MentorStore:
             )
             conn.execute(COURSE_MODEL_TABLE)
             conn.execute(INTAKE_CHUNK_TABLE)
+            conn.execute(COURSE_FILE_TABLE)
 
     @contextmanager
     def _connection(self):
@@ -237,6 +244,7 @@ class MentorStore:
             self._load(conn, owner, id)
             conn.execute("DELETE FROM mentor_intake_chunks WHERE owner = ? AND workspace_id = ?", (owner, id))
             conn.execute("DELETE FROM mentor_course_models WHERE owner = ? AND workspace_id = ?", (owner, id))
+            conn.execute("DELETE FROM mentor_course_files WHERE owner = ? AND workspace_id = ?", (owner, id))
             conn.execute("DELETE FROM mentor_workspaces WHERE owner = ? AND id = ?", (owner, id))
 
     def delete_owner(self, owner):
@@ -246,6 +254,7 @@ class MentorStore:
             count = conn.execute("SELECT COUNT(*) FROM mentor_workspaces WHERE owner = ?", (owner,)).fetchone()[0]
             conn.execute("DELETE FROM mentor_intake_chunks WHERE owner = ?", (owner,))
             conn.execute("DELETE FROM mentor_course_models WHERE owner = ?", (owner,))
+            conn.execute("DELETE FROM mentor_course_files WHERE owner = ?", (owner,))
             conn.execute("DELETE FROM mentor_workspaces WHERE owner = ?", (owner,))
         return count
 
@@ -254,7 +263,21 @@ class MentorStore:
         with self._connection() as conn:
             return conn.execute("SELECT COUNT(*) FROM mentor_workspaces WHERE owner = ?", (owner,)).fetchone()[0]
 
-    def save_course_model(self, owner, id, revision, model, privacy):
+    def course_file(self, owner, id, name):
+        """One stored image as (mime, bytes), or None."""
+        with self._connection() as conn:
+            row = conn.execute("SELECT mime, data FROM mentor_course_files WHERE owner = ? AND workspace_id = ? "
+                               "AND name = ?", (owner, id, name)).fetchone()
+        return (row[0], bytes(row[1])) if row else None
+
+    def course_files(self, owner, id):
+        """Every stored image of a course: [(name, mime, bytes)]."""
+        with self._connection() as conn:
+            rows = conn.execute("SELECT name, mime, data FROM mentor_course_files WHERE owner = ? AND "
+                                "workspace_id = ? ORDER BY name", (owner, id)).fetchall()
+        return [(row[0], row[1], bytes(row[2])) for row in rows]
+
+    def save_course_model(self, owner, id, revision, model, privacy, files=()):
         """Store a validated, privacy-stripped course model as the workspace source.
 
         The model lives in its own table (it can be several MiB); the workspace
@@ -302,6 +325,11 @@ class MentorStore:
                 "owner = excluded.owner, model = excluded.model, updated_at = excluded.updated_at",
                 (id, owner, encoded, _now()),
             )
+            # The course's images are replaced with it (none, unless the instructor included them).
+            conn.execute("DELETE FROM mentor_course_files WHERE owner = ? AND workspace_id = ?", (owner, id))
+            for image in files:
+                conn.execute("INSERT INTO mentor_course_files (workspace_id, owner, name, mime, data) "
+                             "VALUES (?, ?, ?, ?, ?)", (id, owner, image["name"], image["mime"], bytes(image["data"])))
             self._write(conn, owner, state)
         return state
 

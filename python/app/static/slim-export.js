@@ -7,6 +7,10 @@
  * QTI, course_settings) with ranged reads. Videos and other media are never
  * read: they are listed in media_inventory.json by path, size and type.
  *
+ * One exception, only when the instructor asks for it (includeImages): the
+ * small images that course pages show, so the built site is not full of broken
+ * pictures. Never video, audio, documents or SVG.
+ *
  * No dependencies. Uses Blob.slice, DecompressionStream / CompressionStream
  * ('deflate-raw') and TextDecoder, available in current browsers and Node 22.
  *
@@ -24,11 +28,16 @@
     maxKeptBytes: 32 * MiB,          // all kept text entries
     maxDocumentBytes: 10 * MiB,      // per optional document
     maxDocuments: 30,
+    maxImageBytes: 1 * MiB,          // per optional image (must match python/course_files.py)
+    maxImagesBytes: 6 * MiB,         // all optional images
+    maxImages: 200,
     maxEntries: 200000,
     maxCentralDirectoryBytes: 64 * MiB,
   };
   const TEXT_SUFFIXES = ['.xml', '.html', '.htm', '.qti'];
   const DOCUMENT_SUFFIXES = ['.pdf', '.docx', '.pptx', '.txt', '.md', '.csv'];
+  const IMAGE_SUFFIXES = ['.png', '.jpg', '.jpeg', '.gif', '.webp'];
+  const IMAGE_PREFIX = 'course_images/';
   const MIME = {
     mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm',
     mp3: 'audio/mpeg', m4a: 'audio/mp4', wav: 'audio/wav', ogg: 'audio/ogg',
@@ -284,8 +293,18 @@
       .filter(m => DOCUMENT_SUFFIXES.includes(suffix(m.path)) && referenced.has(m.path)
         && m.bytes <= LIMITS.maxDocumentBytes)
       .map(m => ({path: m.path, name: m.path.slice(m.path.lastIndexOf('/') + 1), bytes: m.bytes}));
+    // Images that pages show, within the limits, offered as one optional choice.
+    const images = [];
+    let imageBytes = 0, imagesLeftOut = 0;
+    for (const m of inventory) {
+      if (!IMAGE_SUFFIXES.includes(suffix(m.path)) || !referenced.has(m.path) || !m.path.startsWith('web_resources/')) continue;
+      if (m.bytes > LIMITS.maxImageBytes || images.length >= LIMITS.maxImages
+        || imageBytes + m.bytes > LIMITS.maxImagesBytes) { imagesLeftOut++; continue; }
+      images.push({path: m.path, bytes: m.bytes});
+      imageBytes += m.bytes;
+    }
     return {
-      kept, inventory, documents, warnings, entries: byName,
+      kept, inventory, documents, images, imageBytes, imagesLeftOut, warnings, entries: byName,
       stats: {entries: entries.length, keptEntries: kept.length, keptBytes, skippedBytes, archiveBytes: file.size},
     };
   }
@@ -351,7 +370,7 @@
    * documents the instructor ticked (under materials/).
    */
   async function buildSlimPackage(file, scan, options = {}) {
-    const {includeDocuments = [], onProgress, signal} = options;
+    const {includeDocuments = [], includeImages = false, onProgress, signal} = options;
     const offered = new Set(scan.documents.map(d => d.path));
     if (includeDocuments.length > LIMITS.maxDocuments) {
       throw new SlimExportError(`Choose at most ${LIMITS.maxDocuments} documents.`);
@@ -369,6 +388,16 @@
       files.push({name: 'materials/' + base, data: await readEntry(file, entry, LIMITS.maxDocumentBytes)});
       if (onProgress) onProgress({phase: 'documents', name: base});
     }
+    let imagesIncluded = 0;
+    if (includeImages) {
+      for (const image of scan.images || []) {
+        checkAbort(signal);
+        files.push({name: IMAGE_PREFIX + image.path.slice('web_resources/'.length),
+          data: await readEntry(file, scan.entries.get(image.path), LIMITS.maxImageBytes)});
+        imagesIncluded++;
+        if (onProgress) onProgress({phase: 'images', done: imagesIncluded, total: scan.images.length});
+      }
+    }
     const inventory = scan.inventory.filter(m => !includeDocuments.includes(m.path));
     files.push({name: 'media_inventory.json', data: new TextEncoder().encode(JSON.stringify(inventory))});
     if (onProgress) onProgress({phase: 'packaging'});
@@ -379,7 +408,7 @@
         archiveBytes: scan.stats.archiveBytes, slimBytes: blob.size,
         textEntries: scan.kept.length, mediaEntries: inventory.length,
         mediaBytesSkipped: inventory.reduce((sum, m) => sum + m.bytes, 0),
-        documentsIncluded: includeDocuments.length, warnings: scan.warnings,
+        documentsIncluded: includeDocuments.length, imagesIncluded, warnings: scan.warnings,
       },
     };
   }

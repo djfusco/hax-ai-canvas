@@ -60,7 +60,10 @@ Work that is not finished yet. Tick items off as they are done.
 - [ ] **Publish a built course with the new elements into HAX Lite** and check the questions, note and
   objectives arrive intact and the answers mark correctly.
 - [ ] **Practice-question quality with a real model**: run a build and read the questions it keeps and drops.
-- [ ] Phase 2: send the images pages use in `files/`.
+- [ ] **Pictures beyond the export upload**: courses from the browser extension or the Canvas connection
+  have no pictures yet (their images become "not included" notes); the Canvas import file does not carry
+  included pictures either.
+- [ ] **Storage**: included pictures are up to 6 MiB a course in the database; watch the hosting plan's limit.
 - [ ] Phase 3: carry the course design inside the site (hidden page or UbD manifest).
 - [ ] **Course-design quality with a real model**: draft a design for a real course and judge the
   understandings, questions and evidence map.

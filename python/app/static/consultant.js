@@ -439,6 +439,10 @@
       list.replaceChildren(...scan.documents.map(doc => el('label', {},
         el('input', { type: 'checkbox', value: doc.path }), `${doc.name} (${bytes(doc.bytes)})`)));
       $('cc-docs').hidden = !scan.documents.length;
+      $('cc-images').hidden = !scan.images.length;
+      $('cc-images-include').checked = false;
+      $('cc-images-label').textContent = `${scan.images.length} picture${scan.images.length === 1 ? '' : 's'} (${bytes(scan.imageBytes)})`
+        + (scan.imagesLeftOut ? `; ${scan.imagesLeftOut} more are too large to include` : '');
       $('cc-slim-import').hidden = false;
     }).catch(error => {
       if (!/cancelled/.test(error.message)) showError(error.message);
@@ -449,7 +453,8 @@
   $('cc-slim-import').addEventListener('click', () => run('Importing your course…', async () => {
     const { file, scan } = state.scan;
     const include = [...$('cc-docs-list').querySelectorAll('input:checked')].map(i => i.value);
-    const { blob, summary } = await SlimExport.buildSlimPackage(file, scan, { includeDocuments: include });
+    const { blob, summary } = await SlimExport.buildSlimPackage(file, scan, {
+      includeDocuments: include, includeImages: !$('cc-images').hidden && $('cc-images-include').checked });
     // Send in pieces under 4 MB: hosting platforms cap request size.
     const piece = 3.5 * 1024 * 1024;
     const total = Math.max(1, Math.ceil(blob.size / piece));

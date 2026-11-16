@@ -728,13 +728,14 @@ def create_mentor_blueprint(root_provider):
                         if count > MAX_SLIM_BYTES:
                             raise ValueError("The slimmed course package exceeds 48 MiB.")
                         output.write(chunk)
+            images = []  # only present when the instructor chose to include the pages' images
             try:
-                model = import_slim(path)
+                model = import_slim(path, files=images)
             except SlimImportError as exc:
                 raise ValueError(str(exc)) from None
         model, privacy = strip_course(model, [instructor] if instructor.strip() else ())
         privacy = {key: privacy[key] for key in ("counts", "total", "notes")}
-        workspace = store().save_course_model(g.owner, workspace_id, revision, model, privacy)
+        workspace = store().save_course_model(g.owner, workspace_id, revision, model, privacy, files=images)
         return jsonify(public(workspace))
 
     @bp.post("/api/workspaces/<workspace_id>/intake/canvas")
@@ -1147,9 +1148,26 @@ def create_mentor_blueprint(root_provider):
         from flask import redirect
         return redirect(f"/mentor/api/workspaces/{workspace_id}/site/index.html", code=302)
 
+    def course_image(owner, workspace_id, path):
+        """A stored course image for a preview path like ``files/diagram.png`` (or ``pages/x/../files/..``)."""
+        import course_files
+        from flask import Response
+        name = path.rsplit("/", 1)[-1]
+        if "files/" not in "/" + path or not course_files.NAME.match(name):
+            return None
+        found = store().course_file(owner, workspace_id, name)
+        if found is None:
+            return None
+        response = Response(found[1], mimetype=found[0])
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Content-Security-Policy"] = "default-src 'none'; sandbox"
+        response.headers["Cache-Control"] = "private, max-age=300"
+        return response
+
     @bp.get("/api/workspaces/<workspace_id>/site/<path:path>")
     def site_page(workspace_id, path):
         """Private preview of the whole course site, rendered from current approved documents."""
+        import course_files
         import course_site
         from flask import Response
         from mentor_preview import PREVIEW_STYLE_HASH, response_policy
@@ -1157,8 +1175,11 @@ def create_mentor_blueprint(root_provider):
         model = store().get_course_model(g.owner, workspace_id)
         if model is None:
             return jsonify({"error": "Import a course first."}), 404
+        if path.startswith("files/"):
+            return course_image(g.owner, workspace_id, path) or (jsonify({"error": "Not found."}), 404)
         title = ((workspace.get("source") or {}).get("course_model") or {}).get("title") or workspace["title"]
-        html = course_site.render(title, course_site.course_items(model, workspace), path)
+        html = course_site.render(title, course_site.course_items(model, workspace), path,
+                                  course_files.stored_names(model))
         if html is None:
             return jsonify({"error": "That page is not part of the course site."}), 404
         response = Response(html, mimetype="text/html")
@@ -1185,8 +1206,11 @@ def create_mentor_blueprint(root_provider):
         import course_site
         title = ((workspace.get("source") or {}).get("course_model") or {}).get("title") or workspace["title"]
         with tempfile.TemporaryDirectory(prefix="hax-package-") as temp:
+            import course_files
             result = course_site.package(workspace_id, title, course_site.course_items(model, workspace, students_only=True),
-                                         Path(temp) / "site", workspace.get("site_theme"))
+                                         Path(temp) / "site", workspace.get("site_theme"),
+                                         files=store().course_files(g.owner, workspace_id),
+                                         stored=course_files.stored_names(model))
             return Path(result["path"]).read_bytes()
 
     @bp.post("/api/workspaces/<workspace_id>/hax-lite/start")
@@ -1298,11 +1322,18 @@ def create_mentor_blueprint(root_provider):
             body = json.dumps(hax_preview.site_json(claim["workspace"], title, items, places, workspace.get("site_theme")))
             mimetype = "application/json"
         else:
+            import course_files
+            if "files/" in "/" + path and not path.endswith("/index.html"):
+                image = course_image(claim["owner"], claim["workspace"], path)
+                if image is None:
+                    return respond("Not found.", "text/plain", 404)
+                image.headers["Access-Control-Allow-Origin"] = "*"  # the sandboxed preview has its own origin
+                return image
             slug = path.split("/")[1] if path.startswith("pages/") and path.endswith("/index.html") else None
             item = next((i for i in items if slug and places[i["id"]].split("/")[1] == slug), None)
             if item is None:
                 return respond("Not found.", "text/plain", 404)
-            body, mimetype = hax_preview.page_html(item, course_site.slugs(items)), "text/html"
+            body, mimetype = hax_preview.page_html(item, course_site.slugs(items), course_files.stored_names(model)), "text/html"
         return respond(body, mimetype)
 
     # ── Read-only share link (signed, revocable) ─────────────────────────────
@@ -1369,9 +1400,12 @@ def create_mentor_blueprint(root_provider):
         title = ((workspace.get("source") or {}).get("course_model") or {}).get("title") or workspace["title"]
         if path == "plan":
             return respond(ip.render_html(title, workspace.get("plan") or ip.new_plan(), workspace.get("consultation")))
+        if path.startswith("site/files/"):
+            return course_image(claim["owner"], claim["workspace"], path) or respond(unavailable, 404)
         if path.startswith("site/"):
+            import course_files
             html = course_site.render(title, course_site.course_items(model, workspace, students_only=True),
-                                      path[len("site/"):] or "index.html")
+                                      path[len("site/"):] or "index.html", course_files.stored_names(model))
             if html is None:
                 return respond("<!doctype html><title>Not found</title><p>That page is not part of the course site.</p>", 404)
             return respond(html, policy=response_policy(PREVIEW_STYLE_HASH))
@@ -1681,10 +1715,7 @@ def create_mentor_blueprint(root_provider):
                 model = store().get_course_model(g.owner, workspace_id)
                 if model is None:
                     raise ValueError("Import a course first.")
-                with tempfile.TemporaryDirectory(prefix="hax-package-") as temp:
-                    result = course_site.package(workspace_id, title, course_site.course_items(model, workspace, students_only=True),
-                                                 Path(temp) / "site", workspace.get("site_theme"))
-                    body = Path(result["path"]).read_bytes()
+                body = course_site_zip(workspace_id, workspace, model)
                 return file_response(body, ip.safe_filename(title + " course site", ".zip"), "application/zip")
             plan = workspace.get("plan") or ip.new_plan()
             plan_files = [("Improvement plan.html", ip.render_html(title, plan, workspace.get("consultation"))),

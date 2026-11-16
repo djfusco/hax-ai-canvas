@@ -174,25 +174,31 @@ def slugs(items):
     return result
 
 
-def render(title, items, path):
+def render(title, items, path, stored=None):
     """HTML for one preview path ('index.html' or a page location), or None.
 
-    This preview runs no JavaScript, so HAX elements are shown in their plain form.
+    This preview runs no JavaScript, so HAX elements are shown in their plain form. ``stored``
+    (export path -> file name) names the images kept with the course; they are served beside
+    the preview at ``files/<name>``.
     """
+    import course_files
     import hax_elements
     from mentor_preview import render_preview
-    items = [dict(item, html=hax_elements.to_plain(item["html"])) for item in items]
+    stored = stored or {}
+    items = [dict(item, html=course_files.resolve(hax_elements.to_plain(item["html"]), stored, "files/"))
+             for item in items]
     places = locations(items)
+    assets = {"files/" + name for name in stored.values()}
     workspace = {"title": title, "draft": {"items": items}}
     if path in ("", "index.html"):
-        return render_preview(workspace, places, set())
+        return render_preview(workspace, places, assets)
     for position, item in enumerate(items):
         if places[item["id"]] == path:
-            return render_preview(workspace, places, set(), position=position)
+            return render_preview(workspace, places, assets, position=position)
     return None
 
 
-def package(workspace_id, title, items, destination, theme_element=None):
+def package(workspace_id, title, items, destination, theme_element=None, files=(), stored=None):
     """The downloadable course site: a static HAX site plus an offline plain preview.
 
     Top level: HAX's site shell (index.html, config.js), a HAX-format site.json
@@ -206,6 +212,7 @@ def package(workspace_id, title, items, destination, theme_element=None):
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=False)
     places = locations(items)
+    images, stored = list(files), stored or {}
     files = {
         "index.html": hax_preview.index_html(title, "./"),
         "config.js": hax_preview.config_js(),
@@ -221,10 +228,12 @@ def package(workspace_id, title, items, destination, theme_element=None):
     }
     for item in items:
         slug = places[item["id"]].split("/")[1]
-        files[f"pages/{slug}/index.html"] = hax_preview.page_html(item, slugs(items))
+        files[f"pages/{slug}/index.html"] = hax_preview.page_html(item, slugs(items), stored)
         files[f"preview/{places[item['id']]}"] = render(title, items, places[item["id"]])
     package_path = destination.with_suffix(".zip")
     with zipfile.ZipFile(package_path, "x", zipfile.ZIP_DEFLATED) as archive:
         for name, body in files.items():
             archive.writestr(name, body)
+        for name, _, data in images:  # HAX's files/ folder: the images the pages show
+            archive.writestr("files/" + name, data, zipfile.ZIP_STORED)
     return {"path": str(package_path), "items": len(items), "kind": "course-site"}
