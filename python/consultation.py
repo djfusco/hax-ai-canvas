@@ -46,6 +46,14 @@ STATUSES = ("not_started", "in_progress", "covered", "skipped")
 DIRECTNESS = ("gentle", "balanced", "direct")
 EFFORTS = ("small", "medium", "large")
 AI_DIMENSIONS = ("none", "resilient_assessment", "integrated_learning", "course_tutor", "instructor_tools")
+# What the instructor must do by hand in Canvas. Course Consultant revises pages that already exist;
+# it cannot add an assignment or change points, weights or dates, so such changes are flagged.
+MANUAL_WORK = ("none", "new_item", "grading_change", "both")
+DIRECTNESS_GUIDE = {
+    "gentle": "lead with what works, raise one concern at a time, and phrase advice as possibilities",
+    "balanced": "name strengths and concerns plainly, and recommend one option while showing the others",
+    "direct": "say what you would change first and why, briefly; skip reassurance",
+}
 TOPIC_KEYWORDS = {
     "purpose": "students learners audience major prerequisite modality online class size goal",
     "outcomes": "outcome objective able competency learning goal",
@@ -83,6 +91,10 @@ How you work:
   in the course material, or "course-map" (the course map), "syllabus", or "instructor" (something
   the instructor told you). Never make up an ID.
 - Only propose a change when the instructor has engaged with the topic; never mark anything accepted.
+- You can only revise pages, assignments and documents that already exist. Set manual_work on each
+  proposed change: "new_item" if it needs an assignment, quiz, discussion or page that does not exist
+  yet (including splitting or replacing one); "grading_change" if it changes points, grade weights or
+  due dates; "both"; otherwise "none". Tell the instructor plainly when a change needs that work.
 - Never invent facts about the course. If the evidence is missing, ask.
 - Respect the instructor's time. When they say they are done with a topic or want to move on, stop
   asking about it: mark it covered, keep any unanswered points in open_questions for later (do not
@@ -168,6 +180,33 @@ def relevant_items(model, topic, message, budget):
     return out
 
 
+def _excerpt(text, limit):
+    """The start of a text, saying how much was left out (never a silent cut)."""
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"\n[{len(text) - limit} more characters not shown; ask the instructor about anything missing.]"
+
+
+def reference_texts(model, budget):
+    """The syllabus and the instructor's own documents, within ``budget`` characters.
+
+    The syllabus states the purpose, outcomes, policies and grading the whole consultation is
+    about, so it comes first and gets half the room; other documents share the rest.
+    """
+    out = []
+    syllabus, _ = html_text(model["course"].get("syllabus_html") or "")
+    materials = [m for m in model["materials"] if (m.get("text") or "").strip()]
+    if syllabus and materials and any("syllabus" in m["name"].lower() for m in materials):
+        syllabus = ""  # a documents-only course: the uploaded syllabus is already among the documents
+    if syllabus:
+        out.append("[syllabus] Syllabus\n" + _excerpt(syllabus, budget // 2 if materials else budget))
+    if materials:
+        each = max(400, (budget - sum(len(t) for t in out)) // len(materials))
+        for material in materials:
+            out.append(f"[{material['id']}] {material['name']}\n" + _excerpt(material["text"].strip(), each))
+    return out
+
+
 def _topic_digest(state):
     lines = []
     for topic in TOPICS:
@@ -200,12 +239,13 @@ def _history(history, limit_chars):
 def _build_prompt(state, history, model, course_map, mode, message, scale):
     topic = state["current_topic"]
     parts = [
-        f"ADVICE STYLE: {state['directness']}.",
+        f"ADVICE STYLE: {state['directness']} ({DIRECTNESS_GUIDE[state['directness']]}).",
         "COURSE MAP:\n" + compact_map(course_map, int(6000 * scale)),
         "TOPIC STATE:\n" + _topic_digest(state),
     ]
-    if model["materials"]:
-        parts.append("INSTRUCTOR DOCUMENTS: " + ", ".join(f"[{m['id']}] {m['name']}" for m in model["materials"]))
+    documents = reference_texts(model, int(9000 * scale))
+    if documents:
+        parts.append("SYLLABUS AND INSTRUCTOR DOCUMENTS (evidence):\n" + "\n\n".join(documents))
     items = relevant_items(model, topic, message or "", int(9000 * scale))
     if items:
         parts.append("RELEVANT COURSE ITEMS (evidence):\n" + "\n\n".join(items))
@@ -271,9 +311,10 @@ def _schema(evidence):
                     "evidence": evidence_list, "affected_items": evidence_list,
                     "effort": {"type": "string", "enum": list(EFFORTS)},
                     "ai_dimension": {"type": "string", "enum": list(AI_DIMENSIONS)},
+                    "manual_work": {"type": "string", "enum": list(MANUAL_WORK)},
                 },
                 "required": ["topic", "title", "change", "rationale", "principle", "evidence",
-                             "affected_items", "effort", "ai_dimension"],
+                             "affected_items", "effort", "ai_dimension", "manual_work"],
                 "additionalProperties": False}},
             "next_topic": {"type": "string", "enum": ["", *TOPICS]},
         },
@@ -375,6 +416,8 @@ def apply_response(state, raw, known_ids, *, item_ids):
             "principle": _clean(change.get("principle"), 200, field="principle"),
             "evidence": _check_ids(change.get("evidence", []), known_ids, field="proposal evidence"),
             "affected_items": affected, "effort": change["effort"], "ai_dimension": change["ai_dimension"],
+            # Older or weaker models may leave it out; improvement_plan.manual_work() then infers it.
+            **({"manual_work": change["manual_work"]} if change.get("manual_work") in MANUAL_WORK else {}),
             "status": "proposed", "proposed_at": _now(),
         })
         titles.add(_normalized(title))

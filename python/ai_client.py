@@ -34,6 +34,11 @@ def _anthropic_request_options(provider, model, max_tokens, isolated):
     return options
 
 
+# The hosting platform ends a request at 300 seconds; leave room to save the result.
+TOTAL_BUDGET_SECONDS = 270
+MIN_ATTEMPT_SECONDS = 45  # a retry with less time than this cannot finish a real answer
+
+
 def _retryable(exc):
     import httpx
     if isinstance(exc, (AIResponseError, AttributeError, TypeError, ValueError, IndexError)):
@@ -457,14 +462,25 @@ class AIClient:
         """
         Call the LLM.  Retries up to 3 times with exponential back-off
         (1 s, 2 s) before re-raising the last exception.
+
+        All attempts together stay within TOTAL_BUDGET_SECONDS, because the
+        hosting platform ends the whole request at 300 seconds: an attempt is
+        never given more time than is left, and no retry starts unless a
+        useful amount of time remains. Without this, a slow failure followed
+        by a retry outlived the request, and the instructor's turn was lost.
         """
         last_exc: Optional[Exception] = None
+        started = time.monotonic()
         for attempt in range(3):
+            remaining = TOTAL_BUDGET_SECONDS - (time.monotonic() - started)
+            if attempt and remaining < MIN_ATTEMPT_SECONDS:
+                logger.warning("LLM retry skipped: %ds left in the request budget", max(0, int(remaining)))
+                break
             try:
                 if response_schema is None:
-                    return self._call_once(system, prompt, max_tokens, timeout)
+                    return self._call_once(system, prompt, max_tokens, timeout, budget=remaining)
                 return _json_only(self._call_once(system, prompt, max_tokens, timeout,
-                                                  response_schema=response_schema))
+                                                  response_schema=response_schema, budget=remaining))
             except Exception as exc:
                 last_exc = exc
                 if not _retryable(exc):
@@ -490,6 +506,7 @@ class AIClient:
         timeout:    Optional[int],
         *,
         response_schema: Optional[dict] = None,
+        budget: Optional[float] = None,
     ) -> str:
         p = self.provider
         plan = (self.preflight(system, prompt, max_tokens, response_schema=response_schema)
@@ -504,6 +521,8 @@ class AIClient:
         # Long answers (a whole syllabus, a course structure) can take minutes; stay inside the
         # hosting platform's 300-second request limit.
         effective_timeout = timeout or min(270, max(90, 30 + output // 40))
+        if budget is not None:
+            effective_timeout = max(1, min(effective_timeout, int(budget)))
 
         if p in ("anthropic", "nebula"):
             options = {"max_tokens": output}

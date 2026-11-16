@@ -64,15 +64,46 @@ class PrivacyStripTests(unittest.TestCase):
                                    "questions": [{"text": "As Sam's answer showed, why?", "type": "essay", "points": 1}]}}
         model["materials"] = [{"id": "material-1", "name": "notes.txt", "role": "reference",
                                "text": "Call 555-222-3333"}]
+        model["course"]["syllabus_html"] += '<p><a href="/courses/1/users/42">a student</a></p>'
+        model["question_banks"] = [{"id": "bank-1", "title": "Bank", "questions": [
+            {"text": "Thanks to Priya Shah for this one. Why?", "type": "essay", "points": 1}]}]
+        model["rubrics"] = {"r1": {"title": "R", "points": 4, "criteria": [{
+            "description": "Thesis", "long_description": "", "points": 4, "outcome_id": None,
+            "ratings": [{"description": "Full marks", "long_description": "Ask kim@school.edu", "points": 4}]}]}}
+        model["outcomes"] = [{"id": "o1", "title": "Explain", "description": "Mail lee@school.edu",
+                              "mastery_points": None, "item_ids": []}]
+        model["modules"] = [{"id": "m1", "title": "Posted by Omar Diaz", "position": 1, "items": []}]
         stripped, report = strip_course(model)
-        self.assertNotIn("ta@school.edu", stripped["course"]["syllabus_html"])
+        self.assertIn("ta@school.edu", stripped["course"]["syllabus_html"], "staff contacts stay in the syllabus")
+        self.assertNotIn("users/42", stripped["course"]["syllabus_html"], "links to people are still removed there")
         self.assertNotIn("Sam", stripped["quizzes"]["q1"]["questions"][0]["text"])
         self.assertNotIn("555", stripped["materials"][0]["text"])
-        self.assertEqual(set(report["touched"]), {"syllabus", "q1", "material-1"})
+        self.assertNotIn("Priya", stripped["question_banks"][0]["questions"][0]["text"])
+        self.assertNotIn("kim@", stripped["rubrics"]["r1"]["criteria"][0]["ratings"][0]["long_description"])
+        self.assertNotIn("lee@", stripped["outcomes"][0]["description"])
+        self.assertNotIn("Omar", stripped["modules"][0]["title"])
+        self.assertEqual(set(report["touched"]), {"syllabus", "q1", "material-1", "bank-1", "r1", "o1", "m1"})
         cm.validate_course(stripped)
         again, second = strip_course(copy.deepcopy(stripped))
         self.assertEqual(again, stripped)
         self.assertEqual(second["total"], 0)
+
+    def test_staff_contacts_are_kept_only_where_they_belong(self):
+        model = model_with("<p>Email me: prof@school.edu or call 814-555-1234.</p>")
+        model["items"][0]["title"] = "Contact your instructor"
+        model["items"].append({"id": "p2", "kind": "page", "title": "Week 3 notes", "module_id": None,
+                               "published": True, "html": "<p>Ask jo@gmail.com, 814-555-9999. Thanks to Jo Park!</p>"})
+        model["items"].append({"id": "d1", "kind": "discussion", "title": "Help forum", "module_id": None,
+                               "published": True, "html": "<p>Write to sam@school.edu</p>"})
+        stripped, report = strip_course(model)
+        contact, notes, forum = (i["html"] for i in stripped["items"])
+        self.assertIn("prof@school.edu", contact)
+        self.assertIn("814-555-1234", contact)
+        self.assertNotIn("jo@gmail.com", notes)
+        self.assertNotIn("814-555-9999", notes)
+        self.assertNotIn("Jo Park", notes)
+        self.assertNotIn("sam@school.edu", forum, "only pages count as contact pages, not discussions")
+        self.assertEqual(report["kept_contacts"], [stripped["items"][0]["id"]])
 
     def test_report_never_contains_removed_text(self):
         _, report = strip("<p>Thanks to Jane Smith, jane@school.edu</p>")

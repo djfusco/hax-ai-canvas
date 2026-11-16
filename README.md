@@ -58,7 +58,13 @@ Design: [`docs/superpowers/specs/2026-11-09-course-consultant.md`](docs/superpow
    Quality Matters, TILT, UDL, balanced workload): a home page, Start here, a
    course schedule, an overview and exact checklist (due dates, points, from
    the course, never from the AI) for every week, and an instructor section
-   (guide, design decisions, weekly notes) that students don't see. Two
+   (guide, design decisions, weekly notes, "to do by hand in Canvas"). The
+   instructor section, answer keys and unpublished items appear only in the
+   instructor's own preview, the Canvas import file (unpublished) and the
+   documents ZIP; they are left out of the HAX site ZIP, Publish to HAX Lite,
+   the HAX-theme preview and the share link. The AI's weekly time estimate is
+   shown to the instructor only, until they confirm or correct it in the
+   structure. Two
    options: **Essential** (structure, front pages, weekly overviews and notes;
    course pages keep their content in a consistent layout) and **Full** (every
    course page reorganised into purpose / what to do / how it's graded / using
@@ -84,19 +90,39 @@ estimate of the AI requests and tokens, and the cost when the provider
 publishes prices (OpenRouter).
 
 **Quick AI version.** Instead of talking it through, the instructor can have
-the AI act as their advisor: it answers every consultation topic from the
-course evidence (assumptions marked), accepts its own proposals (labelled
-*AI-decided*), drafts the plan and writes revised documents (labelled
-*AI-approved*). Everything stays editable: keep consulting, change any
-decision, ask for changes to any document, and the site follows.
+the AI work through every consultation topic from the course evidence
+(assumptions marked) and propose changes. It decides nothing: the instructor
+accepts the changes they want (one by one, or all at once after reading
+them), and the AI then drafts the plan and writes revised documents as
+drafts for the instructor to approve.
+
+**What it cannot do for you.** Course Consultant revises pages, assignments
+and documents that already exist. It cannot add an assignment, split or
+replace one, or change points, grade weights or due dates. Every proposed
+change records whether it needs that work; such changes are flagged on the
+proposal, in the plan ("To do by hand in Canvas"), on the build screen and in
+the built course's instructor section, so a revised syllabus is not mistaken
+for a Canvas course that already matches it.
+
+**Deleting data.** "Delete this course" removes a course and everything made
+from it; "Delete all my courses and saved AI keys" removes everything stored
+for the person. An account can hold up to 25 courses. Replacing a course
+keeps the consultation and the plan and clears the revised documents and the
+built course (they were written for the old course's pages). Automatic
+deletion of inactive courses is not built yet (see `docs/todo.md`).
 
 ## Privacy
 - Grades, submissions, student discussion replies and class lists are never
   imported, by either intake path.
 - Before anything is stored or sent to an AI provider, likely student
-  information is removed: emails, phone numbers, student IDs, links to user
-  profiles, and names in class contexts ("Thanks to Jane", "Priya's post").
-  The instructor sees what was removed. This is a safeguard, not a guarantee.
+  information is removed: student IDs, links to user profiles, names in class
+  contexts ("Thanks to Jane", "Priya's post"), and emails and phone numbers.
+  Emails and phone numbers are kept in the syllabus and on contact and
+  support pages (titles such as "Contact your instructor", "Getting help",
+  "Welcome"), where they belong to staff and offices. Titles, question banks,
+  rubric ratings and outcome descriptions are covered too; file names are
+  not. The instructor sees what was removed. This is a safeguard, not a
+  guarantee.
 - Uploaded export packages are processed in a temporary directory and never
   kept. Course models, conversations and proposals are stored per user.
 - The extension's permissions and exact data use are in
@@ -130,8 +156,14 @@ decision, ask for changes to any document, and the site follows.
 
 Every AI response is validated before it is used: known topics, statuses and
 course IDs only, length limits, and proposals stored as *proposed* only. Models
-never accept their own proposals. Prompts are fitted to each model's limits
-from its catalog; nothing is silently truncated.
+never accept their own proposals, and AI-written documents are drafts until
+the instructor approves them. Prompts are fitted to each model's limits from
+its catalog. Long texts are shortened for a prompt: the consultation and the
+syllabus revision tell the model how much was left out; other steps use the
+first 12,000-20,000 characters of a page (see `docs/todo.md`). AI-written
+and imported HTML is sanitized, including markup hidden in comments and CDATA
+sections. All AI attempts for one step share one time budget, so a retry
+cannot outlive the hosting platform's request limit.
 
 ### API (all under `/mentor/api/workspaces/<id>`)
 | Route | Purpose |
@@ -155,7 +187,9 @@ from its catalog; nothing is silently truncated.
 | `PUT /build/pages/<id>`, `POST /build/pages/<id>/revise\|restore` | Edit, revise or restore a built page |
 | `POST /intake/canvas` | Import a course through the institutional Canvas connection |
 | `POST /consult` with `mode: auto` / `advance` | Quick AI version advisor turn / move on to the next topic |
-| `POST /consult/proposals/accept-all` | Quick AI version: accept proposals as AI-decided |
+| `POST /consult/proposals/accept-all` | The instructor accepts every undecided proposal |
+| `POST /documents/approve-all` | The instructor approves every draft document |
+| `DELETE /mentor/api/workspaces/<id>`, `DELETE /mentor/api/account` (`{"confirm": "DELETE"}`) | Delete a course; delete everything stored for the person |
 | `POST /documents/<id>/revise` | Revise a document from an instruction |
 | `GET /site/...` | Private preview of the whole course site |
 | `POST /hax-preview` → `/mentor/hax/<signed>/` | HAX-theme preview (signed two-hour link, sandboxed origin) |

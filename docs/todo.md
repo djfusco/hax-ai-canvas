@@ -55,3 +55,52 @@ Work that is not finished yet. Tick items off as they are done.
 
 ## Not built yet
 - [ ] LTI 1.3 launch from inside Canvas (needs an institution's registration).
+
+## From the November 2026 review: still open
+Done in that round: sanitizer bypass (comments, CDATA); instructor-only pages kept out of published and
+shared sites; replacing a course resets stale work; course and data deletion with a 25-course cap; staff
+contact details kept, more fields stripped; one time budget for AI retries; the consultant reads the syllabus
+and uploaded documents; Quick AI version stops for the instructor's decisions; hand-work in Canvas flagged;
+weekly hours shown to students only when confirmed; a mostly unpublished course is no longer treated as
+instructor-only; the quality check no longer rewards adding AI.
+
+Decisions and design:
+- [ ] **Create and re-weight assessments.** Today such changes are only flagged as hand-work
+  (`improvement_plan.manual_work`). Letting the tool add items and change points and weights touches the
+  course model, the build and the Canvas package.
+- [ ] **Automatic retention.** Delete courses untouched for a set period (the spec suggests 12 months).
+  Needs a scheduled job and a decision on the period.
+- [ ] **Delete the sign-in record.** "Delete all my data" removes courses and saved keys; the email held by
+  the sign-in service (Neon Auth) stays.
+
+Pedagogy:
+- [ ] **Outcome alignment is shallow and never confirmed.** It is a yes/no link judged from a short excerpt,
+  with no level (introduce, practise, assess) and no way for the instructor to confirm it
+  (`course_map.propose_alignment`).
+- [ ] **Check the built course against the outcomes.** Weekly objectives are written from item titles;
+  nothing checks that every outcome is taught and assessed.
+- [ ] **Workload.** "Workload" is a count of graded items per week; video length and reading time are
+  unknown. Ask the instructor for credit hours and term length, and estimate from them.
+- [ ] **Learning evidence.** Advice rests on course documents and what the instructor recalls. Consider
+  de-identified score summaries per assignment.
+- [ ] **Old due dates** are carried into the built course; offer to shift them to a new term.
+- [ ] **Courses that are not weekly** (self-paced, modular) are still forced into weeks.
+- [ ] **Image descriptions** from "Fix with AI" are written without seeing the image.
+
+Engineering:
+- [ ] **Lost updates between two tabs**: edits to the plan, documents and built pages are saved without a
+  revision check (`save_consultant_fields`). AI requests are not idempotent either.
+- [ ] **Database use**: several new connections and table checks on every request; no pooling
+  (`hosted_data.py`, `hosted_backend.py`).
+- [ ] **Shortened inputs without a notice**: uploaded documents over 60,000 characters (the warning is
+  dropped at intake) and page text over 15,000-20,000 characters in document and build prompts.
+- [ ] **Sanitizer keeps remote images and `id`/`class`**, so an imported page can carry a tracking image.
+- [ ] **HAX-theme preview link** cannot be revoked before it expires (two hours).
+- [ ] **Extension**: the collected course is held only in the service worker's memory and can be lost if the
+  person pauses before importing.
+- [ ] **No CI**; the Postgres storage tests are skipped unless a database is configured; tests pass on SDK
+  versions other than the pinned ones, so the `anthropic==0.86.0` pin is unverified.
+- [ ] **`tests-js/slim-export.test.cjs` "detects corrupted entries"** fails on Node 26 (the error text
+  changed); it expects Node 22.
+- [ ] **Structure**: `mentor_routes.py` is one 1,700-line function; unused code from the old wizard remains
+  (`imscc_content.prepare_import_content`, `mentor_materials.fetch_url_material`, `ai_client.build_ai_client`).

@@ -106,13 +106,38 @@ def build_items(model, documents):
     return items
 
 
-def course_items(model, workspace):
+def course_items(model, workspace, *, students_only=False):
     """The course as students and instructors will see it: the AI-built course when one has been
-    built, otherwise the original course with approved revisions in place."""
+    built, otherwise the original course with approved revisions in place.
+
+    ``students_only`` leaves out everything meant for the instructor. Use it for anything that
+    leaves the instructor's own signed-in view (a published or downloaded site, a shared link).
+    """
     import course_build
     documents = workspace.get("documents") or []
     built = course_build.site_items(workspace.get("build"), model, documents, workspace.get("consultation"))
-    return built if built is not None else build_items(model, documents)
+    items = built if built is not None else build_items(model, documents)
+    return student_items(model, items) if students_only else items
+
+
+def student_items(model, items):
+    """Only what students may see: no instructor section, answer keys or unpublished items.
+
+    A built course marks each page's audience. The original course has no such marking, so its
+    items are checked the same way the build decides (title or Canvas state).
+    """
+    import course_build
+    by_id = {i["id"]: i for i in model["items"]}
+    hidden = course_build.instructor_only_ids(model)
+    kept = []
+    for item in items:
+        if item.get("audience") == "instructor":
+            continue
+        source = item["id"][:-len("--rubric")] if item["id"].endswith("--rubric") else item["id"]
+        if "audience" not in item and source in by_id and source in hidden:
+            continue
+        kept.append(item)
+    return kept
 
 
 def locations(items):

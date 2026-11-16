@@ -32,7 +32,7 @@ import re
 from bs4 import BeautifulSoup
 
 from course_map import html_text
-from improvement_plan import accepted
+from improvement_plan import MANUAL_LABELS, accepted, manual_tasks, manual_work
 
 MODES = ("essential", "full")
 MAX_WEEKS = 20
@@ -138,7 +138,11 @@ def _changes(consult_state, item_ids=None):
     rows = []
     for p in accepted(consult_state):
         if item_ids is None or set(p.get("affected_items") or []) & set(item_ids):
-            rows.append(f"- [{p['id']}] {p['title']}: {p['change']} (why: {p['rationale']})")
+            needs = manual_work(p)
+            rows.append(f"- [{p['id']}] {p['title']}: {p['change']} (why: {p['rationale']})"
+                        + (f" [INSTRUCTOR MUST DO BY HAND IN CANVAS: {MANUAL_LABELS[needs]}. The course does not "
+                           "contain this yet: do not describe it as existing; where it matters write "
+                           "[Instructor to add in Canvas: ...].]" if needs != "none" else ""))
     return "\n".join(rows) or "(none)"
 
 
@@ -224,9 +228,23 @@ INSTRUCTOR_TITLE = re.compile(r"^\s*(\[?\s*)(for instructors?|instructors? only|
                               r"solutions?\b)", re.I)
 
 
-def instructor_only(item):
-    """Items whose title or Canvas state says students must not see them."""
-    return bool(INSTRUCTOR_TITLE.search(item["title"])) or item.get("published") is False
+def unpublished_is_a_signal(model):
+    """Whether "unpublished in Canvas" marks instructor material in this course.
+
+    In a finished course a few unpublished items are usually drafts or keys. A course that is
+    mostly unpublished is one still being developed (or a copy for next term): there, treating
+    unpublished items as instructor-only would hide the whole course from students.
+    """
+    items = [i for i in model["items"] if i["kind"] != "external_tool"]
+    unpublished = sum(1 for i in items if i.get("published") is False)
+    return bool(unpublished) and unpublished * 2 < len(items)
+
+
+def instructor_only_ids(model):
+    """IDs of items students must not see: by title always, by Canvas state when that is a signal."""
+    by_state = unpublished_is_a_signal(model)
+    return {i["id"] for i in model["items"]
+            if INSTRUCTOR_TITLE.search(i["title"]) or (by_state and i.get("published") is False)}
 
 
 def _aliases(model):
@@ -237,6 +255,7 @@ def _aliases(model):
 def _blueprint_prompt(model, consult_state, plan, documents):
     modules = _module_titles(model)
     labels = {v: k for k, v in _aliases(model).items()}
+    by_state = unpublished_is_a_signal(model)
     rows = []
     for item in model["items"]:
         if item["kind"] in ("external_tool",):
@@ -244,7 +263,7 @@ def _blueprint_prompt(model, consult_state, plan, documents):
         text, _ = html_text(_item_html(model, documents, item))
         details = _details(model, item["id"])
         extras = "; ".join(f"{k}: {v}" for k, v in details.items())
-        hidden = " | UNPUBLISHED in Canvas" if item.get("published") is False else ""
+        hidden = " | UNPUBLISHED in Canvas" if by_state and item.get("published") is False else ""
         rows.append(f"- {labels[item['id']]} | {item['kind']} | {item['title']} | module: {modules.get(item['id'], '-')}"
                     f" | {len(text.split())} words" + (f" | {extras}" if extras else "") + hidden)
     return "\n\n".join([
@@ -299,8 +318,12 @@ def _clean_text(value, maximum, field):
 WEEK_PREFIX = re.compile(r"^\s*(week|wk|module|unit)\s*\d+\s*[:.\-–—]?\s*", re.I)
 
 
-def validate_blueprint(raw, model):
+def validate_blueprint(raw, model, *, by_instructor=False):
     """Check a blueprint (from the AI or edited by the instructor); place every item once.
+
+    A week's ``hours`` is the AI's rough estimate (it cannot see video length or reading time),
+    so students only see it when the instructor has confirmed it (``hours_shown``), which only an
+    instructor's edit can set.
 
     Items whose title or Canvas state marks them instructor-only always go to the instructor
     section, whatever the AI or an edit says. Unplaced unpublished items go there too; other
@@ -314,6 +337,7 @@ def validate_blueprint(raw, model):
     items = {i["id"]: i for i in model["items"]}
     aliases = _aliases(model)
     hidden = {i for i, item in items.items() if INSTRUCTOR_TITLE.search(item["title"])}
+    private = instructor_only_ids(model)
     placed = set()
 
     def take(values):
@@ -339,12 +363,14 @@ def validate_blueprint(raw, model):
             "number": number, "title": title[:160],
             "theme": (week.get("theme") or "").strip()[:500] if isinstance(week.get("theme"), str) else "",
             "objectives": objectives, "items": week_items,
-            "hours": round(float(hours), 1) if isinstance(hours, (int, float)) and 0 < hours <= 60 else None,
+            "hours": round(float(hours), 1) if type(hours) in (int, float) and 0 < hours <= 60 else None,
+            "hours_shown": bool(by_instructor and week.get("hours_shown") is True
+                                and type(hours) in (int, float) and 0 < hours <= 60),
             "instructor_focus": (week.get("instructor_focus") or "").strip()[:600]
             if isinstance(week.get("instructor_focus"), str) else "",
         })
     rest = [i for i, item in items.items() if i not in placed and item["kind"] != "external_tool"]
-    instructor += [i for i in rest if i in hidden or items[i].get("published") is False]
+    instructor += [i for i in rest if i in private]
     unplaced = [i for i in rest if i not in instructor]
     summary = raw.get("summary") if isinstance(raw.get("summary"), str) else ""
     return {"summary": summary.strip()[:3000], "weeks": weeks, "start_items": start,
@@ -466,9 +492,21 @@ def checklist_html(week, model):
                                         f"{details['points']:g} points" if "points" in details else "") if x)
         rows.append(f'<li><a href="{ITEM_PREFIX}{escape(item_id, quote=True)}">{escape(titles[item_id]["title"])}</a>'
                     + (f" <em>({facts})</em>" if facts else "") + "</li>")
-    hours = f"<p>Expected time this week: about {week['hours']:g} hours.</p>" if week.get("hours") else ""
+    hours = (f"<p>Expected time this week: about {week['hours']:g} hours.</p>"
+             if week.get("hours") and week.get("hours_shown") else "")
     return (f"<h2>This week's checklist</h2>{hours}<ol>{''.join(rows)}</ol>" if rows
             else "<h2>This week's checklist</h2><p>No course items are scheduled this week.</p>")
+
+
+def hours_note(week):
+    """For the instructor: the AI's time estimate and whether students see it (written by the app)."""
+    if not week.get("hours"):
+        return ""
+    seen = ("Students see this figure because you confirmed it." if week.get("hours_shown") else
+            "Students do not see it. It is a rough AI estimate from the amount of text: it cannot account "
+            "for video length, reading speed or practice time. Check it, then choose “show to students” "
+            "in the course structure if you want it shown.")
+    return f"<h2>Estimated student time</h2><p>About {week['hours']:g} hours this week. {seen}</p>"
 
 
 def _week_step(build, number, model, consult_state, plan, documents, client):
@@ -506,7 +544,7 @@ def _week_step(build, number, model, consult_state, plan, documents, client):
     _set_page(build, _page(f"week-{number}", "week", f"Week {number}: {week['title']}",
                            overview + checklist_html(week, model), week=number))
     _set_page(build, _page(f"week-{number}-notes", "instructor", f"Week {number}: instructor notes",
-                           _html(raw.get("instructor_notes_html"), known, "instructor notes"),
+                           _html(raw.get("instructor_notes_html"), known, "instructor notes") + hours_note(week),
                            audience="instructor", week=number))
 
 
@@ -640,14 +678,19 @@ def revise_page(build, page_id, instruction, model, plan, client):
 def _schedule_html(build, model):
     titles = _items_by_id(model)
     rows = []
+    # The hours column appears only when the instructor has confirmed at least one week's time.
+    shown = any(w.get("hours") and w.get("hours_shown") for w in build["blueprint"]["weeks"])
     for week in build["blueprint"]["weeks"]:
         due = [f"{escape(titles[i]['title'])} ({_details(model, i)['due']})" for i in week["items"]
                if "due" in _details(model, i)]
         rows.append(f"<tr><td>{week['number']}</td><td>{escape(week['title'])}</td>"
-                    f"<td>{'<br>'.join(due) or '–'}</td><td>{week['hours'] if week.get('hours') else '–'}</td></tr>")
+                    f"<td>{'<br>'.join(due) or '–'}</td>"
+                    + (f"<td>{week['hours']:g}</td>" if week.get("hours") and week.get("hours_shown")
+                       else "<td>–</td>" if shown else "") + "</tr>")
     return ("<p>The course week by week. Exact due dates are also in each week's checklist.</p>"
             "<table><thead><tr><th scope=col>Week</th><th scope=col>Topic</th><th scope=col>Due</th>"
-            "<th scope=col>Hours</th></tr></thead><tbody>" + "".join(rows) + "</tbody></table>")
+            + ("<th scope=col>Hours</th>" if shown else "") + "</tr></thead><tbody>" + "".join(rows)
+            + "</tbody></table>")
 
 
 def _templated_item(model, documents, item):
@@ -729,8 +772,19 @@ def site_items(build, model, documents, consult_state=None):
     guide = pages.get("instructor-guide")
     add("module--instructor", "Instructor guide", "pages",
         guide["html"] if guide else "<p>The instructor guide has not been written yet.</p>", section, "instructor")
+    todo = manual_tasks(consult_state)
+    if todo:
+        add("manual-work", "To do by hand in Canvas", "pages",
+            "<p>Course Consultant reorganises and revises what is already in your course. It cannot add an "
+            "assignment, split or replace one, or change points, grade weights or due dates. These accepted "
+            "changes need that work, so until you do it the syllabus and pages may describe more than the "
+            "Canvas course contains.</p><ul>"
+            + "".join(f"<li><strong>{escape(t['title'])}</strong>: {escape(t['label'])}.</li>" for t in todo)
+            + "</ul>", section, "instructor")
     accepted_rows = "".join(f"<li><strong>{escape(p['title'])}</strong>: {escape(p['change'])} "
-                            f"<em>Why:</em> {escape(p['rationale'])}</li>" for p in accepted(consult_state))
+                            f"<em>Why:</em> {escape(p['rationale'])}"
+                            + (f" <strong>To do by hand:</strong> {escape(MANUAL_LABELS[manual_work(p)])}."
+                               if manual_work(p) != "none" else "") + "</li>" for p in accepted(consult_state))
     if accepted_rows:
         add("design-decisions", "Design decisions", "pages", f"<ol>{accepted_rows}</ol>", section, "instructor")
     for item_id in build["blueprint"].get("instructor_items", []):

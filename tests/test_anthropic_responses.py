@@ -132,6 +132,29 @@ class AnthropicResponseTests(unittest.TestCase):
         self.assertEqual(len(requests), 2)
         sleep.assert_called_once_with(1)
 
+    def test_retries_stay_inside_the_request_time_budget(self):
+        """A slow failure must not be followed by a retry that outlives the hosting limit."""
+        import ai_client
+
+        class Unavailable(Exception):
+            status_code = 503
+
+        client, _ = self.client([])
+        clock = {"now": 1000.0}
+        budgets = []
+
+        def slow_failure(*args, budget=None, **kwargs):
+            budgets.append(budget)
+            clock["now"] += 120  # each attempt takes two minutes, then the provider answers 503
+            raise Unavailable()
+
+        client._call_once = slow_failure
+        with patch("ai_client.time.monotonic", lambda: clock["now"]), patch("ai_client.time.sleep"), \
+                self.assertLogs("ai_client", level="WARNING"), self.assertRaises(Unavailable):
+            client.call("System", "Prompt")
+        self.assertEqual(len(budgets), 2, "a third attempt would not fit, so it is not started")
+        self.assertEqual(budgets, [ai_client.TOTAL_BUDGET_SECONDS, ai_client.TOTAL_BUDGET_SECONDS - 120])
+
     def test_deterministic_attribute_error_is_never_retried_or_logged_verbatim(self):
         client, _ = self.client([])
         client._call_once = Mock(side_effect=AttributeError("private-diagnostic-fixture"))

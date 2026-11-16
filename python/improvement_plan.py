@@ -75,16 +75,62 @@ def decide(consult_state, proposal_id, status, edits=None):
 
 
 def accept_all(consult_state):
-    """Quick AI version: accept every undecided proposal on the instructor's behalf, marked as AI-decided."""
+    """The instructor accepts every undecided proposal at once (after reviewing them).
+
+    The AI never accepts its own proposals: this is an instructor action, recorded as theirs.
+    (Proposals accepted by an earlier version's quick mode keep their "AI-decided" label.)
+    """
     state = deepcopy(consult_state or {})
     for proposal in state.get("proposals", []):
         if proposal["status"] == "proposed":
-            proposal.update(status="accepted", decided_by="ai", decided_at=_now())
+            proposal.update(status="accepted", decided_by="instructor", decided_at=_now())
     return state
 
 
 def accepted(consult_state):
     return [p for p in (consult_state or {}).get("proposals", []) if p["status"] == "accepted"]
+
+
+# ── work the instructor must do by hand ──────────────────────────────────────
+# Course Consultant revises what is already in the course. It cannot add an assignment, split an
+# exam, or change points, weights or dates. A change that needs any of that is flagged everywhere
+# it appears, so a revised syllabus is never mistaken for a course that already matches it.
+
+_NEW_ITEM = re.compile(
+    r"\b(add|adds|adding|introduce|create|new|replace|replacing|split|break|scaffold|convert)\b[^.]{0,80}"
+    r"\b(assignments?|quiz(?:zes)?|exams?|tests?|projects?|discussions?|reflections?|drafts?|milestones?|"
+    r"checkpoints?|peer reviews?|activit(?:y|ies)|pages?|modules?|check-ins?|portfolio)\b", re.I)
+_GRADING = re.compile(r"\b(re-?weight\w*|weights?|weighting|percent(?:age)?|\d+\s?%|points?|drop the lowest|"
+                      r"due dates?|deadlines?|grade scheme|grading scheme)\b", re.I)
+MANUAL_LABELS = {
+    "new_item": "Needs a new item in Canvas, which you add by hand",
+    "grading_change": "Changes points, weights or dates, which you set by hand in Canvas",
+    "both": "Needs a new item and changed points, weights or dates, which you do by hand in Canvas",
+}
+
+
+def manual_work(proposal):
+    """"none", "new_item", "grading_change" or "both" for one proposed change.
+
+    Uses what the consultant recorded; for changes recorded before that existed (or by a model
+    that left it out), it is inferred from the wording, erring towards flagging.
+    """
+    from consultation import MANUAL_WORK
+    if proposal.get("manual_work") in MANUAL_WORK:
+        return proposal["manual_work"]
+    text = f"{proposal.get('title', '')}. {proposal.get('change', '')}"
+    new_item, grading = bool(_NEW_ITEM.search(text)), bool(_GRADING.search(text))
+    return "both" if new_item and grading else "new_item" if new_item else "grading_change" if grading else "none"
+
+
+def manual_tasks(consult_state):
+    """Accepted changes the instructor must finish in Canvas: [{"id", "title", "kind", "label"}]."""
+    rows = []
+    for proposal in accepted(consult_state):
+        kind = manual_work(proposal)
+        if kind != "none":
+            rows.append({"id": proposal["id"], "title": proposal["title"], "kind": kind, "label": MANUAL_LABELS[kind]})
+    return rows
 
 
 # ── plan sections ────────────────────────────────────────────────────────────
@@ -249,6 +295,7 @@ def _sections(title, plan, consult_state):
         "changes": by_status["accepted"],
         "deferred": by_status["deferred"],
         "ai_changes": [p for p in by_status["accepted"] if p["ai_dimension"] != "none"],
+        "manual": manual_tasks(consult_state),
         "ai_policy": plan.get("ai_policy", ""),
         "open_questions": plan.get("open_questions", []),
     }
@@ -265,7 +312,9 @@ def render_html(title, plan, consult_state):
                 f"{escape(p['effort'])} effort" + (f" · {escape(AI_LABELS[p['ai_dimension']])}"
                                                    if p["ai_dimension"] != "none" else "")
                 + f"</p><p>{escape(p['change'])}</p><p><strong>Why:</strong> {escape(p['rationale'])} "
-                f"<em>({escape(p['principle'])})</em></p></article>")
+                f"<em>({escape(p['principle'])})</em></p>"
+                + (f"<p><strong>To do by hand:</strong> {escape(MANUAL_LABELS[manual_work(p)])}.</p>"
+                   if manual_work(p) != "none" else "") + "</article>")
 
     body = [f"<h1>{escape(s['title'])}</h1>"]
     body.append("<h2>Course vision</h2>" + (paragraphs(s["vision"]) or "<p><em>Not written yet.</em></p>"))
@@ -277,6 +326,12 @@ def render_html(title, plan, consult_state):
     body.append("<h2>AI in this course</h2>" + paragraphs(s["ai_policy"])
                 + ("<ul>" + "".join(f"<li>{escape(p['title'])} ({escape(AI_LABELS[p['ai_dimension']])})</li>"
                                     for p in s["ai_changes"]) + "</ul>" if s["ai_changes"] else ""))
+    if s["manual"]:
+        body.append("<h2>To do by hand in Canvas</h2><p>Course Consultant revises pages and assignments that "
+                    "already exist. These accepted changes also need work it cannot do for you, so the revised "
+                    "documents may describe more than the Canvas course contains until you do it.</p><ul>"
+                    + "".join(f"<li><strong>{escape(t['title'])}</strong>: {escape(t['label'])}.</li>"
+                              for t in s["manual"]) + "</ul>")
     if s["deferred"]:
         body.append("<h2>Deferred for later</h2><ul>" + "".join(f"<li>{escape(p['title'])}</li>" for p in s["deferred"]) + "</ul>")
     if s["open_questions"]:
@@ -318,12 +373,23 @@ def render_docx(title, plan, consult_state):
         why = doc.add_paragraph()
         why.add_run("Why: ").bold = True
         why.add_run(f"{p['rationale']} ({p['principle']})")
+        if manual_work(p) != "none":
+            todo = doc.add_paragraph()
+            todo.add_run("To do by hand: ").bold = True
+            todo.add_run(MANUAL_LABELS[manual_work(p)] + ".")
     doc.add_heading("AI in this course", 1)
     for line in s["ai_policy"].split("\n"):
         if line.strip():
             doc.add_paragraph(line.strip())
     for p in s["ai_changes"]:
         doc.add_paragraph(f"{p['title']} ({AI_LABELS[p['ai_dimension']]})", style="List Bullet")
+    if s["manual"]:
+        doc.add_heading("To do by hand in Canvas", 1)
+        doc.add_paragraph("Course Consultant revises pages and assignments that already exist. These accepted "
+                          "changes also need work it cannot do for you, so the revised documents may describe "
+                          "more than the Canvas course contains until you do it.")
+        for task in s["manual"]:
+            doc.add_paragraph(f"{task['title']}: {task['label']}.", style="List Bullet")
     if s["deferred"]:
         doc.add_heading("Deferred for later", 1)
         for p in s["deferred"]:

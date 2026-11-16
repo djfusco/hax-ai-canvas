@@ -77,7 +77,7 @@ class SlimIntakeTests(unittest.TestCase):
         self.assertEqual(course["source"], "export")
         self.assertEqual(course["counts"]["assignments"], 3)
         self.assertEqual(course["counts"]["rubrics"], 1)
-        self.assertEqual(course["privacy"]["counts"]["emails"], 1)
+        self.assertEqual(course["privacy"]["counts"]["emails"], 0, "a welcome page's contact is the staff's")
         self.assertEqual(course["privacy"]["counts"]["names"], 1)
         self.assertNotIn("touched", course["privacy"])
         self.assertEqual(result["source_type"], "export")
@@ -85,7 +85,7 @@ class SlimIntakeTests(unittest.TestCase):
         model = self.stored_model()
         welcome = next(i for i in model["items"] if i["title"] == "Welcome")
         self.assertNotIn("Jane Smith", welcome["html"])
-        self.assertNotIn("ta@school.edu", welcome["html"])
+        self.assertIn("ta@school.edu", welcome["html"], "staff contact details stay on welcome/contact pages")
         self.assertTrue(model["course"]["weighted_groups"])
         # The raw package is never persisted.
         self.assertFalse(list(self.root.rglob("*.zip")))
@@ -151,9 +151,9 @@ class SlimIntakeTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
         course = response.json["course"]
         self.assertEqual((course["source"], course["title"], course["counts"]["materials"]), ("documents", "Biology 101", 2))
-        self.assertGreaterEqual(course["privacy"]["counts"]["emails"], 1)
+        self.assertEqual(course["privacy"]["counts"]["emails"], 0)
         model = self.stored_model()
-        self.assertNotIn("prof@school.edu", json.dumps(model))
+        self.assertIn("prof@school.edu", model["course"]["syllabus_html"], "the instructor's contact stays in the syllabus")
         self.assertIn("explain osmosis", model["course"]["syllabus_html"])
         course_map = self.client.get(f"/mentor/api/workspaces/{self.workspace['id']}/course-map").json
         self.assertEqual(course_map["assessment_summary"]["graded_items"], 0)

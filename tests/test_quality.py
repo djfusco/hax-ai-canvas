@@ -47,11 +47,12 @@ class QualityCheckTests(unittest.TestCase):
         self.assertEqual(result["No invented instructor statements"], "fail")
         self.assertEqual(result["Findings cite the course"], "warn")
         for name in ("Proposals made", "Proposals cite the course", "Proposals name a principle",
-                     "AI dimensions considered", "No duplicate proposals", "Plan has a vision",
+                     "No duplicate proposals", "Plan has a vision",
                      "Outcomes are measurable", "Student AI policy", "Documents approved",
                      "Documents pass accessibility errors", "Documents apply accepted changes only",
                      "No personal contact details in AI text"):
             self.assertEqual(result[name], "warn", name)
+        self.assertEqual(result["Where AI is proposed"], "pass", "proposing no AI is never marked down")
         self.assertEqual(result["Documents have content"], "fail")
 
     def test_passes_strong_work(self):

@@ -117,7 +117,8 @@ def run(export_path, provider, model_id, api_key, out_dir, *, max_documents=6, l
         for index, target in enumerate(wanted, 1):
             log(f"Writing {target['title']} ({index} of {len(wanted)})…")
             step("documents", "POST", base + "/documents/generate",
-                 {"provider": provider, "kind": target["kind"], "item_id": target.get("item_id"), "approve": True})
+                 {"provider": provider, "kind": target["kind"], "item_id": target.get("item_id")})
+        call("POST", base + "/documents/approve-all", {})  # the evaluator stands in for the instructor
         consult = call("GET", base + "/consult")
         plan = call("GET", base + "/plan")
         documents = call("GET", base + "/documents")["documents"]

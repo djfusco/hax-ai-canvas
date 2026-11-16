@@ -23,6 +23,7 @@ from hosted_config import hosted_mode, settings, HostedSetupError
 from hosted_accounts import AccountAuthError, NeonAuth, session_cookies, new_session_cookies, COOKIE_NAMES
 
 
+MAX_WORKSPACES = 25  # per account; each can hold a course of several MiB
 PUBLIC_FIELDS = ("id", "title", "source_type", "revision", "created_at", "updated_at", "messages", "share")
 
 
@@ -657,6 +658,9 @@ def create_mentor_blueprint(root_provider):
         title = str(data.get("title", "")).strip()
         if not 1 <= len(title) <= 240:
             raise ValueError("Enter a course title of 1–240 characters.")
+        if store().count(g.owner) >= MAX_WORKSPACES:
+            raise WorkspaceConflict(f"You can keep up to {MAX_WORKSPACES} courses. Delete one you no longer "
+                                    "need, then add the new course.")
         workspace = store().create(g.owner, title, source_type="blank")
         store().add_message(g.owner, workspace["id"], "assistant",
                             "Let's design this together. Add your course/materials, then tell me the audience, "
@@ -666,6 +670,26 @@ def create_mentor_blueprint(root_provider):
     @bp.get("/api/workspaces/<workspace_id>")
     def get_workspace(workspace_id):
         return jsonify(public(store().get(g.owner, workspace_id)))
+
+    @bp.delete("/api/workspaces/<workspace_id>")
+    def delete_workspace(workspace_id):
+        """Delete a course and everything stored for it. It cannot be undone."""
+        store().delete(g.owner, workspace_id)
+        return jsonify({"deleted": True})
+
+    @bp.delete("/api/account")
+    def delete_account_data():
+        """Delete everything stored for this person: every course and every saved AI key.
+
+        The sign-in itself (the email address held by the sign-in service) is not ours to
+        delete; the browser signs out afterwards.
+        """
+        if payload().get("confirm") != "DELETE":
+            raise ValueError("Type DELETE to confirm.")
+        deleted = store().delete_owner(g.owner)
+        for saved in g.vault.status(g.owner):
+            g.vault.forget(g.owner, saved["provider"])
+        return jsonify({"deleted": True, "courses": deleted})
 
     @bp.post("/api/workspaces/<workspace_id>/intake/export")
     def intake_export(workspace_id):
@@ -959,7 +983,8 @@ def create_mentor_blueprint(root_provider):
         import improvement_plan as ip
         consult_state = workspace.get("consultation") or {}
         return {"plan": workspace.get("plan") or ip.new_plan(),
-                "proposals": consult_state.get("proposals", []),
+                "proposals": [dict(p, manual_work=ip.manual_work(p)) for p in consult_state.get("proposals", [])],
+                "manual": ip.manual_tasks(consult_state),
                 "consulted": bool(consult_state.get("turns")),
                 "busy": bool(workspace.get("consult_busy"))}
 
@@ -1118,7 +1143,7 @@ def create_mentor_blueprint(root_provider):
         import course_site
         title = ((workspace.get("source") or {}).get("course_model") or {}).get("title") or workspace["title"]
         with tempfile.TemporaryDirectory(prefix="hax-package-") as temp:
-            result = course_site.package(workspace_id, title, course_site.course_items(model, workspace),
+            result = course_site.package(workspace_id, title, course_site.course_items(model, workspace, students_only=True),
                                          Path(temp) / "site", workspace.get("site_theme"))
             return Path(result["path"]).read_bytes()
 
@@ -1220,7 +1245,7 @@ def create_mentor_blueprint(root_provider):
         if model is None:
             return respond("Not found.", "text/plain", 404)
         title = ((workspace.get("source") or {}).get("course_model") or {}).get("title") or workspace["title"]
-        items = course_site.course_items(model, workspace)
+        items = course_site.course_items(model, workspace, students_only=True)
         places = course_site.locations(items)
         if path in ("", "index.html") or ("." not in path.rsplit("/", 1)[-1] and not path.startswith("pages/")):
             # The site shell; HAX's router reads page addresses like ".../week-1" itself.
@@ -1303,7 +1328,7 @@ def create_mentor_blueprint(root_provider):
         if path == "plan":
             return respond(ip.render_html(title, workspace.get("plan") or ip.new_plan(), workspace.get("consultation")))
         if path.startswith("site/"):
-            html = course_site.render(title, course_site.course_items(model, workspace),
+            html = course_site.render(title, course_site.course_items(model, workspace, students_only=True),
                                       path[len("site/"):] or "index.html")
             if html is None:
                 return respond("<!doctype html><title>Not found</title><p>That page is not part of the course site.</p>", 404)
@@ -1331,6 +1356,15 @@ def create_mentor_blueprint(root_provider):
     def documents_get(workspace_id):
         return jsonify(documents_view(store().get(g.owner, workspace_id)))
 
+    @bp.post("/api/workspaces/<workspace_id>/documents/approve-all")
+    def documents_approve_all(workspace_id):
+        """The instructor approves every draft document at once. AI-written documents are always
+        drafts until the instructor approves them."""
+        import revised_documents as rd
+        workspace = store().get(g.owner, workspace_id)
+        documents = rd.approve_all(workspace.get("documents"))
+        return jsonify(documents_view(store().save_consultant_fields(g.owner, workspace_id, documents=documents)))
+
     @bp.post("/api/workspaces/<workspace_id>/documents/generate")
     def documents_generate(workspace_id):
         import revised_documents as rd
@@ -1341,8 +1375,6 @@ def create_mentor_blueprint(root_provider):
             document = rd.generate(data.get("kind"), model, course_map, workspace.get("consultation"),
                                    workspace.get("plan"), ai, item_id=data.get("item_id"),
                                    instruction=redact(data["instruction"]) if isinstance(data.get("instruction"), str) else None)
-            if data.get("approve") is True:  # Quick AI version: approved on the instructor's behalf
-                document.update(status="approved", auto=True)
             if data.get("replace_id"):
                 return {"documents": rd.replace(workspace.get("documents"), data["replace_id"], document)}
             return {"documents": rd.add(workspace.get("documents"), document)}
@@ -1384,7 +1416,9 @@ def create_mentor_blueprint(root_provider):
         build = workspace.get("build")
         model = store().get_course_model(g.owner, workspace["id"])
         items = {i["id"]: i["title"] for i in (model or {}).get("items", [])}
+        import improvement_plan as ip
         return {"build": build, "busy": bool(workspace.get("consult_busy")),
+                "manual": ip.manual_tasks(workspace.get("consultation")),
                 "steps": cb.steps(build, model, workspace.get("documents") or []) if build and model else [],
                 "ready": bool(build and model and cb.site_items(build, model, workspace.get("documents") or []) is not None),
                 "item_titles": items, "modes": list(cb.MODES),
@@ -1422,7 +1456,8 @@ def create_mentor_blueprint(root_provider):
             blueprint = cb.validate_blueprint({
                 "summary": current["summary"], "weeks": data.get("weeks"),
                 "start_items": data.get("start_items", current.get("start_items", [])),
-                "instructor_items": data.get("instructor_items", current.get("instructor_items", []))}, model)
+                "instructor_items": data.get("instructor_items", current.get("instructor_items", []))}, model,
+                by_instructor=True)
         except cb.BuildError as exc:
             raise ValueError(str(exc)) from None
         build = dict(build, blueprint=blueprint, pages=[], done=[], updated_at=cb._now())
@@ -1597,7 +1632,7 @@ def create_mentor_blueprint(root_provider):
                 if model is None:
                     raise ValueError("Import a course first.")
                 with tempfile.TemporaryDirectory(prefix="hax-package-") as temp:
-                    result = course_site.package(workspace_id, title, course_site.course_items(model, workspace),
+                    result = course_site.package(workspace_id, title, course_site.course_items(model, workspace, students_only=True),
                                                  Path(temp) / "site", workspace.get("site_theme"))
                     body = Path(result["path"]).read_bytes()
                 return file_response(body, ip.safe_filename(title + " course site", ".zip"), "application/zip")

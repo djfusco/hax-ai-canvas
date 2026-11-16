@@ -9,6 +9,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from bs4 import BeautifulSoup
+from bs4.element import PreformattedString
 
 ITEM_PREFIX = "$IMSCC_ITEM_REFERENCE$/"
 CONTENT_FIELDS = ("body", "description", "message", "question_text", "text")
@@ -24,6 +25,11 @@ PASSIVE_TAGS = set(
 def sanitize_import_html(content: str) -> str:
     """Remove active content before rendering uploaded or model-generated HTML."""
     soup = BeautifulSoup(content or "", "html.parser")
+    # Comments, CDATA sections, declarations and processing instructions are written back
+    # verbatim, and browsers end them earlier than this parser does ("<!-->" is a whole
+    # comment to a browser), so markup hidden inside them would come alive. Drop them all.
+    for node in list(soup.find_all(string=lambda text: isinstance(text, PreformattedString))):
+        node.extract()
     for node in list(soup.find_all(
         ["script", "iframe", "object", "embed", "base", "link", "meta", "style",
          "form", "svg", "math", "template"]

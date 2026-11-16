@@ -88,6 +88,26 @@ def _object(value):
         raise ValueError("Invalid JSON workspace data or credential field.") from None
 
 
+def _reset_for_new_course(state, model):
+    """Clear work tied to the old course's items; keep the conversation and the plan."""
+    known = {i["id"] for i in model["items"]} | {o["id"] for o in model["outcomes"]}
+    known |= {m["id"] for m in model["materials"]} | set(model["rubrics"])
+    known |= {"syllabus", "instructor", "course-map"}
+    items = {i["id"] for i in model["items"]}
+    state["build"] = None
+    state["documents"] = []
+    state["consult_busy"] = None
+    state.pop("hax_lite_pending", None)
+    consultation = state.get("consultation")
+    if isinstance(consultation, dict):
+        for topic in (consultation.get("topics") or {}).values():
+            for fact in topic.get("facts", []):
+                fact["evidence"] = [e for e in fact.get("evidence", []) if e in known]
+        for proposal in consultation.get("proposals", []):
+            proposal["evidence"] = [e for e in proposal.get("evidence", []) if e in known]
+            proposal["affected_items"] = [i for i in proposal.get("affected_items", []) if i in items]
+
+
 class MentorStore:
     def __init__(self, db_path):
         self.db_path = str(Path(db_path))
@@ -207,12 +227,41 @@ class MentorStore:
         with self._connection() as conn:
             return self._load(conn, owner, id)
 
+    def delete(self, owner, id):
+        """Delete one workspace and everything stored for it: the course, the conversation, the
+        plan, documents, built course and any upload in progress. Its share links stop working."""
+        with self._transaction() as conn:
+            self._load(conn, owner, id)
+            conn.execute("DELETE FROM mentor_intake_chunks WHERE owner = ? AND workspace_id = ?", (owner, id))
+            conn.execute("DELETE FROM mentor_course_models WHERE owner = ? AND workspace_id = ?", (owner, id))
+            conn.execute("DELETE FROM mentor_workspaces WHERE owner = ? AND id = ?", (owner, id))
+
+    def delete_owner(self, owner):
+        """Delete every workspace an account owns. Returns how many were deleted."""
+        _text(owner, "owner")
+        with self._transaction() as conn:
+            count = conn.execute("SELECT COUNT(*) FROM mentor_workspaces WHERE owner = ?", (owner,)).fetchone()[0]
+            conn.execute("DELETE FROM mentor_intake_chunks WHERE owner = ?", (owner,))
+            conn.execute("DELETE FROM mentor_course_models WHERE owner = ?", (owner,))
+            conn.execute("DELETE FROM mentor_workspaces WHERE owner = ?", (owner,))
+        return count
+
+    def count(self, owner):
+        _text(owner, "owner")
+        with self._connection() as conn:
+            return conn.execute("SELECT COUNT(*) FROM mentor_workspaces WHERE owner = ?", (owner,)).fetchone()[0]
+
     def save_course_model(self, owner, id, revision, model, privacy):
         """Store a validated, privacy-stripped course model as the workspace source.
 
         The model lives in its own table (it can be several MiB); the workspace
-        state keeps only a summary. Replacing the course invalidates downstream
-        work like any other input change.
+        state keeps only a summary.
+
+        Replacing a course keeps the conversation and the plan, which are about the
+        course as a whole, and clears what was written for the old course's items:
+        the built course and the revised documents. References to items that no
+        longer exist are dropped from the consultation, so nothing points at a
+        missing page. (An export import gives every item a new ID.)
         """
         import course_model as cm
         cm.validate_course(model)
@@ -233,8 +282,16 @@ class MentorStore:
             state = self._load(conn, owner, id)
             self._exact(state, revision)
             self._idle(state)
+            busy = state.get("consult_busy")
+            if busy and (datetime.now(timezone.utc) - datetime.fromisoformat(busy)).total_seconds() \
+                    < self.CONSULT_LEASE_SECONDS:
+                raise WorkspaceConflict("The AI is still working on this course. Wait for it to finish, "
+                                        "then replace the course.")
+            replaced = bool((state.get("source") or {}).get("course_model"))
             state["source"] = {"source_type": source_type, "course_model": summary}
             state["source_type"] = source_type
+            if replaced:
+                _reset_for_new_course(state, model)
             self._invalidate(state)
             conn.execute(
                 "INSERT INTO mentor_course_models (workspace_id, owner, model, updated_at) "

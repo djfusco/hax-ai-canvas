@@ -75,7 +75,8 @@ class QuickVersionTests(unittest.TestCase):
         self.assertEqual([m["role"] for m in view["messages"]], ["assistant"] * 6)
 
         plan = self.call("POST", self.base + "/consult/proposals/accept-all")
-        self.assertEqual((plan["proposals"][0]["status"], plan["proposals"][0]["decided_by"]), ("accepted", "ai"))
+        self.assertEqual(view["state"]["proposals"][0]["status"], "proposed", "the AI never accepts its own proposals")
+        self.assertEqual((plan["proposals"][0]["status"], plan["proposals"][0]["decided_by"]), ("accepted", "instructor"))
 
         self.ai({"title": "Syllabus", "html": "<h1>Syllabus</h1><p>Outline in week 1.</p>",
                  "summary_of_changes": "", "applied_proposals": ["p-1"]},
@@ -84,7 +85,10 @@ class QuickVersionTests(unittest.TestCase):
         self.call("POST", self.base + "/documents/generate", {"provider": "openai", "kind": "syllabus", "approve": True})
         docs = self.call("POST", self.base + "/documents/generate",
                          {"provider": "openai", "kind": "assignment", "item_id": self.essay, "approve": True})["documents"]
-        self.assertEqual([(d["status"], d.get("auto")) for d in docs], [("approved", True), ("approved", True)])
+        self.assertEqual([(d["status"], d.get("auto")) for d in docs], [("draft", None), ("draft", None)],
+                         "AI-written documents are drafts, whatever the request says")
+        docs = self.call("POST", self.base + "/documents/approve-all")["documents"]
+        self.assertEqual([d["status"] for d in docs], ["approved", "approved"])
         site = self.client.get(self.base + "/site/index.html").data.decode()
         self.assertIn("Syllabus", site)
 

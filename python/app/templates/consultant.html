@@ -185,10 +185,10 @@
           </article>
           <article class="cc-card">
             <h2>Quick AI version</h2>
-            <p>The AI acts as your advisor: it answers the consultation from your course, decides the changes, drafts
-              the plan and writes revised documents, then builds a site you can preview. Everything it decides is
-              labelled, and you can revisit any part afterwards.</p>
-            <button id="cc-quick" type="button" class="cc-btn cc-btn-quiet">Create the quick AI version</button>
+            <p>The AI works through the consultation itself, from your course, and proposes changes with its
+              assumptions marked. You choose which changes to accept; it then drafts the plan and documents for you
+              to review and approve. Nothing is decided or approved for you.</p>
+            <button id="cc-quick" type="button" class="cc-btn cc-btn-quiet">Start the quick AI version</button>
           </article>
         </div>
         <div class="cc-row">
@@ -238,6 +238,11 @@
         </div>
       </div>
       <h2>Proposed changes</h2>
+      <p id="cc-decide-note" class="cc-muted"></p>
+      <div class="cc-row">
+        <button id="cc-accept-all" type="button" class="cc-btn cc-btn-quiet" hidden>Accept all proposed changes</button>
+        <button id="cc-quick-continue" type="button" class="cc-btn" hidden>Draft the plan and documents from accepted changes</button>
+      </div>
       <div id="cc-proposals"></div>
       <article class="cc-card cc-plan">
         <div class="cc-head"><h2>Plan</h2>
@@ -276,13 +281,14 @@
         <div class="cc-row">
           <a id="cc-docs-zip" class="cc-btn cc-btn-quiet" href="#" download>Download documents (Word + HTML)</a>
           <a id="cc-docs-imscc" class="cc-btn cc-btn-quiet" href="#" download>Documents for Canvas (.imscc)</a>
+          <button id="cc-approve-all" type="button" class="cc-btn cc-btn-quiet" hidden>Approve all drafts</button>
           <button id="cc-docs-next" type="button" class="cc-btn">Next: build the course →</button>
         </div>
       </div>
       <details class="cc-card cc-a11y" id="cc-quality">
         <summary><strong>Quality check</strong> <span id="cc-quality-summary" class="cc-muted">(automatic, no AI)</span></summary>
         <p class="cc-muted">Checks the consultation, plan and documents for common weaknesses: advice not grounded in
-          your course, statements nobody made, missing topics or AI dimensions, vague outcomes, accessibility errors
+          your course, statements nobody made, missing topics, vague outcomes, accessibility errors
           and personal details. It cannot judge whether the advice is wise; you are the judge of that.</p>
         <button id="cc-quality-run" type="button" class="cc-btn cc-btn-quiet">Run the quality check</button>
         <div id="cc-quality-results"></div>
@@ -362,6 +368,11 @@
       </article>
       <article class="cc-card cc-plan" id="cc-build-structure" hidden>
         <h2>2. Review the structure</h2>
+        <div id="cc-build-manual" class="cc-banner" hidden>
+          <strong>To do by hand in Canvas.</strong> Course Consultant reorganises and revises what is already in your
+          course. It cannot add an assignment or change points, weights or dates, so these accepted changes need you:
+          <ul id="cc-build-manual-list" class="cc-list"></ul>
+        </div>
         <p id="cc-build-summary" class="cc-muted"></p>
         <div id="cc-build-weeks"></div>
         <div class="cc-row">
@@ -384,8 +395,8 @@
       </article>
       <details class="cc-card cc-share" id="cc-share">
         <summary>Share a read-only link</summary>
-        <p class="cc-muted">Anyone with the link can read the plan and the course site preview (for example an
-          instructional designer or your chair). They cannot change anything or see your consultation or AI settings.
+        <p class="cc-muted">Anyone with the link can read the plan and the course site as students would see it (for example an
+          instructional designer or your chair). They cannot change anything or see your consultation, the instructor section or AI settings.
           The link shows your latest work, lasts 90 days, and stops working as soon as you turn sharing off.</p>
         <div id="cc-share-on" hidden>
           <label for="cc-share-url">Shared link</label>
@@ -398,6 +409,17 @@
         <button id="cc-share-start" type="button" class="cc-btn">Create a read-only link</button>
       </details>
     </section>
+
+    <details class="cc-card" id="cc-data">
+      <summary>Your data: delete a course or everything</summary>
+      <p class="cc-muted">Course Consultant keeps each course's text, your consultation, the plan, the documents and
+        the built course until you delete them. Deleting cannot be undone, and shared links stop working.
+        Download anything you want to keep first.</p>
+      <div class="cc-row">
+        <button id="cc-delete-course" type="button" class="cc-btn cc-btn-quiet">Delete this course</button>
+        <button id="cc-delete-all" type="button" class="cc-btn cc-btn-quiet">Delete all my courses and saved AI keys</button>
+      </div>
+    </details>
   </div>
 </div>
 {% endblock %}

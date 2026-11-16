@@ -332,6 +332,33 @@
     selectTab('course');
   }));
 
+  $('cc-delete-course').addEventListener('click', () => {
+    if (!state.workspace) return;
+    const title = (state.workspaces.find(w => w.id === state.workspace.id) || state.workspace).title;
+    if (!window.confirm(`Delete “${title}”?\n\nThis removes the course, the consultation, the plan, the documents `
+      + 'and the built course. It cannot be undone, and its shared link stops working.')) return;
+    run('Deleting the course…', async () => {
+      await api(`/mentor/api/workspaces/${encodeURIComponent(state.workspace.id)}`, { method: 'DELETE' });
+      state.workspace = null;
+      store.set('workspace', '');
+      await loadWorkspaces(); // opens another course, or starts an empty one
+      selectTab('course');
+    }, 'The course was deleted.');
+  });
+  $('cc-delete-all').addEventListener('click', () => {
+    const typed = window.prompt('Delete every course and every saved AI key?\n\nThis cannot be undone. '
+      + 'Type DELETE to confirm.');
+    if (typed !== 'DELETE') return;
+    run('Deleting everything…', async () => {
+      await api('/mentor/api/account', { method: 'DELETE', json: { confirm: 'DELETE' } });
+      store.set('workspace', '');
+      if (state.session && state.session.account) {
+        await api('/mentor/api/auth/logout', { method: 'POST', json: {} }).catch(() => {});
+      }
+      window.location.reload();
+    });
+  });
+
   // ── tabs ─────────────────────────────────────────────────────────────────
 
   function selectTab(name) {
@@ -481,7 +508,9 @@
     });
   });
   $('cc-replace').addEventListener('click', () => {
-    if (!window.confirm('Replace this course? Your consultation notes are kept.')) return;
+    if (!window.confirm('Replace this course?\n\nKept: the consultation, the proposed changes and the plan.\n'
+      + 'Cleared: the revised documents and the built course, because they were written for the old course\'s pages. '
+      + 'Download anything you want to keep first.')) return;
     $('cc-intake').hidden = false;
     $('cc-course').hidden = true;
   });
@@ -611,12 +640,16 @@
     renderJob();
   });
 
-  /** Quick AI version: the AI advises and decides; every step is a separate, resumable request. */
+  /**
+   * Quick AI version, in two parts with the instructor's decision between them.
+   * Part 1 (quickVersion): the AI advises on every topic and proposes changes. It decides nothing.
+   * Part 2 (quickDocuments): after the instructor accepts the changes they want, the AI drafts the
+   * plan and writes documents, all as drafts for the instructor to approve.
+   */
   async function quickVersion() {
     requireAi();
     const ws = () => `/mentor/api/workspaces/${state.workspace.id}`;
-    startJob('Quick AI version', ['Consultation: the advisor works through each topic', 'Accept the advisor\'s changes',
-      'Draft the improvement plan', 'Write revised documents']);
+    startJob('Quick AI version', ['Consultation: the advisor works through each topic']);
     try {
       // 1. The advisor works through every topic not yet covered.
       let view = await api(ws() + '/consult');
@@ -636,33 +669,46 @@
         state.consult = view;
       }
       jobStep(0, topicLine(null));
-      // 2. Accept the advisor's proposals on the instructor's behalf (labelled AI-decided).
-      jobStep(1);
-      status('Quick AI version: accepting the advisor\'s changes…');
-      state.plan = await api(ws() + '/consult/proposals/accept-all', { method: 'POST', json: {} });
-      if (state.consult && state.consult.state) state.consult.state.proposals = state.plan.proposals;
-      state.job.steps[1].detail = `${state.plan.proposals.filter(p => p.status === 'accepted').length} changes accepted`;
-      // 3. Draft the plan.
-      jobStep(2);
-      status('Quick AI version: drafting the improvement plan…');
-      state.plan = await api(ws() + '/plan/draft', { method: 'POST', json: { provider: state.provider } });
-      // 4. Write revised documents: syllabus, then assessments touched by accepted changes, with rubrics.
-      const docs = await api(ws() + '/documents');
-      const have = new Set(docs.documents.filter(d => d.status === 'approved').map(d => `${d.kind}:${d.item_id || ''}`));
-      const wanted = docs.targets.filter(t => t.kind === 'syllabus' || t.proposals.length).slice(0, 13)
-        .filter(t => !have.has(`${t.kind}:${t.item_id || ''}`));
-      for (const [index, target] of wanted.entries()) {
-        jobStep(3, `${index + 1} of ${wanted.length}: ${target.title}`);
-        status(`Quick AI version: writing ${target.title} (${index + 1} of ${wanted.length})…`);
-        state.docs = await api(ws() + '/documents/generate', { method: 'POST',
-          json: { provider: state.provider, kind: target.kind, item_id: target.item_id, approve: true } });
-      }
-      jobStep(3, wanted.length ? `${wanted.length} written` : 'already written');
       endJob('Finished');
     } catch (error) {
       endJob(error.message === CANCELLED ? 'Cancelled' : 'Stopped', error);
       throw error;
     }
+    // The instructor decides: nothing is accepted for them.
+    state.quickPending = true;
+    selectTab('plan'); // its own loader is skipped while this task runs, so load here
+    state.plan = await api(ws() + '/plan');
+    renderPlan();
+    renderPlanCount();
+  }
+
+  /** Part 2: draft the plan and write documents from the changes the instructor accepted. */
+  async function quickDocuments() {
+    requireAi();
+    const ws = () => `/mentor/api/workspaces/${state.workspace.id}`;
+    startJob('Plan and documents', ['Draft the improvement plan', 'Write revised documents (as drafts)']);
+    try {
+      jobStep(0);
+      status('Drafting the improvement plan…');
+      state.plan = await api(ws() + '/plan/draft', { method: 'POST', json: { provider: state.provider } });
+      // The syllabus, then assessments touched by accepted changes, with rubrics.
+      const docs = await api(ws() + '/documents');
+      const have = new Set(docs.documents.map(d => `${d.kind}:${d.item_id || ''}`));
+      const wanted = docs.targets.filter(t => t.kind === 'syllabus' || t.proposals.length).slice(0, 13)
+        .filter(t => !have.has(`${t.kind}:${t.item_id || ''}`));
+      for (const [index, target] of wanted.entries()) {
+        jobStep(1, `${index + 1} of ${wanted.length}: ${target.title}`);
+        status(`Writing ${target.title} (${index + 1} of ${wanted.length})…`);
+        state.docs = await api(ws() + '/documents/generate', { method: 'POST',
+          json: { provider: state.provider, kind: target.kind, item_id: target.item_id } });
+      }
+      jobStep(1, wanted.length ? `${wanted.length} written` : 'already written');
+      endJob('Finished');
+    } catch (error) {
+      endJob(error.message === CANCELLED ? 'Cancelled' : 'Stopped', error);
+      throw error;
+    }
+    state.quickPending = false;
     renderPlanCount();
     selectTab('docs'); // its own loader is skipped while this task runs, so load here
     state.docs = await api(ws() + '/documents');
@@ -672,11 +718,36 @@
     if (!aiReady()) { requireAiPrompt(); return; }
     if (state.busy) { showError('Something is still running. Wait for it to finish, or cancel it at the top of the page.'); return; }
     const cost = await estimateText('quick');
-    if (!window.confirm('Create the quick AI version?\n\nThe AI will answer the consultation itself, accept its own proposed '
-      + 'changes (labelled AI-decided), draft the plan and write revised documents. It takes a few minutes; progress '
-      + 'shows at the top of the page, where you can cancel. You can change any part afterwards.\n\n' + cost)) return;
+    if (!window.confirm('Start the quick AI version?\n\nThe AI will work through the consultation itself, from your '
+      + 'course, and propose changes with its assumptions marked. It decides nothing: you then choose which changes '
+      + 'to accept, and it drafts the plan and documents for you to review. It takes a few minutes; progress shows at '
+      + 'the top of the page, where you can cancel.\n\n' + cost)) return;
     run('Starting the quick AI version…', quickVersion,
-      'Quick AI version ready. Review the revised documents below and refine anything you like, then go to step 5 to build the finished course.');
+      'The advisor has finished. Review its proposed changes below, accept the ones you want, then have it write the plan and documents.');
+  });
+  $('cc-accept-all').addEventListener('click', () => {
+    const open = state.plan.proposals.filter(p => p.status === 'proposed').length;
+    if (!window.confirm(`Accept all ${open} proposed change${open === 1 ? '' : 's'}? You can still undo, edit or reject each one.`)) return;
+    run('Accepting…', async () => {
+      state.plan = await api(base() + '/consult/proposals/accept-all', { method: 'POST', json: {} });
+      if (state.consult && state.consult.state) state.consult.state.proposals = state.plan.proposals;
+      renderPlan();
+      renderPlanCount();
+    }, 'All proposed changes accepted.');
+  });
+  $('cc-quick-continue').addEventListener('click', async () => {
+    if (!aiReady()) { requireAiPrompt(); return; }
+    if (state.busy) { showError('Something is still running. Wait for it to finish, or cancel it at the top of the page.'); return; }
+    run('Drafting the plan and documents…', quickDocuments,
+      'Drafts are ready. Read each document, ask for changes if you like, and approve the ones you want in the course.');
+  });
+  $('cc-approve-all').addEventListener('click', () => {
+    const drafts = state.docs.documents.filter(d => d.status !== 'approved').length;
+    if (!window.confirm(`Approve all ${drafts} draft document${drafts === 1 ? '' : 's'}? Approved documents replace the originals in the course site.`)) return;
+    run('Approving…', async () => {
+      state.docs = await api(base() + '/documents/approve-all', { method: 'POST', json: {} });
+      renderDocuments();
+    }, 'All drafts approved.');
   });
 
   // ── course map ───────────────────────────────────────────────────────────
@@ -895,6 +966,8 @@
         el('p', { class: 'cc-muted' }, topics[p.topic] || p.topic, ' · ', `${p.effort} effort`,
           p.ai_dimension !== 'none' ? ` · ${AI_DIMENSIONS[p.ai_dimension]}` : ''),
         el('p', { text: p.change }),
+        p.manual_work && p.manual_work !== 'none' ? el('p', { class: 'cc-banner' },
+          el('strong', { text: 'You do this part by hand in Canvas. ' }), MANUAL_WORK[p.manual_work]) : null,
         el('dl', {}, el('dt', { text: 'Why' }), el('dd', { text: p.rationale }),
           el('dt', { text: 'Principle' }), el('dd', { text: p.principle })),
         el('div', { class: 'cc-row' },
@@ -922,8 +995,21 @@
     return card;
   }
 
+  const MANUAL_WORK = {
+    new_item: 'This change needs an assignment, quiz, discussion or page that is not in your course yet. Course Consultant revises what exists; it cannot add it for you.',
+    grading_change: 'This change alters points, grade weights or due dates. Course Consultant keeps those as they are in your course; set the new values in Canvas.',
+    both: 'This change needs a new item and different points, weights or dates. Course Consultant revises what exists; add the item and set the values in Canvas.',
+  };
+
   function renderPlan() {
     if (!state.plan) return;
+    const waiting = state.plan.proposals.filter(p => p.status === 'proposed').length;
+    const acceptedCount = state.plan.proposals.filter(p => p.status === 'accepted').length;
+    $('cc-accept-all').hidden = !waiting;
+    $('cc-quick-continue').hidden = !acceptedCount;
+    $('cc-decide-note').textContent = waiting
+      ? `${waiting} proposed change${waiting === 1 ? '' : 's'} waiting for your decision. Nothing is used until you accept it.`
+      : (acceptedCount ? 'Every proposed change has a decision.' : '');
     const topics = Object.fromEntries((state.consult ? state.consult.topics : []).map(t => [t.id, t.label]));
     const order = { proposed: 0, accepted: 1, deferred: 2, rejected: 3 };
     const list = [...state.plan.proposals].sort((a, b) => order[a.status] - order[b.status]);
@@ -988,6 +1074,7 @@
         + (t.proposals.length ? ` (applies ${plural(t.proposals.length, 'accepted change')})` : '') })));
     $('cc-generate').disabled = !view.targets.length;
     const approved = view.documents.filter(d => d.status === 'approved').length;
+    $('cc-approve-all').hidden = approved === view.documents.length;
     $('cc-docs-zip').setAttribute('aria-disabled', String(!approved));
     $('cc-docs-zip').classList.toggle('cc-disabled', !approved);
     $('cc-docs-zip').href = base() + '/documents/export';
@@ -1172,6 +1259,9 @@
     $('cc-build-structure').hidden = !blueprint;
     $('cc-build-pages').hidden = !view.ready;
     $('cc-build-propose').textContent = blueprint ? 'Propose a new structure' : 'Propose the week-by-week structure';
+    const manual = view.manual || [];
+    $('cc-build-manual').hidden = !manual.length;
+    $('cc-build-manual-list').replaceChildren(...manual.map(t => el('li', {}, el('strong', { text: t.title }), `: ${t.label}.`)));
     if (blueprint) {
       $('cc-build-summary').textContent = `${build.mode === 'full' ? 'Full' : 'Essential'} build. ${blueprint.summary}`;
       renderWeeks(blueprint, view.item_titles);
@@ -1203,7 +1293,12 @@
       ...weeks.map(w => el('div', { class: 'cc-build-week' },
         el('div', { class: 'cc-row' }, el('label', { for: `cc-week-${w.number}`, text: `Week ${w.number}` }),
           el('input', { id: `cc-week-${w.number}`, class: 'cc-week-title', value: w.title, maxlength: 160 }),
-          w.hours ? el('span', { class: 'cc-muted', text: `about ${w.hours} hours` }) : null),
+          el('label', { for: `cc-week-hours-${w.number}`, class: 'cc-muted', text: 'Student hours (rough AI estimate)' }),
+          el('input', { id: `cc-week-hours-${w.number}`, class: 'cc-week-hours', type: 'number', min: 0.5, max: 60, step: 0.5,
+            value: w.hours || '' }),
+          el('label', { class: 'cc-muted' },
+            el('input', { id: `cc-week-hours-shown-${w.number}`, type: 'checkbox', checked: Boolean(w.hours_shown) }),
+            ' Show to students')),
         w.theme ? el('p', { class: 'cc-muted', text: w.theme }) : null,
         w.objectives.length ? el('ul', { class: 'cc-list' }, w.objectives.map(o => el('li', { text: o }))) : null,
         el('ol', { class: 'cc-list' }, w.items.map(id => itemRow(id, w.number))))),
@@ -1312,7 +1407,9 @@
     if (state.build.ready && !window.confirm('Saving changes to the structure clears the pages built so far. Continue?')) return;
     run('Saving the structure…', async () => {
       const weeks = blueprint.weeks.map(w => ({ title: $(`cc-week-${w.number}`).value.trim() || w.title, theme: w.theme,
-        objectives: w.objectives, hours: w.hours, instructor_focus: w.instructor_focus, items: [] }));
+        objectives: w.objectives, hours: Number($(`cc-week-hours-${w.number}`).value) || null,
+        hours_shown: $(`cc-week-hours-shown-${w.number}`).checked,
+        instructor_focus: w.instructor_focus, items: [] }));
       const start = [], instructor = [];
       for (const select of $('cc-build-weeks').querySelectorAll('select[data-item]')) {
         const place = select.value;

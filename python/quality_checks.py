@@ -83,11 +83,15 @@ def consultation_checks(model, state, messages, *, instructor_spoke):
         _check(results, "Proposals name a principle", "pass" if not no_principle else "warn",
                "Every proposal names the teaching principle behind it." if not no_principle
                else "No principle named for: " + "; ".join(no_principle[:5]) + ".")
+        # Information only, never a warning: AI is not always the answer, and a check that
+        # wanted every AI dimension covered would push the consultant to add AI for its own sake.
         dimensions = {p.get("ai_dimension") for p in proposals} - {"none", None}
-        absent = [d.replace("_", " ") for d in consultation.AI_DIMENSIONS if d != "none" and d not in dimensions]
-        _check(results, "AI dimensions considered", "pass" if not absent else "warn",
-               "Proposals cover all four AI dimensions." if not absent
-               else "No proposal addresses: " + ", ".join(absent) + ".")
+        used = [d.replace("_", " ") for d in consultation.AI_DIMENSIONS if d in dimensions]
+        with_ai = sum(1 for p in proposals if p.get("ai_dimension") not in ("none", None))
+        _check(results, "Where AI is proposed", "pass",
+               (f"{with_ai} of {len(proposals)} proposals involve AI ({', '.join(used)}). " if used
+                else "No proposal involves AI. ")
+               + "Judge each on whether it helps learning; none is required.")
         titles = [p["title"].strip().lower() for p in proposals]
         repeats = sorted({t for t in titles if titles.count(t) > 1})
         _check(results, "No duplicate proposals", "pass" if not repeats else "warn",

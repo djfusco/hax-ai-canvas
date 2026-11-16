@@ -377,13 +377,27 @@ test('quick AI version, site preview and asking for changes', { skip: !playwrigh
     // The server finishes the cancelled turn; starting again resumes where it stopped.
     await page.waitForTimeout(4500);
     await page.click('#cc-quick');
-    await page.locator('#view-docs').waitFor({ state: 'visible', timeout: 60000 });
+    // The advisor stops at the plan: it proposes, and the instructor decides.
+    await page.locator('#view-plan').waitFor({ state: 'visible', timeout: 60000 });
     assert.match(dialogs[0], /About 8–20 AI requests and [\d,]+–[\d,]+ tokens\./, 'quick confirm shows the estimate');
     assert.match(dialogs.at(-1), /About 2–14 AI requests/, 'the second run only estimates what is left');
-    await page.waitForFunction(() => document.querySelector('#cc-status').textContent.includes('Quick AI version ready'));
+    await page.waitForFunction(() => document.querySelector('#cc-status').textContent.includes('The advisor has finished'));
     assert.match(await page.textContent('#cc-progress-time'), /^Finished after/);
-    assert.equal(await page.locator('#cc-progress-steps li[data-status=done]').count(), 4);
-    await page.locator('.cc-document .cc-tag:has-text("AI-approved")').waitFor();
+    assert.equal(await page.locator('.cc-proposal .cc-tag:has-text("Accepted")').count(), 0, 'the AI accepts nothing itself');
+    assert.equal(await page.locator('#cc-plan-count').isHidden(), false, 'changes wait for the instructor');
+    assert.equal(await page.locator('#cc-quick-continue').isHidden(), true, 'nothing to write until a change is accepted');
+    await page.click('#cc-accept-all');
+    await page.locator('.cc-proposal .cc-tag:has-text("Accepted")').first().waitFor();
+    assert.equal(await page.locator('.cc-proposal .cc-tag.ai').count(), 0, 'accepting is the instructor\'s decision');
+    await page.click('#cc-quick-continue');
+    await page.locator('#view-docs').waitFor({ state: 'visible', timeout: 60000 });
+    await page.waitForFunction(() => document.querySelector('#cc-status').textContent.includes('Drafts are ready'));
+    // AI-written documents are drafts until the instructor approves them.
+    await page.locator('.cc-document .cc-tag:has-text("Draft")').first().waitFor();
+    assert.equal(await page.locator('.cc-document .cc-tag:has-text("Approved")').count(), 0);
+    await page.click('#cc-approve-all');
+    await page.waitForFunction(() => document.querySelector('#cc-status').textContent.includes('All drafts approved'));
+    assert.equal(await page.locator('.cc-document .cc-tag:has-text("Draft")').count(), 0);
     assert.equal(await page.locator('#cc-plan-count').isHidden(), true, 'no undecided changes remain');
     await shot(page, '7-quick-docs');
 
@@ -415,7 +429,7 @@ test('quick AI version, site preview and asking for changes', { skip: !playwrigh
     await page.click('.cc-document button:has-text("Side by side")');
     assert.equal(await page.locator('.cc-compare .cc-doc-frame').count(), 2);
     await page.click('.cc-document button:has-text("Back")');
-    // History: restore the AI-approved version from before the requested change.
+    // History: restore the approved version from before the requested change.
     await page.click('.cc-document button:has-text("History (1)")');
     await page.click('.cc-document .cc-version button:has-text("Restore")');
     await page.waitForFunction(() => document.querySelector('.cc-document') &&
@@ -492,12 +506,11 @@ test('quick AI version, site preview and asking for changes', { skip: !playwrigh
     await page.click('#cc-hax-lite button[type=submit]');
     await page.waitForFunction(() => /does not accept published sites/.test(document.querySelector('#cc-error').textContent));
 
-    // The plan shows the advisor's decisions as AI-decided, and they can be changed.
+    // The plan shows the accepted changes, and each can still be changed.
     await page.click('#tab-plan');
-    await page.locator('.cc-proposal .cc-tag.ai').first().waitFor();
+    await page.locator('.cc-proposal .cc-tag:has-text("Accepted")').first().waitFor();
     await page.click('.cc-proposal button:has-text("Reject")');
     await page.locator('.cc-proposal .cc-tag:has-text("Rejected")').waitFor();
-    assert.equal(await page.locator('.cc-proposal .cc-tag.ai').count(), 0, 'decision is now the instructor\'s');
     // The consultation shows the advisor's notes and can continue.
     await page.click('#tab-consult');
     assert.match(await page.locator('#cc-messages').textContent(), /Quick AI version: Purpose and learners/);

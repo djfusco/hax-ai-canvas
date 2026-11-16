@@ -100,10 +100,16 @@ def _schema(kind, proposal_ids):
 
 
 def _prompt(kind, model, course_map, consult_state, plan, item, instruction=None):
+    from improvement_plan import MANUAL_LABELS, manual_work
     changes = [{"id": p["id"], "title": p["title"], "change": p["change"], "rationale": p["rationale"],
-                "affected": p.get("affected_items", [])} for p in accepted(consult_state)]
+                "affected": p.get("affected_items", []),
+                **({"instructor_must_do_by_hand_in_canvas": MANUAL_LABELS[manual_work(p)]}
+                   if manual_work(p) != "none" else {})} for p in accepted(consult_state)]
     parts = ["COURSE MAP:\n" + compact_map(course_map, 4000),
-             "ACCEPTED CHANGES:\n" + json.dumps(changes, ensure_ascii=False)]
+             "ACCEPTED CHANGES:\n" + json.dumps(changes, ensure_ascii=False),
+             "Changes marked instructor_must_do_by_hand_in_canvas need an item, points, weights or dates that "
+             "the Canvas course does not have yet. Write the document for the course as it will be, and mark "
+             "each such place [Instructor to confirm: set up in Canvas ...] so it is not mistaken for done."]
     if plan:
         parts.append("PLAN:\n" + json.dumps({"vision": plan.get("vision", ""),
                                              "outcomes": [o["text"] for o in plan.get("outcomes", [])],
@@ -130,7 +136,12 @@ def _prompt(kind, model, course_map, consult_state, plan, item, instruction=None
                 "image descriptions), and apply any accepted changes that affect it.")
     elif kind == "syllabus":
         syllabus, _ = html_text(model["course"].get("syllabus_html", ""))
-        parts.append("CURRENT SYLLABUS:\n" + (syllabus[:20000] or "(none in the course; write one from the course map)"))
+        from consultation import _excerpt
+        parts.append("CURRENT SYLLABUS:\n" + (_excerpt(syllabus, 20000) if syllabus
+                                               else "(none in the course; write one from the course map)"))
+        if len(syllabus) > 20000:
+            parts.append("The syllabus above is cut off. Do not drop what you cannot see: end the revised syllabus "
+                         "with [Instructor to confirm: carry over the remaining sections of the original syllabus].")
         task = ("Write the revised syllabus: course description, revised learning outcomes, how the course is "
                 "organized, assessments and grading (keep existing weights unless an accepted change alters them), "
                 "the course AI policy, and other policies already present. Apply every relevant accepted change.")
@@ -376,6 +387,16 @@ def edit(documents, document_id, data):
     return documents
 
 
+def approve_all(documents):
+    """The instructor approves every draft at once (after reviewing them)."""
+    documents = deepcopy(documents or [])
+    for document in documents:
+        if document.get("status") == "draft":
+            document.update(status="approved", updated_at=_now())
+            document.pop("auto", None)
+    return documents
+
+
 def original_html(document, model):
     """The course's original text for what a document revises (None if it is new)."""
     if document["kind"] == "syllabus":
@@ -538,7 +559,10 @@ def zip_package(course_title, documents, plan_files, course_pages=None):
             archive.writestr(f"documents/{stem}.docx", to_docx(document))
         if course_pages:
             from urllib.parse import quote
-            from imscc_content import rewrite_import_item_links
+            from imscc_content import rewrite_import_item_links, sanitize_import_html
+            # Pages the AI did not rewrite still hold the imported HTML; these files open from
+            # disk with no browser protections, so clean every page here.
+            course_pages = [dict(page, html=sanitize_import_html(page["html"])) for page in course_pages]
             combined, names = [], {}
             for number, page in enumerate(course_pages, 1):
                 folder = "instructor/" if page.get("audience") == "instructor" else ""
