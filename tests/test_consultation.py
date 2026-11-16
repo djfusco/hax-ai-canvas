@@ -62,7 +62,7 @@ class ConsultationTests(unittest.TestCase):
         self.assertIn("first session", prompt)
         self.assertIn("weighted groups (Essays 40%", prompt)
         self.assertIn("Lab [lab]: 30% of grade", prompt)
-        self.assertIn("backward design", client.calls[0]["system"])
+        self.assertIn("Understanding by Design", client.calls[0]["system"])
         self.assertEqual(state["topics"]["purpose"]["status"], "in_progress")
         self.assertEqual(state["topics"]["purpose"]["facts"][0]["evidence"], ["course-map"])
         self.assertEqual(state["turns"], 1)

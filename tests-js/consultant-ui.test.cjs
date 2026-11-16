@@ -58,6 +58,18 @@ class FakeAI:
                 ids = [line.split()[1] for line in prompt.splitlines() if line.startswith("ITEM ")]
                 return json.dumps({"pages": [{"item_id": i, "html": "<h2>Purpose</h2><p>Why this matters.</p>"} for i in ids]})
             return json.dumps({"html": "<p>Shorter page.</p>"})
+        if "applying Understanding by Design" in system:
+            graded = [row["item_id"] for row in json.loads(prompt.split("GRADED WORK IN THE COURSE:\n")[1].split("\n\nTASK:")[0])]
+            understanding = "Students will understand that a scientific claim is only as strong as its evidence"
+            return json.dumps({"big_ideas": ["Claims need evidence"], "understandings": [understanding],
+                               "overarching_questions": ["What makes an explanation convincing?"],
+                               "topical_questions": ["Why are cells so small?"], "knowledge": ["Cell parts"],
+                               "skills": ["Argue from evidence"],
+                               "misunderstandings": [{"misconception": "Bigger animals have bigger cells",
+                                                      "pre_assess": "Ask for a prediction", "confront": "Compare sizes"}],
+                               "evidence": [{"item_id": i, "kind": "quiz_test", "targets": [understanding] if n == 0 else [],
+                                             "facets": ["explanation"], "problem": False, "note": "Checks recall."}
+                                            for n, i in enumerate(graded)]})
         if "drafting a Course Improvement Plan" in system:
             return json.dumps({"vision": "A first-year course where students build arguments from evidence.",
                                "outcomes": [{"text": "Construct a scientific argument from evidence.", "note": "unchanged"}],
@@ -508,6 +520,17 @@ test('quick AI version, site preview and asking for changes', { skip: !playwrigh
 
     // The plan shows the accepted changes, and each can still be changed.
     await page.click('#tab-plan');
+    // The course design was drafted with the plan, and is checked against the design standards.
+    await page.waitForFunction(() => /Activity-oriented/.test(document.querySelector('#cc-design-rating').textContent));
+    assert.match(await page.inputValue('#cc-design-understandings'), /^a scientific claim is only as strong as its evidence$/);
+    assert.match(await page.textContent('#cc-design-checks'), /No graded work asks students to do the subject on a real problem/);
+    assert.match(await page.textContent('#cc-design-checks'), /The weekly plan serves the understandings/);
+    // Marking the first graded work as an authentic problem and saving clears that gap.
+    await page.selectOption('#cc-design-evidence fieldset >> nth=0 >> .cc-evidence-kind', 'performance_task');
+    await page.check('#cc-design-evidence fieldset >> nth=0 >> .cc-evidence-problem');
+    await page.click('#cc-design-form button[type=submit]');
+    await page.waitForFunction(() => document.querySelector('#cc-status').textContent.includes('Design saved'));
+    assert.doesNotMatch(await page.textContent('#cc-design-checks'), /No graded work asks students to do the subject/);
     await page.locator('.cc-proposal .cc-tag:has-text("Accepted")').first().waitFor();
     await page.click('.cc-proposal button:has-text("Reject")');
     await page.locator('.cc-proposal .cc-tag:has-text("Rejected")').waitFor();

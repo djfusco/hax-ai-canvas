@@ -62,7 +62,11 @@ Work that is not finished yet. Tick items off as they are done.
 - [ ] **Practice-question quality with a real model**: run a build and read the questions it keeps and drops.
 - [ ] Phase 2: send the images pages use in `files/`.
 - [ ] Phase 3: carry the course design inside the site (hidden page or UbD manifest).
-- [ ] Phase 4: PRAW's Understanding by Design stages and audit skills in place of the generic prompts.
+- [ ] **Course-design quality with a real model**: draft a design for a real course and judge the
+  understandings, questions and evidence map.
+- [ ] PRAW's page-level audits on built pages (UDL, chunking, instructional events, multimedia principles).
+- [ ] The Quick AI cost estimate does not count the course-design request.
+- [ ] Editing an understanding's wording drops its ticks in the evidence list (they are matched by text).
 - [ ] Phase 5: more elements (`video-player`, `flash-card`, `lrn-vocab`, `grid-plate`); practice on item pages.
 - [ ] The theme picker has no effect on HAX Lite (imported sites start on the default theme).
 - [ ] When HAX's CDN build reads `data-correct`, the extra `correct` marker on answers can go.

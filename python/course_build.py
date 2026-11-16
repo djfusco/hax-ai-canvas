@@ -161,7 +161,27 @@ def _course_header(model, plan):
         lines.append("COURSE OUTCOMES:\n" + "\n".join(f"- {o['title']}" for o in model["outcomes"][:30]))
     if plan_text["ai_policy"]:
         lines.append("STUDENT AI POLICY: " + plan_text["ai_policy"])
+    design = _design(plan)
+    if design:
+        block = ["COURSE DESIGN (Understanding by Design; the course exists to build these):"]
+        if design["big_ideas"]:
+            block.append("Big ideas: " + "; ".join(design["big_ideas"]))
+        block += [f"U{n}. {u}" for n, u in enumerate(design["understandings"], 1)]
+        if design["overarching_questions"]:
+            block.append("Overarching essential questions: " + " | ".join(design["overarching_questions"]))
+        lines.append("\n".join(block))
     return "\n\n".join(lines)
+
+
+def with_design(plan, design):
+    """The plan as the builders receive it, carrying the course design (``course_design``) too."""
+    return dict(plan or {}, design=design) if design else plan
+
+
+def _design(plan):
+    import course_design
+    design = (plan or {}).get("design")
+    return None if course_design.is_empty(design) else design
 
 
 # ── AI calls ─────────────────────────────────────────────────────────────────
@@ -281,15 +301,19 @@ def _blueprint_prompt(model, consult_state, plan, documents):
         "learning, including lecture videos and reference material, placed in the week they support. Keep "
         "items with due dates in the week they are due. For each week give a short title WITHOUT the week "
         "number, a one-sentence theme, 2-4 measurable learning objectives that serve the course outcomes, an "
-        "estimate of student hours, and one sentence on what the instructor should focus on. Also give a short "
-        "summary of the course design and why it is organised this way.",
+        "estimate of student hours, and one sentence on what the instructor should focus on. "
+        + ("For each week also give understandings: the enduring understandings it serves, by their label "
+           "(U1, U2, ...). Every week should serve at least one, and every understanding should be served by "
+           "some week; a week that serves none is activity without a purpose. " if _design(plan) else
+           "Leave each week's understandings empty. ")
+        + "Also give a short summary of the course design and why it is organised this way.",
     ])
 
 
 def _blueprint_schema():
     week = _object({"title": TEXT, "theme": TEXT, "objectives": {"type": "array", "items": TEXT},
                     "items": {"type": "array", "items": TEXT}, "hours": {"type": "number"},
-                    "instructor_focus": TEXT})
+                    "instructor_focus": TEXT, "understandings": {"type": "array", "items": TEXT}})
     labels = {"type": "array", "items": TEXT}
     return _object({"summary": TEXT, "start_items": labels, "instructor_items": labels,
                     "weeks": {"type": "array", "items": week}})
@@ -320,7 +344,23 @@ def _clean_text(value, maximum, field):
 WEEK_PREFIX = re.compile(r"^\s*(week|wk|module|unit)\s*\d+\s*[:.\-–—]?\s*", re.I)
 
 
-def validate_blueprint(raw, model, *, by_instructor=False):
+def _served(values, design):
+    """A week's understandings, as the design's exact sentences (given by label "U2" or by text)."""
+    import course_design
+    known = (design or {}).get("understandings") or []
+    result = []
+    for value in values if isinstance(values, list) else []:
+        if not isinstance(value, str):
+            continue
+        label = re.fullmatch(r"\s*U\s*(\d+)\.?\s*", value, flags=re.I)
+        found = (known[int(label.group(1)) - 1] if label and 0 < int(label.group(1)) <= len(known)
+                 else course_design._match(value, known))
+        if found and found not in result:
+            result.append(found)
+    return result
+
+
+def validate_blueprint(raw, model, *, by_instructor=False, design=None):
     """Check a blueprint (from the AI or edited by the instructor); place every item once.
 
     A week's ``hours`` is the AI's rough estimate (it cannot see video length or reading time),
@@ -370,6 +410,7 @@ def validate_blueprint(raw, model, *, by_instructor=False):
                                 and type(hours) in (int, float) and 0 < hours <= 60),
             "instructor_focus": (week.get("instructor_focus") or "").strip()[:600]
             if isinstance(week.get("instructor_focus"), str) else "",
+            "understandings": _served(week.get("understandings"), design),
         })
     rest = [i for i, item in items.items() if i not in placed and item["kind"] != "external_tool"]
     instructor += [i for i in rest if i in private]
@@ -381,7 +422,8 @@ def validate_blueprint(raw, model, *, by_instructor=False):
 
 def blueprint(build, model, consult_state, plan, documents, client):
     raw = _call(client, _blueprint_prompt(model, consult_state, plan, documents), _blueprint_schema(), BLUEPRINT_TOKENS)
-    build = dict(build, blueprint=validate_blueprint(raw, model), pages=[], done=[], updated_at=_now())
+    build = dict(build, blueprint=validate_blueprint(raw, model, design=_design(plan)), pages=[], done=[],
+                 updated_at=_now())
     return build
 
 
@@ -582,6 +624,24 @@ def practice_questions(raw, week, texts, titles):
     return blocks, dropped
 
 
+def _design_for_week(plan, week):
+    """What the course design says about this week: its aim, questions to choose from, wrong ideas to surface."""
+    design = _design(plan)
+    if not design:
+        return []
+    lines = []
+    if week.get("understandings"):
+        lines.append("THIS WEEK SERVES: " + " | ".join(week["understandings"]))
+    if design["topical_questions"]:
+        lines.append("ESSENTIAL QUESTIONS IN THE COURSE DESIGN (for essential_question, use the one that fits "
+                     "this week, or write one in the same spirit): " + " | ".join(design["topical_questions"]))
+    if design["misunderstandings"]:
+        lines.append("PREDICTABLE MISUNDERSTANDINGS (if one applies to this week's text, make one practice "
+                     "question bring it to the surface, with the wrong idea as a tempting option): "
+                     + " | ".join(m["misconception"] for m in design["misunderstandings"]))
+    return lines
+
+
 def _week_step(build, number, model, consult_state, plan, documents, client):
     import hax_elements
     week = _week(build, number)
@@ -609,6 +669,7 @@ def _week_step(build, number, model, consult_state, plan, documents, client):
         "THIS WEEK'S ITEMS:\n" + ("\n".join(lines) or "(none)"),
         "ACCEPTED CHANGES AFFECTING THIS WEEK:\n" + _changes(consult_state, week["items"]),
         "INSTRUCTOR FOCUS: " + (week["instructor_focus"] or "(none)"),
+        *_design_for_week(plan, week),
         "TASK: Write (1) overview_html: the student-facing overview for this week: an introduction that "
         "connects to last week and the course outcomes, how this week's items fit together and in what order "
         "to do them (link each item), and tips or where to get help. Do NOT list the learning objectives, due "
@@ -821,7 +882,7 @@ def _templated_item(model, documents, item):
     return (f"<ul class=\"item-facts\">{''.join(facts)}</ul>" if facts else "") + body
 
 
-def site_items(build, model, documents, consult_state=None):
+def site_items(build, model, documents, consult_state=None, design=None):
     """The built course as ordered site items, or None if there is no built course yet.
 
     Same shape as course_site.build_items, plus ``audience``. Sections are
@@ -859,6 +920,10 @@ def site_items(build, model, documents, consult_state=None):
     if syllabus_html.strip():
         add("syllabus", "Syllabus", "syllabus", syllabus_html, "Start here")
     add("schedule", "Course schedule", "pages", _schedule_html(build, model), "Start here")
+    import course_design
+    if not course_design.is_empty(design):
+        # Where the course is going, shown to students up front (written by the app from the design).
+        add("big-ideas", "Big ideas and essential questions", "pages", course_design.student_html(design), "Start here")
     for item_id in build["blueprint"].get("start_items", []):
         if item_id in items_by_id:
             add_course_item(item_id, "Start here")
@@ -882,6 +947,11 @@ def site_items(build, model, documents, consult_state=None):
     guide = pages.get("instructor-guide")
     add("module--instructor", "Instructor guide", "pages",
         guide["html"] if guide else "<p>The instructor guide has not been written yet.</p>", section, "instructor")
+    if not course_design.is_empty(design):
+        from course_map import build_course_map
+        report = course_design.audit(design, model, build_course_map(model), build)
+        add("course-design", "Course design and evidence", "pages",
+            course_design.instructor_html(design, model, report), section, "instructor")
     todo = manual_tasks(consult_state)
     if todo:
         add("manual-work", "To do by hand in Canvas", "pages",

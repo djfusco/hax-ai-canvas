@@ -166,3 +166,8 @@
 .cc .cc-build-theme { width: auto; margin-top: 10px; }
 .cc-hax-lite { margin-top: 12px; max-width: 640px; }
 .cc-hax-lite h3 { margin: 0 0 4px; }
+
+/* Course design: one box per piece of graded work */
+.cc-evidence { border: 1px solid var(--cc-line, #ccd); border-radius: 8px; margin: .6rem 0; padding: .5rem .8rem; }
+.cc-evidence label { display: block; font-weight: normal; margin: .2rem 0; }
+.cc-evidence legend { font-weight: 600; }

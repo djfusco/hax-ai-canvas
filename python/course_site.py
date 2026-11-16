@@ -115,7 +115,8 @@ def course_items(model, workspace, *, students_only=False):
     """
     import course_build
     documents = workspace.get("documents") or []
-    built = course_build.site_items(workspace.get("build"), model, documents, workspace.get("consultation"))
+    built = course_build.site_items(workspace.get("build"), model, documents, workspace.get("consultation"),
+                                    workspace.get("design"))
     items = built if built is not None else build_items(model, documents)
     return student_items(model, items) if students_only else items
 

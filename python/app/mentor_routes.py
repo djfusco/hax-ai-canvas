@@ -1080,6 +1080,48 @@ def create_mentor_blueprint(root_provider):
         workspace, error = ai_step(workspace_id, payload(), work)
         return error or jsonify(plan_view(workspace))
 
+    # ── course design (Understanding by Design, as HAX's PRAW rules ask) ─────
+
+    def design_view(workspace):
+        import course_design as cd
+        model = store().get_course_model(g.owner, workspace["id"])
+        design = workspace.get("design") or cd.new_design()
+        view = {"design": design, "consulted": bool((workspace.get("consultation") or {}).get("turns")),
+                "busy": bool(workspace.get("consult_busy")), "stem": cd.STEM,
+                "evidence_kinds": cd.EVIDENCE_LABELS, "graded": []}
+        if model:
+            from course_map import build_course_map
+            course_map = build_course_map(model, (workspace.get("source") or {}).get("alignment"))
+            view["audit"] = cd.audit(design, model, course_map, workspace.get("build"))
+            titles = {i["id"]: i["title"] for i in model["items"]}
+            view["graded"] = [{"id": item_id, "title": titles[item_id]} for item_id in model["assignments"]]
+        return view
+
+    @bp.get("/api/workspaces/<workspace_id>/design")
+    def design_get(workspace_id):
+        return jsonify(design_view(store().get(g.owner, workspace_id)))
+
+    @bp.put("/api/workspaces/<workspace_id>/design")
+    def design_put(workspace_id):
+        import course_design as cd
+        workspace = store().get(g.owner, workspace_id)
+        model, _ = course_inputs(workspace)
+        try:
+            design = cd.edit(workspace.get("design"), payload(), model)
+        except cd.DesignError as exc:
+            raise ValueError(str(exc)) from None
+        return jsonify(design_view(store().save_consultant_fields(g.owner, workspace_id, design=design)))
+
+    @bp.post("/api/workspaces/<workspace_id>/design/draft")
+    def design_draft(workspace_id):
+        import course_design as cd
+
+        def work(workspace, ai):
+            model, course_map = course_inputs(workspace)
+            return {"design": cd.draft(model, course_map, workspace.get("consultation"), workspace.get("plan"), ai)}
+        workspace, error = ai_step(workspace_id, payload(), work)
+        return error or jsonify(design_view(workspace))
+
     @bp.get("/api/workspaces/<workspace_id>/plan/export")
     def plan_export(workspace_id):
         import improvement_plan as ip
@@ -1442,7 +1484,8 @@ def create_mentor_blueprint(root_provider):
         def work(workspace, ai):
             model, _ = course_inputs(workspace)
             return {"build": cb.blueprint(cb.new_build(data.get("mode")), model, workspace.get("consultation"),
-                                          workspace.get("plan"), workspace.get("documents") or [], ai)}
+                                          cb.with_design(workspace.get("plan"), workspace.get("design")),
+                                          workspace.get("documents") or [], ai)}
         workspace, error = ai_step(workspace_id, data, work)
         return error or jsonify(build_view(workspace))
 
@@ -1462,7 +1505,7 @@ def create_mentor_blueprint(root_provider):
                 "summary": current["summary"], "weeks": data.get("weeks"),
                 "start_items": data.get("start_items", current.get("start_items", [])),
                 "instructor_items": data.get("instructor_items", current.get("instructor_items", []))}, model,
-                by_instructor=True)
+                by_instructor=True, design=workspace.get("design"))
         except cb.BuildError as exc:
             raise ValueError(str(exc)) from None
         build = dict(build, blueprint=blueprint, pages=[], done=[], updated_at=cb._now())
@@ -1476,7 +1519,8 @@ def create_mentor_blueprint(root_provider):
         def work(workspace, ai):
             model, _ = course_inputs(workspace)
             return {"build": cb.run_step(workspace.get("build"), data.get("step"), model, workspace.get("consultation"),
-                                         workspace.get("plan"), workspace.get("documents") or [], ai)}
+                                         cb.with_design(workspace.get("plan"), workspace.get("design")),
+                                         workspace.get("documents") or [], ai)}
         workspace, error = ai_step(workspace_id, data, work)
         return error or jsonify(build_view(workspace))
 
@@ -1508,7 +1552,7 @@ def create_mentor_blueprint(root_provider):
         def work(workspace, ai):
             model, _ = course_inputs(workspace)
             return {"build": cb.revise_page(workspace.get("build"), page_id, redact(data.get("instruction") or ""),
-                                            model, workspace.get("plan"), ai)}
+                                            model, cb.with_design(workspace.get("plan"), workspace.get("design")), ai)}
         workspace, error = ai_step(workspace_id, data, work)
         return error or jsonify(build_view(workspace))
 
@@ -1623,7 +1667,8 @@ def create_mentor_blueprint(root_provider):
                 if model is None:
                     raise ValueError("Import a course first.")
                 import course_build
-                built = course_build.site_items(workspace.get("build"), model, documents, workspace.get("consultation"))
+                built = course_build.site_items(workspace.get("build"), model, documents, workspace.get("consultation"),
+                                                workspace.get("design"))
                 if built and request.args.get("scope") != "revised":
                     body, _ = canvas_package.build_course(title, model, documents, built)
                     return file_response(body, ip.safe_filename(title + " course for Canvas", ".imscc"),
@@ -1647,7 +1692,7 @@ def create_mentor_blueprint(root_provider):
             import course_build
             model = store().get_course_model(g.owner, workspace_id)
             built = model and course_build.site_items(workspace.get("build"), model, documents,
-                                                      workspace.get("consultation"))
+                                                      workspace.get("consultation"), workspace.get("design"))
             return file_response(rd.zip_package(title, documents, plan_files, built or None),
                             ip.safe_filename(title + " revised documents", ".zip"), "application/zip")
         except rd.DocumentError as exc:

@@ -165,3 +165,53 @@ class CostEstimateTests(QuickVersionTests):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DesignApiTests(QuickVersionTests):
+    """The course design through the web API (the AI is mocked)."""
+
+    def design(self):
+        return {"big_ideas": ["Structure fits function"],
+                "understandings": ["Students will understand that structure fits function in every living thing we study"],
+                "overarching_questions": ["How do we know what we cannot see?"], "topical_questions": ["Why are cells small?"],
+                "knowledge": [], "skills": [],
+                "misunderstandings": [{"misconception": "Cells are flat", "pre_assess": "Ask first", "confront": "Show a model"}],
+                "evidence": [{"item_id": self.essay, "kind": "performance_task", "problem": True, "facets": ["explanation"],
+                              "note": "Argues from evidence.",
+                              "targets": ["Students will understand that structure fits function in every living thing we study"]}]}
+
+    def test_draft_edit_and_check(self):
+        view = self.call("GET", self.base + "/design")
+        self.assertEqual((view["audit"]["rating"], view["consulted"]), ("Not designed yet", False))
+        self.assertIn(self.essay, [g["id"] for g in view["graded"]])
+        self.ai(self.design())
+        self.assertIn("consultation first", self.call("POST", self.base + "/design/draft", {"provider": "openai"},
+                                                      expected=502)["error"])
+        self.ai(turn("Opening.", "purpose"), self.design())
+        self.call("POST", self.base + "/consult", {"mode": "opening", "provider": "openai"})
+        view = self.call("POST", self.base + "/design/draft", {"provider": "openai"})
+        self.assertEqual(len(view["design"]["understandings"]), 1)
+        self.assertEqual(view["design"]["evidence"][0]["item_id"], self.essay)
+        checks = {c["standard"]: c["status"] for c in view["audit"]["checks"]}
+        self.assertEqual((checks[5], checks[6]), ("pass", "pass"))
+        # The instructor edits: a second understanding with no evidence is reported as a gap.
+        edited = dict(view["design"], understandings=view["design"]["understandings"] + ["evidence decides between rival claims in science"])
+        view = self.call("PUT", self.base + "/design", edited)
+        self.assertEqual(len(view["design"]["understandings"]), 2)
+        self.assertTrue(view["design"]["understandings"][1].startswith("Students will understand that evidence decides"))
+        checks = {c["standard"]: c for c in view["audit"]["checks"]}
+        self.assertEqual(checks[5]["status"], "warn")
+        self.assertIn("1 of 2 understandings", checks[5]["detail"])
+        self.call("PUT", self.base + "/design", {"big_ideas": "no"}, expected=400)
+
+    def test_replacing_the_course_keeps_the_design_but_not_evidence_for_old_work(self):
+        self.ai(turn("Opening.", "purpose"), self.design())
+        self.call("POST", self.base + "/consult", {"mode": "opening", "provider": "openai"})
+        self.call("POST", self.base + "/design/draft", {"provider": "openai"})
+        revision = self.call("GET", self.base)["revision"]
+        self.client.post(self.base + "/intake/export", data={
+            "package": (io.BytesIO(slim_package()), "s.zip"), "revision": str(revision)},
+            content_type="multipart/form-data", headers={"X-Mentor-CSRF": self.csrf})
+        design = self.call("GET", self.base + "/design")["design"]
+        self.assertEqual(len(design["understandings"]), 1)
+        self.assertEqual(design["evidence"], [], "an export import gives graded work new IDs")

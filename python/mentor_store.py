@@ -98,6 +98,9 @@ def _reset_for_new_course(state, model):
     state["documents"] = []
     state["consult_busy"] = None
     state.pop("hax_lite_pending", None)
+    design = state.get("design")
+    if isinstance(design, dict):  # the understandings stay; evidence named the old course's graded work
+        design["evidence"] = [e for e in design.get("evidence", []) if e.get("item_id") in model["assignments"]]
     consultation = state.get("consultation")
     if isinstance(consultation, dict):
         for topic in (consultation.get("topics") or {}).values():
@@ -406,7 +409,7 @@ class MentorStore:
 
     def save_consultant_fields(self, owner, id, *, release=False, **fields):
         """Save plan/documents/consultation fields; optionally release the AI lease."""
-        allowed = {"consultation", "plan", "documents", "build", "site_theme"}
+        allowed = {"consultation", "plan", "documents", "build", "site_theme", "design"}
         if not set(fields) <= allowed:
             raise ValueError("Invalid consultant field.")
         values = {key: _object({"value": value})["value"] for key, value in fields.items()}

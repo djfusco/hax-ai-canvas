@@ -265,6 +265,39 @@
           <button id="cc-plan-restore" type="button" class="cc-btn cc-btn-quiet">Restore this version</button>
         </div>
       </article>
+      <article class="cc-card cc-plan" id="cc-design">
+        <div class="cc-head"><h2>Course design</h2>
+          <button id="cc-design-draft" type="button" class="cc-btn">Draft the design with AI</button></div>
+        <p class="cc-muted">The design behind the course, worked backward as HAX courses are (Understanding by
+          Design): what students should come to understand, what would show it, then the weekly plan. The built
+          course opens with these big ideas and questions, each week says which understanding it serves, and the
+          check below shows where goals, graded work and the weekly plan do not yet line up.</p>
+        <p id="cc-design-rating" class="cc-banner" hidden></p>
+        <ul id="cc-design-checks" class="cc-list"></ul>
+        <details id="cc-design-unchecked" class="cc-muted" hidden><summary>What this check cannot judge</summary>
+          <ul id="cc-design-unchecked-list" class="cc-list"></ul></details>
+        <form id="cc-design-form">
+          <label for="cc-design-ideas">Big ideas (one per line)</label>
+          <textarea id="cc-design-ideas" rows="3"></textarea>
+          <label for="cc-design-understandings">Enduring understandings (one per line; each completes “Students will understand that …”)</label>
+          <textarea id="cc-design-understandings" rows="6"></textarea>
+          <label for="cc-design-overarching">Essential questions for the whole course (one per line)</label>
+          <textarea id="cc-design-overarching" rows="3"></textarea>
+          <label for="cc-design-topical">Essential questions for parts of the course (one per line)</label>
+          <textarea id="cc-design-topical" rows="5"></textarea>
+          <label for="cc-design-knowledge">Key knowledge (one per line)</label>
+          <textarea id="cc-design-knowledge" rows="3"></textarea>
+          <label for="cc-design-skills">Skills (one per line)</label>
+          <textarea id="cc-design-skills" rows="3"></textarea>
+          <label for="cc-design-wrong">Predictable misunderstandings (one per line: the wrong idea | how to catch it | how to confront it)</label>
+          <textarea id="cc-design-wrong" rows="4"></textarea>
+          <button type="submit" class="cc-btn">Save design</button>
+        </form>
+        <h3>What the graded work shows</h3>
+        <p class="cc-muted">Each piece of graded work, the kind of evidence it is, and the understandings it
+          shows. Change a kind or tick the understandings, then save.</p>
+        <div id="cc-design-evidence"></div>
+      </article>
     </section>
 
     <!-- 4. Revised documents -->

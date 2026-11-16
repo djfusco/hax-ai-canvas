@@ -89,6 +89,17 @@ Before the quick AI version or bulk revisions, Course Consultant shows an
 estimate of the AI requests and tokens, and the cost when the provider
 publishes prices (OpenRouter).
 
+**Course design.** On the Plan step the AI drafts the design behind the course by
+Understanding by Design, as HAX's rules ask: big ideas, enduring understandings,
+essential questions, predictable misunderstandings, and which of the course's
+own graded work shows each understanding. The instructor edits it. A check with
+no AI follows HAX's design standards and names the result (Aligned, Partial,
+Activity-oriented, Coverage-bound): an understanding nothing assesses, no
+authentic task on a real problem, understanding judged by tests alone, a week
+that serves no understanding. The built course opens with the big ideas and
+questions, and each week says which understanding it serves
+(`python/course_design.py`).
+
 **HAX-native pages.** Each week page opens with an essential question, lists its
 objectives as OER Schema learning objectives, and ends with up to four practice
 questions (multiple choice, true/false, self-check) written from that week's own
@@ -160,6 +171,7 @@ deletion of inactive courses is not built yet (see `docs/todo.md`).
 | Canvas import package (.imscc) | `python/canvas_package.py` |
 | Publish to HAX Lite | `python/hax_lite_publish.py` |
 | HAX elements a page may use, and their plain form | `python/hax_elements.py` |
+| Course design (Understanding by Design) and its check | `python/course_design.py` |
 | Accessibility checks | `python/accessibility.py` |
 | AI cost estimate | `python/cost_estimate.py` |
 | Consultant quality evaluation | `scripts/evaluate_consultant.py`, `python/quality_checks.py` |
@@ -203,6 +215,7 @@ cannot outlive the hosting platform's request limit.
 | `POST /consult` with `mode: auto` / `advance` | Quick AI version advisor turn / move on to the next topic |
 | `POST /consult/proposals/accept-all` | The instructor accepts every undecided proposal |
 | `POST /documents/approve-all` | The instructor approves every draft document |
+| `GET/PUT /design`, `POST /design/draft` | Course design, its check against the design standards, and an AI draft |
 | `DELETE /mentor/api/workspaces/<id>`, `DELETE /mentor/api/account` (`{"confirm": "DELETE"}`) | Delete a course; delete everything stored for the person |
 | `POST /documents/<id>/revise` | Revise a document from an instruction |
 | `GET /site/...` | Private preview of the whole course site |

@@ -80,6 +80,46 @@ HTML, with answers behind a "Show answer" disclosure.
 - Whether HAX Lite's imported pages get `llms.txt` and per-page Markdown as a native site does.
 - Practice-question quality with a real model. Tests use a scripted model.
 
+## Course design by Understanding by Design (phase 4)
+
+PRAW's rule: a HAX course whose goal is understanding is designed with the
+`hax-ubd-backward-design` skills (desired results, acceptable evidence, learning plan) and checked
+against `design-standards.md`. `python/course_design.py` holds that design for the whole course.
+
+- **Stage 1, desired results:** big ideas, enduring understandings ("Students will understand
+  that ..."), overarching and topical essential questions, knowledge, skills, and predictable
+  misunderstandings with how to catch and confront each.
+- **Stage 2, acceptable evidence:** differs from PRAW on purpose. The course already exists, so the
+  design does not invent assessments. It classifies the course's own graded work (performance
+  task, open response, quiz or test, informal check; a real problem or an exercise; which facets)
+  and records which understandings each piece shows. What is missing is reported, and adding it
+  is flagged as hand-work in Canvas like any other new item.
+- **Stage 3, the learning plan:** the built course. Each week names the understandings it serves;
+  its essential question comes from the design; a practice question surfaces a listed
+  misunderstanding where the week's text supports it.
+
+**The check (no AI)** follows PRAW's standards as far as a rule can: big ideas present (1),
+understandings are propositions (2), essential questions open and of both kinds (3),
+misunderstandings caught and confronted (4), every understanding has evidence (5), an authentic
+performance task that is a problem (6), more than one facet (7), no understanding evidenced by
+tests alone (8, the mechanical part of the validity self-test), many measures over time (9), every
+understanding served by a week (10), no week without a purpose (12), plus retrieval practice in
+every built week and the revised-Bloom level of weekly objectives. It gives PRAW's ratings:
+Aligned, Partial, Activity-oriented, Coverage-bound. It says what it cannot judge (whether a
+question is a good one, each assessment's validity, depth over coverage, standard 11).
+
+**Where it shows:** a Course design card on the Plan step (draft with AI, edit, tick which graded
+work shows which understanding, see the check); a student page "Big ideas and essential
+questions" in Start here, written by the app in HAX elements; an instructor-only page with the
+misunderstandings, evidence map and check.
+
+**The consultation** now works by the same method: its topic prompts ask about big ideas,
+understandings and misunderstandings (outcomes), what would show understanding and whether a
+student could do well without it (assessment), and whether each week serves an understanding
+(content); it names the two ways design goes wrong.
+
+Not verified: the quality of an AI-drafted design with a real model (tests use a scripted one).
+
 ## Phases
 
 1. **Done:** verified element list, sanitizer, weekly pages (essential question, objectives,
@@ -88,8 +128,8 @@ HTML, with answers behind a "Show answer" disclosure.
    locally, so it can include them within HAX Lite's limits.
 3. **Design in the site:** carry the course design (outcomes, alignment, accepted changes) as a
    page hidden from the menu, or as a UbD manifest if HAX Lite accepts `.json` in `files/`.
-4. **Method:** replace the consultation's generic framework prompts with PRAW's Understanding by
-   Design stages, and use PRAW's audit skills (UDL, accessibility, chunking, instructional events,
-   multimedia, Bloom's) as checks on the built course.
+4. **Done (method):** see "Course design by Understanding by Design" below. Still open from this
+   phase: PRAW's page-level audits (UDL beyond "students respond", chunking, instructional events,
+   multimedia principles) as checks on built pages.
 5. **More elements** where they fit: `video-player` for linked video, `flash-card` for terms,
    `lrn-vocab`, `grid-plate`; practice on item pages in the Full build.

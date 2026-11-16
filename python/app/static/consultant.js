@@ -686,11 +686,13 @@
   async function quickDocuments() {
     requireAi();
     const ws = () => `/mentor/api/workspaces/${state.workspace.id}`;
-    startJob('Plan and documents', ['Draft the improvement plan', 'Write revised documents (as drafts)']);
+    startJob('Plan and documents', ['Draft the improvement plan and the course design', 'Write revised documents (as drafts)']);
     try {
       jobStep(0);
       status('Drafting the improvement plan…');
       state.plan = await api(ws() + '/plan/draft', { method: 'POST', json: { provider: state.provider } });
+      status('Drafting the course design…');
+      state.design = await api(ws() + '/design/draft', { method: 'POST', json: { provider: state.provider } });
       // The syllabus, then assessments touched by accepted changes, with rubrics.
       const docs = await api(ws() + '/documents');
       const have = new Set(docs.documents.map(d => `${d.kind}:${d.item_id || ''}`));
@@ -945,7 +947,85 @@
   async function loadPlan() {
     state.plan = await api(base() + '/plan');
     renderPlan();
+    state.design = await api(base() + '/design');
+    renderDesign();
   }
+
+  // ── course design (Understanding by Design) ──────────────────────────────
+
+  function renderDesign() {
+    const view = state.design;
+    if (!view) return;
+    const d = view.design;
+    const stem = new RegExp('^' + view.stem + '\\s*', 'i');
+    const short = text => text.replace(stem, '');
+    $('cc-design-ideas').value = d.big_ideas.join('\n');
+    $('cc-design-understandings').value = d.understandings.map(short).join('\n');
+    $('cc-design-overarching').value = d.overarching_questions.join('\n');
+    $('cc-design-topical').value = d.topical_questions.join('\n');
+    $('cc-design-knowledge').value = d.knowledge.join('\n');
+    $('cc-design-skills').value = d.skills.join('\n');
+    $('cc-design-wrong').value = d.misunderstandings.map(m => [m.misconception, m.pre_assess, m.confront].join(' | ')).join('\n');
+    $('cc-design-draft').textContent = d.drafted_at || d.edited_at ? 'Draft the design again' : 'Draft the design with AI';
+    const audit = view.audit;
+    $('cc-design-rating').hidden = !audit;
+    $('cc-design-unchecked').hidden = !audit;
+    if (audit) {
+      $('cc-design-rating').replaceChildren(el('strong', { text: audit.rating + '. ' }), audit.summary);
+      const label = { pass: 'Met', warn: 'Gap', todo: 'Later' };
+      $('cc-design-checks').replaceChildren(...(audit.rating === 'Not designed yet' ? [] : audit.checks.map(c =>
+        el('li', {}, el('span', { class: 'cc-tag' + (c.status === 'pass' ? ' good' : c.status === 'warn' ? ' warn' : ''),
+          text: label[c.status] }), ' ', el('strong', { text: c.name + '. ' }), c.detail))));
+      $('cc-design-unchecked-list').replaceChildren(...audit.not_checked.map(text => el('li', { text })));
+    }
+    const titles = Object.fromEntries(view.graded.map(g => [g.id, g.title]));
+    const rows = d.evidence.length ? d.evidence : view.graded.map(g => ({ item_id: g.id, kind: 'quiz_test', targets: [], facets: [], problem: false, note: '' }));
+    $('cc-design-evidence').replaceChildren(...(d.understandings.length ? rows.map(e => el('fieldset', { class: 'cc-evidence', 'data-item': e.item_id },
+      el('legend', { text: titles[e.item_id] || e.item_id }),
+      el('label', {}, 'Kind of evidence ', el('select', { class: 'cc-evidence-kind' },
+        Object.entries(view.evidence_kinds).map(([value, text]) => el('option', { value, text, selected: value === e.kind })))),
+      el('label', {}, el('input', { type: 'checkbox', class: 'cc-evidence-problem', checked: Boolean(e.problem) }),
+        ' A real problem, not an exercise'),
+      e.note ? el('p', { class: 'cc-muted', text: e.note }) : null,
+      ...d.understandings.map(u => el('label', {}, el('input', { type: 'checkbox', class: 'cc-evidence-target', value: u,
+        checked: e.targets.includes(u) }), ' ' + short(u)))))
+      : [el('p', { class: 'cc-banner', text: 'Write the understandings first; then say which graded work shows each one.' })]));
+  }
+
+  function designFromForm() {
+    const lines = id => $(id).value.split('\n').map(l => l.trim()).filter(Boolean);
+    const previous = Object.fromEntries(state.design.design.evidence.map(e => [e.item_id, e]));
+    return {
+      big_ideas: lines('cc-design-ideas'), understandings: lines('cc-design-understandings'),
+      overarching_questions: lines('cc-design-overarching'), topical_questions: lines('cc-design-topical'),
+      knowledge: lines('cc-design-knowledge'), skills: lines('cc-design-skills'),
+      misunderstandings: lines('cc-design-wrong').map(line => {
+        const [misconception, pre_assess, confront] = line.split('|').map(part => part.trim());
+        return { misconception, pre_assess: pre_assess || '', confront: confront || '' };
+      }),
+      evidence: [...$('cc-design-evidence').querySelectorAll('fieldset[data-item]')].map(box => ({
+        ...(previous[box.dataset.item] || { facets: [], note: '' }), item_id: box.dataset.item,
+        kind: box.querySelector('.cc-evidence-kind').value, problem: box.querySelector('.cc-evidence-problem').checked,
+        targets: [...box.querySelectorAll('.cc-evidence-target:checked')].map(input => input.value) })),
+    };
+  }
+
+  $('cc-design-form').addEventListener('submit', event => {
+    event.preventDefault();
+    run('Saving the design…', async () => {
+      state.design = await api(base() + '/design', { method: 'PUT', json: designFromForm() });
+      renderDesign();
+    }, 'Design saved. The check below is up to date.');
+  });
+  $('cc-design-draft').addEventListener('click', () => {
+    if (!aiReady()) { requireAiPrompt(); return; }
+    const d = state.design && state.design.design;
+    if (d && d.understandings.length && !window.confirm('Draft the design again? This replaces what is written below.')) return;
+    run('Drafting the course design… this can take a minute or two', async () => {
+      state.design = await api(base() + '/design/draft', { method: 'POST', json: { provider: state.provider } });
+      renderDesign();
+    }, 'Design drafted. Read it, correct anything that is not your course, and save.');
+  });
 
   function decide(id, status, edits = {}) {
     return run('Saving…', async () => {
@@ -1300,6 +1380,8 @@
             el('input', { id: `cc-week-hours-shown-${w.number}`, type: 'checkbox', checked: Boolean(w.hours_shown) }),
             ' Show to students')),
         w.theme ? el('p', { class: 'cc-muted', text: w.theme }) : null,
+        (w.understandings || []).length ? el('p', { class: 'cc-muted', text: 'Serves: ' + w.understandings
+          .map(u => u.replace(/^Students will understand that\s*/i, '')).join(' · ') }) : null,
         w.objectives.length ? el('ul', { class: 'cc-list' }, w.objectives.map(o => el('li', { text: o }))) : null,
         el('ol', { class: 'cc-list' }, w.items.map(id => itemRow(id, w.number))))),
       group('Additional resources (not in a week)', blueprint.unplaced, '0'),
@@ -1410,7 +1492,7 @@
       const weeks = blueprint.weeks.map(w => ({ title: $(`cc-week-${w.number}`).value.trim() || w.title, theme: w.theme,
         objectives: w.objectives, hours: Number($(`cc-week-hours-${w.number}`).value) || null,
         hours_shown: $(`cc-week-hours-shown-${w.number}`).checked,
-        instructor_focus: w.instructor_focus, items: [] }));
+        instructor_focus: w.instructor_focus, understandings: w.understandings || [], items: [] }));
       const start = [], instructor = [];
       for (const select of $('cc-build-weeks').querySelectorAll('select[data-item]')) {
         const place = select.value;
