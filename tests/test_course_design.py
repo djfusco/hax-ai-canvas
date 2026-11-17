@@ -223,3 +223,30 @@ class PendingChangeTests(unittest.TestCase):
             self.assertIn("Offer an AI practice tutor", prompt)
             self.assertNotIn("- Clarify the essay: Add a purpose.\n- ", prompt.split("NOT IN THE COURSE YET")[1][:400])
         self.assertIs(cb.with_design(None, None, {"proposals": []}), None, "nothing to add leaves the plan alone")
+
+
+class PendingInDocumentsTests(unittest.TestCase):
+    def test_document_prompts_say_what_does_not_exist_yet(self):
+        import revised_documents as rd
+        state = {"proposals": [
+            {"id": "p-1", "status": "accepted", "title": "Offer an AI practice tutor", "change": "Set up a tutor.",
+             "rationale": "r", "manual_work": "new_item", "affected_items": []},
+            {"id": "p-2", "status": "accepted", "title": "Make quizzes low-stakes", "change": "Lower the weight.",
+             "rationale": "r", "manual_work": "grading_change", "affected_items": []},
+            {"id": "p-3", "status": "accepted", "title": "Clarify the essay", "change": "Add a purpose.",
+             "rationale": "r", "manual_work": "none", "affected_items": []},
+            {"id": "p-4", "status": "rejected", "title": "Add a second exam", "change": "c", "rationale": "r",
+             "manual_work": "new_item", "affected_items": []}]}
+        rule = " ".join(rd.pending_rule(state))
+        self.assertIn("NOT IN THE COURSE YET", rule)
+        self.assertIn("Offer an AI practice tutor", rule)
+        self.assertIn("[Instructor to add in Canvas: what is needed]", rule)
+        self.assertIn("TO SET IN CANVAS", rule)
+        self.assertIn("Make quizzes low-stakes", rule)
+        for absent in ("Clarify the essay", "Add a second exam"):
+            self.assertNotIn(absent, rule)
+        self.assertEqual(rd.pending_rule({"proposals": []}), [])
+        model = import_api_bundle(copy.deepcopy(BUNDLE))
+        prompt = rd._prompt("syllabus", model, build_course_map(model), state, {"vision": "v"}, None)
+        self.assertIn("NOT IN THE COURSE YET", prompt)
+        self.assertIn("never describe it as available", prompt)

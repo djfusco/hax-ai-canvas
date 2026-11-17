@@ -249,3 +249,25 @@ class InternalLinkTests(unittest.TestCase):
         self.assertNotIn("Answer key", text)
         self.assertNotIn("FOR INSTRUCTORS", text)
         self.assertIn("Answer key", " ".join(i["html"] for i in course_site.course_items(model, workspace)))
+
+
+class LargeDownloadTests(RouteTests):
+    def test_a_course_site_larger_than_the_hosting_limit_downloads_as_a_stream(self):
+        # Six megabytes of pictures: more than the 4.5 MB a hosted response may carry unless streamed.
+        big = [(f"{n}.png", f"web_resources/img/photo {n}.png", PNG + os.urandom(course_files.MAX_IMAGE_BYTES - 200))
+               for n in range(1, 6)]
+        refs = "".join(f'<img src="$IMS-CC-FILEBASE$/img/photo%20{n}.png" alt="Photo {n}">' for n in range(1, 6))
+        extra = {"wiki_content/welcome.html": f"<html><head><title>Welcome</title></head><body><p>Welcome to cells.</p>{refs}</body></html>",
+                 "course_images/index.json": json.dumps([{"name": "course_images/" + name, "path": path} for name, path, _ in big])}
+        extra.update({"course_images/" + name: data for name, _, data in big})
+        self.upload(package(images=False, extra=extra))
+        self.assertEqual(self.rows(), 5)
+        response = self.client.get(self.base + "/documents/export?format=hax", buffered=False)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.is_streamed, "sent as a stream, so no single body exceeds the limit")
+        self.assertIsNone(response.content_length)
+        data = b"".join(response.iter_encoded())
+        self.assertGreater(len(data), 4_500_000)
+        archive = zipfile.ZipFile(io.BytesIO(data))
+        self.assertIsNone(archive.testzip())
+        self.assertEqual(len([n for n in archive.namelist() if n.startswith("files/")]), 5)

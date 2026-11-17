@@ -71,9 +71,9 @@ not-yet-built AI tutor as available, an over-harsh design rating and essential-q
 Still open from that run:
 - [ ] **Run the two CYBER exports** (339 MB and 792 MB, real taught sections). Not run: the owner asked to stop
   after IST 210.
-- [ ] **Revised documents can still present hand-work as existing.** The syllabus, an activities page and a lab
-  said "you may use the course AI SQL practice tutor". The build prompts were tightened; the document prompts
-  (`revised_documents._prompt`) only ask for an "[Instructor to confirm: ...]" mark.
+- [ ] **Check on the live site that a course-site download over 4.5 MB works.** Downloads are now sent as a
+  stream, which Vercel's documentation says is exempt from its 4.5 MB response limit; this was tested here
+  with a 5 MB site but not on the deployment.
 - [ ] **Practice questions about instructions, not ideas**, when the teaching content is in a textbook or videos
   and Canvas holds only lab instructions and objective lists. Consider skipping practice for a week whose pages
   have too little subject text, or saying so to the instructor.

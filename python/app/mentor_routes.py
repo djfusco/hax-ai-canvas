@@ -1137,8 +1137,21 @@ def create_mentor_blueprint(root_provider):
                         ip.safe_filename("Improvement plan " + title, ".html"), "text/html; charset=utf-8")
 
     def file_response(body, filename, mimetype):
+        """A download, sent in pieces.
+
+        The hosting platform refuses a response body over 4.5 MB unless it is streamed, and a
+        course site with its pictures is larger than that. Sending every download as a stream
+        keeps one code path for small and large files.
+        """
         from flask import Response
-        response = Response(body, mimetype=mimetype)
+        if isinstance(body, str):
+            body = body.encode("utf-8")
+        size = len(body)
+
+        def pieces(chunk=256 * 1024):
+            for start in range(0, size, chunk):
+                yield body[start:start + chunk]
+        response = Response(pieces(), mimetype=mimetype)
         response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
         response.headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'"
         return response

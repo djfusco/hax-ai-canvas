@@ -107,9 +107,7 @@ def _prompt(kind, model, course_map, consult_state, plan, item, instruction=None
                    if manual_work(p) != "none" else {})} for p in accepted(consult_state)]
     parts = ["COURSE MAP:\n" + compact_map(course_map, 4000),
              "ACCEPTED CHANGES:\n" + json.dumps(changes, ensure_ascii=False),
-             "Changes marked instructor_must_do_by_hand_in_canvas need an item, points, weights or dates that "
-             "the Canvas course does not have yet. Write the document for the course as it will be, and mark "
-             "each such place [Instructor to confirm: set up in Canvas ...] so it is not mistaken for done."]
+             *pending_rule(consult_state)]
     if plan:
         parts.append("PLAN:\n" + json.dumps({"vision": plan.get("vision", ""),
                                              "outcomes": [o["text"] for o in plan.get("outcomes", [])],
@@ -166,6 +164,31 @@ def _prompt(kind, model, course_map, consult_state, plan, item, instruction=None
         parts.append("INSTRUCTOR'S REQUEST (follow it): " + instruction)
     parts.append("TASK: " + task + " List the IDs of the accepted changes you applied.")
     return "\n\n".join(parts)
+
+
+def pending_rule(consult_state):
+    """What a document may say about accepted changes that are not in the course yet.
+
+    Found with a real course: a revised syllabus and a lab told students "you may use the course
+    AI practice tutor", which was only an accepted proposal nobody had set up. A document is read
+    by students as fact, so anything not yet built must appear as a note to the instructor.
+    """
+    from improvement_plan import manual_work
+    new = [p["title"] for p in accepted(consult_state) if manual_work(p) in ("new_item", "both")]
+    grading = [p["title"] for p in accepted(consult_state) if manual_work(p) in ("grading_change", "both")]
+    parts = []
+    if new:
+        parts.append("NOT IN THE COURSE YET. These accepted changes need something new that the instructor still has "
+                     "to create in Canvas: " + "; ".join(new) + ". It does not exist for students. Never tell "
+                     "students to use it, never describe it as available, and never give instructions that depend "
+                     "on it. Where the document needs it, write only a note to the instructor in its place, in "
+                     "this exact form: [Instructor to add in Canvas: what is needed]. Do not write a sentence "
+                     "addressed to students about it.")
+    if grading:
+        parts.append("TO SET IN CANVAS. These accepted changes alter points, grade weights or dates: "
+                     + "; ".join(grading) + ". State the new values the change calls for, and follow each with "
+                     "[Instructor to confirm: set this in Canvas], because the Canvas gradebook still holds the old ones.")
+    return parts
 
 
 def _clean_html(value):
@@ -286,6 +309,7 @@ def revise(document, instruction, model, course_map, consult_state, plan, client
         "COURSE MAP:\n" + compact_map(course_map, 3000),
         "ACCEPTED CHANGES:\n" + json.dumps(changes, ensure_ascii=False),
         "PLAN AI POLICY: " + ((plan or {}).get("ai_policy") or "(none yet)"),
+        *pending_rule(consult_state),
         f"CURRENT DOCUMENT ({document['kind']}): {document['title']}\n" + document["html"][:60000],
         "INSTRUCTOR'S REQUEST: " + instruction.strip(),
         "TASK: Revise the document to do what the instructor asked. Keep everything else unless the request "
