@@ -56,6 +56,38 @@ Work that is not finished yet. Tick items off as they are done.
 ## Not built yet
 - [ ] LTI 1.3 launch from inside Canvas (needs an institution's registration).
 
+## Testing with real courses and a real model
+How: `scripts/evaluate_consultant.py` (slims the export with the browser's code, runs the whole pipeline with a
+real model, writes a report and the HAX site) and `scripts/check_site.cjs` (opens every page of that site in a
+browser with HAX's components). Playwright is not a project dependency: `npm i playwright` in a scratch folder
+and run with `NODE_PATH=<folder>/node_modules`.
+
+Done 2026-11-17: IST 210 course template (121 MB) with `anthropic/claude-sonnet-5.5` through OpenRouter:
+33 AI requests, about 19 minutes, about $1.26; a 15-week course, 103 student pages, 56 practice questions (all
+traceable, none discarded); the browser check passed on all 103 pages. Fixed from that run: import failure on a
+folder name with a colon, dead links between course pages, dropped embedded documents, pages presenting a
+not-yet-built AI tutor as available, an over-harsh design rating and essential-question rule.
+
+Still open from that run:
+- [ ] **Run the two CYBER exports** (339 MB and 792 MB, real taught sections). Not run: the owner asked to stop
+  after IST 210.
+- [ ] **Revised documents can still present hand-work as existing.** The syllabus, an activities page and a lab
+  said "you may use the course AI SQL practice tutor". The build prompts were tightened; the document prompts
+  (`revised_documents._prompt`) only ask for an "[Instructor to confirm: ...]" mark.
+- [ ] **Practice questions about instructions, not ideas**, when the teaching content is in a textbook or videos
+  and Canvas holds only lab instructions and objective lists. Consider skipping practice for a week whose pages
+  have too little subject text, or saying so to the instructor.
+- [ ] **"No invented instructor statements" false alarm**: fails when the AI cites "instructor" for a statement
+  that something is *not* known ("class size is not stated").
+- [ ] **Proposals lean towards AI**: 10 of 18 in the first run had an AI component.
+- [ ] **Objective bullets** sit on the last line of a long objective on week pages (`oer-schema` is inline-block).
+- [ ] **Import warnings are noise**: 98 for IST 210, nearly all "External LTI/web link resource not imported".
+- [ ] **Model limits without a catalog**: a model saved without choosing it from the provider's list gets tiny
+  default limits (4,096 output tokens) and every step fails with "ran out of room". The screen always goes
+  through the list; the message should say to refresh the model list.
+- [ ] `tests.test_canvas_oauth.ConfigTests.test_sealed_token` failed once in a full run and passed on every rerun.
+- [ ] Not tested with a real course yet: the browser screens, a publish into HAX Lite, the extension on live Canvas.
+
 ## HAX-native course (see `superpowers/specs/2026-11-16-hax-native-course.md`)
 - [ ] **Publish a built course with the new elements into HAX Lite** and check the questions, note and
   objectives arrive intact and the answers mark correctly.

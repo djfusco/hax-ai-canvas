@@ -196,7 +196,7 @@ deletion of inactive courses is not built yet (see `docs/todo.md`).
 | Page check (HAX's chunking, instructional-events and UDL audits) | `python/page_audit.py` |
 | Accessibility checks | `python/accessibility.py` |
 | AI cost estimate | `python/cost_estimate.py` |
-| Consultant quality evaluation | `scripts/evaluate_consultant.py`, `python/quality_checks.py` |
+| Real-course evaluation (whole pipeline, real model) and a browser check of the built site | `scripts/evaluate_consultant.py`, `scripts/slim_export.cjs`, `scripts/check_site.cjs`, `python/quality_checks.py` |
 | HAX-theme preview and static HAX site files | `python/hax_preview.py` |
 | AI providers (OpenAI, Anthropic, Gemini, OpenRouter, gateways) | `python/ai_client.py`, `python/model_capabilities.py`, `python/provider_models.py` |
 | Web app and API | `python/app/mentor_routes.py`, `python/app/templates/consultant.html`, `python/app/static/consultant.js` |
