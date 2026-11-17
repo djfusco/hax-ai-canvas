@@ -161,6 +161,15 @@ def _course_header(model, plan):
         lines.append("COURSE OUTCOMES:\n" + "\n".join(f"- {o['title']}" for o in model["outcomes"][:30]))
     if plan_text["ai_policy"]:
         lines.append("STUDENT AI POLICY: " + plan_text["ai_policy"])
+    pending = (plan or {}).get("pending") or []
+    if pending:
+        # Stated in every build prompt: found with a real course, where pages told students to use
+        # a practice tutor that was only an accepted proposal.
+        lines.append("NOT IN THE COURSE YET. The instructor accepted these changes but still has to set them up by "
+                     "hand in Canvas. They do not exist for students: never tell students to use them, never "
+                     "describe them as available, and do not rely on them in instructions. If a page must point "
+                     "to one, write only [Instructor to add in Canvas: ...] in its place. In instructor pages, "
+                     "say they are still to do.\n" + "\n".join(f"- {text}" for text in pending))
     design = _design(plan)
     if design:
         block = ["COURSE DESIGN (Understanding by Design; the course exists to build these):"]
@@ -173,9 +182,13 @@ def _course_header(model, plan):
     return "\n\n".join(lines)
 
 
-def with_design(plan, design):
-    """The plan as the builders receive it, carrying the course design (``course_design``) too."""
-    return dict(plan or {}, design=design) if design else plan
+def with_design(plan, design, consult_state=None):
+    """The plan as the builders receive it, carrying the course design (``course_design``) and the
+    accepted changes that are not in the course yet (they need hand-work in Canvas)."""
+    pending = [f"{p['title']}: {p['change']}" for p in accepted(consult_state) if manual_work(p) != "none"]
+    if not design and not pending:
+        return plan
+    return dict(plan or {}, **({"design": design} if design else {}), **({"pending": pending} if pending else {}))
 
 
 def _design(plan):
@@ -882,6 +895,27 @@ def _templated_item(model, documents, item):
     return (f"<ul class=\"item-facts\">{''.join(facts)}</ul>" if facts else "") + body
 
 
+def _module_targets(blueprint, model):
+    """Where a link to one of the original Canvas modules should go in the built course.
+
+    The built course is organised by week, so the original modules are gone. A page that says
+    "return to the Lesson 3 module" should go to the section that now holds most of that module.
+    """
+    from imscc_content import ITEM_PREFIX
+    place = {i: "module--start" for i in blueprint.get("start_items", [])}
+    for week in blueprint["weeks"]:
+        place.update({i: f"module--week-{week['number']}" for i in week["items"]})
+    place.update({i: "module--resources" for i in blueprint.get("unplaced", [])})
+    targets = {}
+    for module in model["modules"]:
+        homes = [place[i] for i in module["items"] if i in place]
+        if homes:
+            best = max(sorted(set(homes)), key=homes.count)
+            targets[f'{ITEM_PREFIX}module--{module["id"]}"'] = f'{ITEM_PREFIX}{best}"'
+            targets[f'{ITEM_PREFIX}module--{module["id"]}#'] = f'{ITEM_PREFIX}{best}#'
+    return targets
+
+
 REVIEW_HEADING = "<h2>Review from earlier weeks</h2>"
 CHECKLIST_HEADING = "<h2>This week's checklist</h2>"
 
@@ -936,8 +970,13 @@ def site_items(build, model, documents, consult_state=None, design=None):
     items_by_id = _items_by_id(model)
     result = []
 
+    moved = _module_targets(build["blueprint"], model)
+
     def add(ident, title, kind, html, module=None, audience="student", revised=True):
         html = without_title_heading(html, title)  # also tidies courses built before this rule
+        if moved and "module--" in html:
+            for old, new in moved.items():
+                html = html.replace(old, new)
         result.append({"id": ident, "title": title, "type": kind, "html": html, "revised": revised,
                        "module": module, "audience": audience})
 

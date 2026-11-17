@@ -102,6 +102,17 @@ class DesignTests(unittest.TestCase):
         self.assertIn("1 of 2 understandings have no graded work", details)
         self.assertIn("selected-response work alone", details)
 
+    def test_one_unevidenced_understanding_is_a_gap_not_a_verdict(self):
+        # Seen with a real course: five of six understandings were evidenced, and the sixth (a new one
+        # about checking AI output) had nothing assessing it yet.
+        design = good_design()
+        design["understandings"] += ["an AI tool's answer is a claim to be checked against the data and the rules",
+                                     "data decisions carry consequences for the people the data describes"]
+        design["evidence"][0]["targets"] = [U2, "data decisions carry consequences for the people the data describes"]
+        report = cd.audit(cd.validate(design, self.model), self.model, self.map)
+        self.assertEqual(self.status(report)[5], "warn")
+        self.assertEqual(report["rating"], "Partial")
+
     def test_weak_statements_are_caught(self):
         weak = good_design()
         weak["understandings"] = ["The Civil War", U2]
@@ -186,3 +197,29 @@ class DesignTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PendingChangeTests(unittest.TestCase):
+    """Accepted changes that still need hand-work must not be presented to students as existing."""
+
+    def test_every_build_prompt_says_what_is_not_in_the_course_yet(self):
+        model = import_api_bundle(copy.deepcopy(BUNDLE))
+        state = {"proposals": [
+            {"id": "p-1", "status": "accepted", "title": "Offer an AI practice tutor", "change": "Set up a tutor.",
+             "rationale": "Practice.", "manual_work": "new_item", "affected_items": []},
+            {"id": "p-2", "status": "accepted", "title": "Clarify the essay", "change": "Add a purpose.",
+             "rationale": "TILT.", "manual_work": "none", "affected_items": []},
+            {"id": "p-3", "status": "proposed", "title": "Reweight exams", "change": "c", "rationale": "r",
+             "manual_work": "grading_change", "affected_items": []}]}
+        plan = cb.with_design({"vision": "v"}, None, state)
+        self.assertEqual(plan["pending"], ["Offer an AI practice tutor: Set up a tutor."], "only accepted hand-work")
+        ai = PracticeAI()
+        build = cb.blueprint(cb.new_build("essential"), model, state, plan, [], ai)
+        while cb.steps(build, model, []):
+            build = cb.run_step(build, cb.steps(build, model, [])[0]["id"], model, state, plan, [], ai)
+        self.assertGreaterEqual(len(ai.prompts), 6)
+        for prompt in ai.prompts:
+            self.assertIn("NOT IN THE COURSE YET", prompt)
+            self.assertIn("Offer an AI practice tutor", prompt)
+            self.assertNotIn("- Clarify the essay: Add a purpose.\n- ", prompt.split("NOT IN THE COURSE YET")[1][:400])
+        self.assertIs(cb.with_design(None, None, {"proposals": []}), None, "nothing to add leaves the plan alone")

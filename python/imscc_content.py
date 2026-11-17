@@ -36,11 +36,24 @@ def sanitize_import_html(content: str) -> str:
     # comment to a browser), so markup hidden inside them would come alive. Drop them all.
     for node in list(soup.find_all(string=lambda text: isinstance(text, PreformattedString))):
         node.extract()
-    # An embedded YouTube or Vimeo video becomes HAX's video-player; every other frame is removed.
+    # An embedded YouTube or Vimeo video becomes HAX's video-player. Any other frame is never
+    # shown, but what it embedded (a Box document, a slide deck, a form) is not lost either: it
+    # becomes an ordinary link the student can open.
     for frame in list(soup.find_all("iframe")):
-        player = hax_elements.video(frame.get("src"), frame.get("title") or "")
+        source = str(frame.get("src") or "").strip()
+        player = hax_elements.video(source, frame.get("title") or "")
         if player:
             frame.replace_with(BeautifulSoup(player, "html.parser"))
+            continue
+        if source.startswith("//"):
+            source = "https:" + source
+        host = urlsplit(source).hostname if source.startswith("https://") else None
+        if host:
+            link = soup.new_tag("a", href=source)
+            link.string = (str(frame.get("title") or "").strip() or "Embedded content") + f" ({host})"
+            holder = soup.new_tag("p")
+            holder.append(link)
+            frame.replace_with(holder)
     for node in list(soup.find_all(
         ["script", "iframe", "object", "embed", "base", "link", "meta", "style",
          "form", "svg", "math", "template"]

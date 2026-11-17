@@ -415,7 +415,9 @@ def audit(design, model, course_map, build=None):
     elif failed & {1, 2}:
         rating, summary = "Coverage-bound", ("The course has content but no clear big ideas or understandings "
                                              "guiding it. Start with the desired results.")
-    elif failed & {5, 6}:
+    elif 6 in failed or (5 in failed and len(orphans) * 2 >= len(understandings)):
+        # Named only when the evidence is broadly missing: one new understanding that nothing
+        # assesses yet is a gap to close, not a verdict on the whole course.
         rating, summary = "Activity-oriented", ("The goals are clear, but the graded work does not yet show "
                                                 "whether students understand. Rework the evidence from the goals.")
     elif failed:

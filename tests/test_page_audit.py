@@ -30,7 +30,8 @@ class VideoTests(unittest.TestCase):
         self.assertIn('media-title="Cell division"', html)
         self.assertIn('source="https://vimeo.com/123456789"', html)
         self.assertNotIn("iframe", html)
-        self.assertNotIn("evil", html)
+        self.assertIn('<a href="https://evil.example/embed/x">Embedded content (evil.example)</a>', html,
+                      "another site's embed is never shown; it becomes a link the reader can choose to open")
         self.assertEqual(sanitize_import_html(html), html)
 
     def test_a_player_only_takes_a_known_video_address(self):
@@ -134,3 +135,30 @@ class AuditTests(ReviewTests):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EmbeddedFrameTests(unittest.TestCase):
+    def test_other_embedded_content_becomes_a_link_not_nothing(self):
+        html = sanitize_import_html(
+            '<iframe src="https://psu.app.box.com/embed/s/abc" title="Lecture slides" onload="x()"></iframe>'
+            '<iframe src="//docs.google.com/presentation/d/1/embed"></iframe>'
+            '<iframe src="javascript:alert(1)"></iframe><iframe src="http://insecure.example/x"></iframe>'
+            '<iframe srcdoc="<script>x</script>"></iframe>')
+        self.assertIn('<a href="https://psu.app.box.com/embed/s/abc">Lecture slides (psu.app.box.com)</a>', html)
+        self.assertIn('<a href="https://docs.google.com/presentation/d/1/embed">Embedded content (docs.google.com)</a>', html)
+        for gone in ("iframe", "javascript", "insecure.example", "onload", "script"):
+            self.assertNotIn(gone, html)
+        self.assertEqual(sanitize_import_html(html), html)
+
+
+class ModuleLinkTests(ReviewTests):
+    def test_a_link_to_an_old_module_goes_to_the_week_that_holds_it(self):
+        module = self.model["modules"][0]
+        home = next(w for w in self.build["blueprint"]["weeks"] if set(w["items"]) & set(module["items"]))
+        page = next(i for i in self.model["items"] if i["id"] == "page-11")
+        page["html"] = f'<p>Back to <a href="$IMSCC_ITEM_REFERENCE$/module--{module["id"]}">the module</a>.</p>'
+        items = self.items()
+        welcome = next(i for i in items if i["id"] == "page-11")
+        html = hax_preview.page_html(welcome, course_site.slugs(items))
+        self.assertIn(f'href="{course_site.slugs(items)["module--week-%d" % home["number"]]}"', html)
+        self.assertNotIn("REFERENCE", html)

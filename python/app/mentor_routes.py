@@ -1518,7 +1518,7 @@ def create_mentor_blueprint(root_provider):
         def work(workspace, ai):
             model, _ = course_inputs(workspace)
             return {"build": cb.blueprint(cb.new_build(data.get("mode")), model, workspace.get("consultation"),
-                                          cb.with_design(workspace.get("plan"), workspace.get("design")),
+                                          cb.with_design(workspace.get("plan"), workspace.get("design"), workspace.get("consultation")),
                                           workspace.get("documents") or [], ai)}
         workspace, error = ai_step(workspace_id, data, work)
         return error or jsonify(build_view(workspace))
@@ -1553,7 +1553,7 @@ def create_mentor_blueprint(root_provider):
         def work(workspace, ai):
             model, _ = course_inputs(workspace)
             return {"build": cb.run_step(workspace.get("build"), data.get("step"), model, workspace.get("consultation"),
-                                         cb.with_design(workspace.get("plan"), workspace.get("design")),
+                                         cb.with_design(workspace.get("plan"), workspace.get("design"), workspace.get("consultation")),
                                          workspace.get("documents") or [], ai)}
         workspace, error = ai_step(workspace_id, data, work)
         return error or jsonify(build_view(workspace))
@@ -1586,7 +1586,7 @@ def create_mentor_blueprint(root_provider):
         def work(workspace, ai):
             model, _ = course_inputs(workspace)
             return {"build": cb.revise_page(workspace.get("build"), page_id, redact(data.get("instruction") or ""),
-                                            model, cb.with_design(workspace.get("plan"), workspace.get("design")), ai)}
+                                            model, cb.with_design(workspace.get("plan"), workspace.get("design"), workspace.get("consultation")), ai)}
         workspace, error = ai_step(workspace_id, data, work)
         return error or jsonify(build_view(workspace))
 
