@@ -21,7 +21,9 @@ from urllib.parse import quote, unquote
 
 from bs4 import BeautifulSoup
 
-IMAGE_PREFIX = "course_images/"      # in the slim package; the rest is the path under web_resources/
+IMAGE_PREFIX = "course_images/"      # in the slim package: numbered images and index.json (name -> export path)
+INDEX = IMAGE_PREFIX + "index.json"
+PACKED = re.compile(r"^course_images/\d{1,4}\.(?:png|jpe?g|gif|webp)$", re.IGNORECASE)
 MAX_IMAGE_BYTES = 1024 * 1024        # per image
 MAX_IMAGES_BYTES = 6 * 1024 * 1024   # per course (HAX Lite accepts a 10 MiB archive by default)
 MAX_IMAGES = 200
@@ -44,14 +46,29 @@ def sniff(data):
 
 
 def collect(archive, names):
-    """Read the images a slim package carries. Returns (files, warnings); bad entries are skipped."""
+    """Read the images a slim package carries. Returns (files, warnings); bad entries are skipped.
+
+    Images are packed as ``course_images/<number>.<ext>`` with ``course_images/index.json`` giving
+    each one's path in the export. That path is only ever used as text, to match the references
+    in page HTML; it may hold any characters (Canvas folder names do).
+    """
+    import json
     files, warnings, used, total = [], [], set(), 0
-    for name in sorted(n for n in names if n.startswith(IMAGE_PREFIX)):
-        relative = name[len(IMAGE_PREFIX):]
-        suffix = PurePosixPath(relative).suffix.lower()
-        info = archive.getinfo(name)
-        if suffix not in TYPES or not relative or ".." in PurePosixPath(relative).parts:
+    if INDEX not in names or archive.getinfo(INDEX).file_size > 1024 * 1024:
+        return files, warnings
+    try:
+        index = json.loads(archive.read(INDEX).decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return files, ["The list of included pictures could not be read, so none were included."]
+    seen = set()
+    for row in index if isinstance(index, list) else []:
+        name, path = (row.get("name"), row.get("path")) if isinstance(row, dict) else (None, None)
+        if (not isinstance(name, str) or not PACKED.match(name) or name not in names or name in seen
+                or not isinstance(path, str) or not path.startswith("web_resources/") or len(path) > 1000):
             continue
+        seen.add(name)
+        relative = path[len("web_resources/"):]
+        info = archive.getinfo(name)
         if len(files) >= MAX_IMAGES or info.file_size > MAX_IMAGE_BYTES or total + info.file_size > MAX_IMAGES_BYTES:
             warnings.append(f"Image not included (over the size limits): {PurePosixPath(relative).name}")
             continue
@@ -95,8 +112,8 @@ def resolve(html, stored, base="files/"):
     ``stored`` maps export paths to stored file names; ``base`` is where those files are served,
     relative to the page. Links to other course pages (already rewritten) are left alone.
     """
-    if not html or ("<img" not in html and "FILEBASE" not in html.upper() and "/files/" not in html
-                    and "<video" not in html and "<audio" not in html):
+    if not html or ("<img" not in html and "/files/" not in html and "<video" not in html and "<audio" not in html
+                    and "$" not in html and "%24" not in html and 'href="/' not in html):
         return html
     from imscc_content import ITEM_PREFIX
     soup = BeautifulSoup(html, "html.parser")

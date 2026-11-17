@@ -34,12 +34,20 @@ def package(images=True, extra=None):
         {"path": "web_resources/img/cell diagram.png", "bytes": len(PNG), "mime": "image/png"},
         {"path": "web_resources/lecture one.mp4", "bytes": 4_000_000_000, "mime": "video/mp4"}])
     if images:
-        entries["course_images/img/cell diagram.png"] = PNG
-        entries["course_images/img/Cell Diagram.jpg"] = JPEG          # a different picture with a similar name
-        entries["course_images/other/cell diagram.png"] = PNG         # same name in another folder
-        entries["course_images/not-an-image.png"] = b"<svg onload=alert(1)>"
-        entries["course_images/huge.png"] = PNG + os.urandom(course_files.MAX_IMAGE_BYTES)  # random: not a zip bomb
-        entries["course_images/vector.svg"] = b"<svg></svg>"
+        # Packed as the browser packs them: numbered files and an index of their paths in the export.
+        packed = [("1.png", "web_resources/img/cell diagram.png", PNG),
+                  ("2.jpg", "web_resources/img/Cell Diagram.jpg", JPEG),             # a similar name, another picture
+                  ("3.png", "web_resources/Lab 0: Getting Started/cell diagram.png", PNG),  # a real Canvas folder name
+                  ("4.png", "web_resources/not-an-image.png", b"<svg onload=alert(1)>"),
+                  ("5.png", "web_resources/huge.png", PNG + os.urandom(course_files.MAX_IMAGE_BYTES)),
+                  ("6.png", "../outside.png", PNG)]                                 # not a path in the export
+        for name, _, data in packed:
+            entries["course_images/" + name] = data
+        entries["course_images/7.svg"] = b"<svg></svg>"
+        entries["course_images/stray.png"] = PNG                                    # not in the index
+        entries["course_images/index.json"] = json.dumps(
+            [{"name": "course_images/" + name, "path": path} for name, path, _ in packed]
+            + [{"name": "course_images/7.svg", "path": "web_resources/vector.svg"}, {"name": "imsmanifest.xml", "path": "web_resources/x.png"}])
     entries.update(extra or {})
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
@@ -82,7 +90,9 @@ class ResolveTests(unittest.TestCase):
         warnings = " ".join(model["provenance"]["warnings"])
         self.assertIn("not-an-image.png", warnings)
         self.assertIn("huge.png", warnings)
-        self.assertNotIn("vector.svg", [f["name"] for f in files])
+        self.assertEqual(stored["web_resources/Lab 0: Getting Started/cell diagram.png"], "cell-diagram-2.png",
+                         "a folder name with a colon is fine: the path is only text")
+        self.assertEqual(len(files), 3, "nothing unlisted, outside the export, or not an image is taken")
         self.assertEqual(model["provenance"]["counts"]["images"], 3)
         # Unless the caller asks, images in a package are ignored.
         self.assertEqual(course_files.stored_names(slim_import.import_slim(path)), {})
@@ -178,3 +188,64 @@ class RouteTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class InternalLinkTests(unittest.TestCase):
+    """Links between parts of the course survive as course links (found testing a real export)."""
+
+    def model(self):
+        entries = text_entries()
+        entries["wiki_content/welcome.html"] = (
+            '<html><head><title>Welcome</title></head><body><p>Welcome to cells.</p>'
+            '<a href="$CANVAS_OBJECT_REFERENCE$/assignments/gessay">the essay</a>'
+            '<a href="%24CANVAS_OBJECT_REFERENCE%24/modules/mod1">week 1</a>'
+            '<a href="$CANVAS_COURSE_REFERENCE$/assignments/syllabus">the syllabus</a>'
+            '<a href="$WIKI_REFERENCE$/pages/welcome#top">this page</a>'
+            '<a href="$WIKI_REFERENCE$/pages/no-such-page">gone</a>'
+            '<a href="$CANVAS_COURSE_REFERENCE$/files">all files</a></body></html>')
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            for name, data in entries.items():
+                archive.writestr(name, data)
+        path = Path(tempfile.mkdtemp()) / "p.zip"
+        path.write_bytes(buffer.getvalue())
+        return slim_import.import_slim(path)
+
+    def test_canvas_links_become_course_links(self):
+        import course_site
+        import hax_preview
+        model = self.model()
+        welcome = next(i for i in model["items"] if i["title"] == "Welcome")
+        essay = next(i for i in model["items"] if i["title"] == "Essay")
+        html = welcome["html"]
+        self.assertIn(f'href="$IMSCC_ITEM_REFERENCE$/{essay["id"]}"', html)
+        self.assertIn(f'href="$IMSCC_ITEM_REFERENCE$/module--{model["modules"][0]["id"]}"', html)
+        self.assertIn('href="$IMSCC_ITEM_REFERENCE$/syllabus"', html)
+        self.assertIn(f'href="$IMSCC_ITEM_REFERENCE$/{welcome["id"]}#top"', html)
+        self.assertIn("$WIKI_REFERENCE$/pages/no-such-page", html, "an unknown target is left for the outputs to mark")
+        # On the HAX site they are links to pages; what only Canvas has becomes a note.
+        items = course_site.build_items(model, [])
+        page = hax_preview.page_html(next(i for i in items if i["id"] == welcome["id"]), course_site.slugs(items))
+        for address in ('href="essay"', 'href="week-1"', 'href="syllabus"', 'href="welcome#top"'):
+            self.assertIn(address, page)
+        self.assertIn("gone<em> (in the Canvas course)</em>", page)
+        self.assertIn("all files<em> (in the Canvas course)</em>", page)
+        self.assertNotIn("REFERENCE", page)
+
+    def test_module_pages_for_students_do_not_name_instructor_items(self):
+        import course_site
+        model = self.model()
+        welcome = next(i for i in model["items"] if i["title"] == "Welcome")
+        key = dict(welcome, id="page-key", title="Answer key: quiz 1", html="<p>answers</p>")
+        model["items"].append(key)
+        model["modules"][0]["items"].append("page-key")
+        model["modules"].append({"id": "m-private", "title": "FOR INSTRUCTORS: resources", "position": 99,
+                                 "items": [], "prerequisites": [], "requirements": [], "sequential": False})
+        only = dict(welcome, id="page-only", title="For instructors: notes", html="<p>n</p>")
+        model["items"].append(only)
+        model["modules"][-1]["items"].append("page-only")
+        workspace = {"build": None, "documents": [], "consultation": None}
+        text = " ".join(i["title"] + i["html"] for i in course_site.course_items(model, workspace, students_only=True))
+        self.assertNotIn("Answer key", text)
+        self.assertNotIn("FOR INSTRUCTORS", text)
+        self.assertIn("Answer key", " ".join(i["html"] for i in course_site.course_items(model, workspace)))

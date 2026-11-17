@@ -291,6 +291,12 @@ def bloom_level(objective):
 
 # ── the check against PRAW's design standards (no AI) ─────────────────────────
 
+# A question that asks for a definition, a count or a name has one right answer. "Who is affected
+# when ...?" and "When is X the better choice?" do not, so who/when/where/which alone decide nothing.
+CLOSED_QUESTION = re.compile(r"(?i)^\s*(what (is|are) (a|an|the)\b|what does .{0,40}\b(mean|stand for)\b|how many\b|"
+                             r"define\b|name\b|list\b|which of\b)")
+
+
 def audit(design, model, course_map, build=None):
     """Check the design against PRAW's UbD design standards, as far as that can be done by rule.
 
@@ -315,7 +321,7 @@ def audit(design, model, course_map, build=None):
           "No enduring understandings yet." if not understandings else
           "These read as topics or facts, not propositions: " + "; ".join(w[:80] for w in weak[:3]) + ".")
     closed = [q for q in design["overarching_questions"] + design["topical_questions"]
-              if not q.rstrip().endswith("?") or re.match(r"(?i)^(what is|who|when|where|which|how many|define|name)\b", q)]
+              if not q.rstrip().endswith("?") or CLOSED_QUESTION.match(q)]
     both = bool(design["overarching_questions"]) and bool(design["topical_questions"])
     check(3, "Essential questions, overarching and topical, genuinely open", both and not closed,
           f"{len(design['overarching_questions'])} overarching and {len(design['topical_questions'])} topical questions.",

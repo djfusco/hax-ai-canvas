@@ -390,13 +390,19 @@
     }
     let imagesIncluded = 0;
     if (includeImages) {
+      // Pictures are packed under numbered names with an index of their original paths. Canvas
+      // folder names can hold characters an archive path must not (a real course has a folder
+      // called "Lab 0: Getting Started"), and the path is only ever needed as text.
+      const index = [];
       for (const image of scan.images || []) {
         checkAbort(signal);
-        files.push({name: IMAGE_PREFIX + image.path.slice('web_resources/'.length),
-          data: await readEntry(file, scan.entries.get(image.path), LIMITS.maxImageBytes)});
+        const name = `${IMAGE_PREFIX}${index.length + 1}${suffix(image.path)}`;
+        files.push({name, data: await readEntry(file, scan.entries.get(image.path), LIMITS.maxImageBytes)});
+        index.push({name, path: image.path});
         imagesIncluded++;
         if (onProgress) onProgress({phase: 'images', done: imagesIncluded, total: scan.images.length});
       }
+      if (index.length) files.push({name: IMAGE_PREFIX + 'index.json', data: new TextEncoder().encode(JSON.stringify(index))});
     }
     const inventory = scan.inventory.filter(m => !includeDocuments.includes(m.path));
     files.push({name: 'media_inventory.json', data: new TextEncoder().encode(JSON.stringify(inventory))});

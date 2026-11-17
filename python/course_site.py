@@ -130,6 +130,7 @@ def student_items(model, items):
     import course_build
     by_id = {i["id"]: i for i in model["items"]}
     hidden = course_build.instructor_only_ids(model)
+    modules = {"module--" + m["id"]: m for m in model["modules"]}
     kept = []
     for item in items:
         if item.get("audience") == "instructor":
@@ -137,6 +138,13 @@ def student_items(model, items):
         source = item["id"][:-len("--rubric")] if item["id"].endswith("--rubric") else item["id"]
         if "audience" not in item and source in by_id and source in hidden:
             continue
+        if "audience" not in item and item["id"] in modules:
+            # The original course's module page lists its items: list only what students may see,
+            # and leave the module out when nothing in it is for them.
+            visible = [by_id[i]["title"] for i in modules[item["id"]]["items"] if i in by_id and i not in hidden]
+            if not visible or course_build.INSTRUCTOR_TITLE.search(item["title"] or ""):
+                continue
+            item = dict(item, html="<p>In this module:</p><ol>" + "".join(f"<li>{escape(t)}</li>" for t in visible) + "</ol>")
         kept.append(item)
     return kept
 

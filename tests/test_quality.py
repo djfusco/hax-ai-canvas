@@ -73,38 +73,75 @@ class QualityCheckTests(unittest.TestCase):
 
 class HarnessTests(unittest.TestCase):
     def test_end_to_end_with_scripted_ai(self):
+        import app as web
         import evaluate_consultant as ev
+        from model_capabilities import resolve_capabilities
+        from test_course_build import FakeAI
         with tempfile.TemporaryDirectory() as temp:
             export = Path(temp) / "course.zip"
             export.write_bytes(slim_package())
             proposal = {"topic": "assessment", "title": "Outline checkpoint", "change": "Outline in week 1.",
                         "rationale": "Early feedback.", "principle": "Formative assessment", "evidence": ["course-map"],
                         "affected_items": [], "effort": "small", "ai_dimension": "resilient_assessment"}
-            responses = [turn(f"Assumption: decided {t}.", t, [proposal] if t == "assessment" else [])
-                         for t in consultation.TOPICS]
-            responses.append(json.dumps({"vision": "Evidence first.", "ai_policy": "Cite AI use.",
-                                         "outcomes": [{"text": "Argue from evidence.", "note": "new"}],
-                                         "open_questions": []}))
-            responses += [json.dumps({"title": "Syllabus", "html": "<h1>Syllabus</h1><p>Outline in week 1.</p>",
-                                      "summary_of_changes": "Added checkpoint.", "applied_proposals": ["p-1"]})] * 6
+            turns = iter([turn(f"Assumption: decided {t}.", t, [proposal] if t == "assessment" else [])
+                          for t in consultation.TOPICS])
+            builder = FakeAI(weeks=[{"title": "Cells", "theme": "t", "objectives": ["Describe a cell."], "items": [],
+                                     "hours": 5, "instructor_focus": "f"}])
+
+            def answer(system, prompt, schema, max_tokens=4096):
+                keys = set(schema["properties"])
+                if "reply" in keys:
+                    return next(turns)
+                if "vision" in keys:
+                    return json.dumps({"vision": "Evidence first.", "ai_policy": "Cite AI use.",
+                                       "outcomes": [{"text": "Argue from evidence.", "note": "new"}], "open_questions": []})
+                if "big_ideas" in keys:
+                    return json.dumps({"big_ideas": ["Claims need evidence"], "knowledge": [], "skills": [],
+                                       "understandings": ["Students will understand that claims are only as strong as their evidence"],
+                                       "overarching_questions": ["What makes an explanation convincing?"],
+                                       "topical_questions": ["Why are cells so small?"], "misunderstandings": [], "evidence": []})
+                if "summary_of_changes" in keys:
+                    return json.dumps({"title": "Syllabus", "html": "<h1>Syllabus</h1><p>Outline in week 1.</p>",
+                                       "summary_of_changes": "Added checkpoint.", "applied_proposals": ["p-1"]})
+                return builder.call_structured(system, prompt, schema, max_tokens)
+
             factory = patch("ai_client.AIClient")
             mock = factory.start()
             self.addCleanup(factory.stop)
-            mock.return_value.call_structured.side_effect = responses
+            mock.return_value.call_structured.side_effect = answer
+            # The harness chooses the model as the screen does, from the provider's list.
+            old = web.app.config.get("MODEL_DISCOVERY")
+            web.app.config["MODEL_DISCOVERY"] = lambda provider, saved: {"models": [
+                {"id": "fixture-text", "name": "Fixture", "compatibility": "text",
+                 "capabilities": resolve_capabilities("openai", "fixture-text")}], "manual_allowed": False}
+            self.addCleanup(lambda: web.app.config.pop("MODEL_DISCOVERY", None) if old is None
+                            else web.app.config.update(MODEL_DISCOVERY=old))
             with patch.dict(os.environ, {}, clear=True):
                 report = ev.run(export, "openai", "fixture-text", "sk-eval-fixture-key-123", Path(temp) / "out",
                                 max_documents=2, log=lambda *_: None)
+                with self.assertRaises(ev.EvaluationError):
+                    ev.run(export, "openai", "not-in-the-list", "sk-eval-fixture-key-123", Path(temp) / "out2",
+                           log=lambda *_: None)
             self.assertEqual(report["errors"], [])
             self.assertEqual(len(report["messages"]), len(consultation.TOPICS))
             self.assertEqual(report["plan"]["vision"], "Evidence first.")
             self.assertGreaterEqual(len(report["documents"]), 1)
             self.assertIn("Consultation", [g["name"] for g in report["quality"]["groups"]])
+            self.assertEqual(len(report["design"]["understandings"]), 1)
+            self.assertEqual(report["design_audit"]["rating"], "Activity-oriented")
+            self.assertEqual((len(report["structure"]["weeks"]), report["steps_left"]), (1, []))
+            self.assertEqual(report["practice"][0]["week"], 1)
+            self.assertEqual(report["site"]["instructor_pages"], 0)
+            self.assertEqual(report["site"]["unresolved_references"], 0)
+            self.assertGreater(report["site"]["elements"]["oer-schema"], 0)
+            self.assertTrue((Path(temp) / "out/site/site.json").is_file())
             text = (Path(temp) / "out/report.md").read_text()
-            self.assertIn("## Reviewer scoring (fill in)", text)
-            self.assertIn("Outline checkpoint", text)
+            for heading in ("## Reviewer scoring (fill in)", "## Course design", "## Week-by-week structure",
+                            "## The HAX course site", "Outline checkpoint"):
+                self.assertIn(heading, text)
             self.assertTrue(list((Path(temp) / "out/documents").glob("*.html")))
             for path in (Path(temp) / "out").rglob("*"):
-                if path.is_file():
+                if path.is_file() and path.suffix in (".md", ".json", ".html", ".txt", ".js"):
                     self.assertNotIn("sk-eval-fixture-key-123", path.read_text())
 
     def test_key_is_required_from_the_environment(self):

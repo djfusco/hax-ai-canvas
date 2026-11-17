@@ -268,6 +268,7 @@ entries = text_entries()
 entries["wiki_content/welcome.html"] = entries["wiki_content/welcome.html"].replace(
     "<p>Welcome to cells.</p>",
     '<p>Welcome to cells.</p><img src="$IMS-CC-FILEBASE$/img/cell%20diagram.png" alt="A cell">'
+    '<img src="$IMS-CC-FILEBASE$/Lab%200:%20Getting%20Started/setup.png" alt="Setup">'
     '<img src="$IMS-CC-FILEBASE$/img/poster.png" alt="Too big">')
 png = b"\x89PNG\r\n\x1a\n" + os.urandom(5000)
 with zipfile.ZipFile(sys.argv[1], "w", zipfile.ZIP_STORED) as z:
@@ -275,6 +276,7 @@ with zipfile.ZipFile(sys.argv[1], "w", zipfile.ZIP_STORED) as z:
     z.writestr("web_resources/img/poster.png", b"\x89PNG\r\n\x1a\n" + os.urandom(1024 * 1024 + 10))
     z.writestr("web_resources/img/unused.png", png)          # no page shows it
     z.writestr("web_resources/img/drawing.svg", b"<svg></svg>")
+    z.writestr("web_resources/Lab 0: Getting Started/setup.png", png)   # a real Canvas folder name
     for name, data in entries.items():
         z.writestr(name, data)
 with zipfile.ZipFile(sys.argv[1]) as z:
@@ -283,7 +285,8 @@ with zipfile.ZipFile(sys.argv[1]) as z:
 `, [exportPath]));
   const file = tracked(await fileBlob(exportPath));
   const scan = await SlimExport.scanExport(file);
-  assert.deepEqual(scan.images.map(i => i.path), ['web_resources/img/cell diagram.png']);
+  assert.deepEqual(scan.images.map(i => i.path).sort(),
+    ['web_resources/Lab 0: Getting Started/setup.png', 'web_resources/img/cell diagram.png']);
   assert.equal(scan.imagesLeftOut, 1, 'the oversized picture is counted, not offered');
   const touched = () => file.ranges.some(([start, end]) => start < where.start + where.length && end > where.start);
 
@@ -294,7 +297,7 @@ with zipfile.ZipFile(sys.argv[1]) as z:
 
   const withImages = await SlimExport.buildSlimPackage(file, scan, { includeImages: true });
   assert.equal(touched(), true);
-  assert.equal(withImages.summary.imagesIncluded, 1);
+  assert.equal(withImages.summary.imagesIncluded, 2);
   const slimPath = tmp('slim.zip');
   fs.writeFileSync(slimPath, Buffer.from(await withImages.blob.arrayBuffer()));
   const result = JSON.parse(python(String.raw`
@@ -306,7 +309,9 @@ model = slim_import.import_slim(sys.argv[1], files=files)
 print(json.dumps({"names": [n for n in zipfile.ZipFile(sys.argv[1]).namelist() if n.startswith("course_images/")],
                   "stored": course_files.stored_names(model), "files": [f["name"] for f in files]}))
 `, [slimPath]));
-  assert.deepEqual(result.names, ['course_images/img/cell diagram.png']);
-  assert.deepEqual(result.stored, { 'web_resources/img/cell diagram.png': 'cell-diagram.png' });
-  assert.deepEqual(result.files, ['cell-diagram.png']);
+  assert.deepEqual(result.names.sort(), ['course_images/1.png', 'course_images/2.png', 'course_images/index.json'],
+    'packed under safe numbered names, whatever the Canvas folder is called');
+  assert.deepEqual(result.stored, { 'web_resources/img/cell diagram.png': 'cell-diagram.png',
+    'web_resources/Lab 0: Getting Started/setup.png': 'setup.png' });
+  assert.deepEqual(result.files.sort(), ['cell-diagram.png', 'setup.png']);
 });

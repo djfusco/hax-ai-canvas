@@ -159,6 +159,7 @@ class _SlimImporter:
         self._outcome_links()
         self._question_banks()
         _link_media(model)
+        self._internal_links()
         self._materials()
         counts = {
             "pages": sum(1 for i in model["items"] if i["kind"] == "page"),
@@ -368,13 +369,52 @@ class _SlimImporter:
                 }
 
     # ── modules ──────────────────────────────────────────────────────────────
+    # ── links between course pages ───────────────────────────────────────────
+    def _internal_links(self):
+        """Turn Canvas's links to other parts of the course into course links.
+
+        An export writes them as ``$WIKI_REFERENCE$/pages/<slug>`` and
+        ``$CANVAS_OBJECT_REFERENCE$/<kind>/<identifier>``, which only Canvas can follow. Here they
+        become ``$IMSCC_ITEM_REFERENCE$/<item id>``, the form every output already resolves, so
+        "see the syllabus" still goes to the syllabus on the course site. A link to something that
+        was not imported is left as it is; the outputs show it as text marked as living in Canvas.
+        """
+        from imscc_content import ITEM_PREFIX
+        pages = {}
+        for item in self.model["items"]:
+            if item["kind"] == "page" and item.get("source_path"):
+                pages[PurePosixPath(item["source_path"]).stem.lower()] = item["id"]
+        modules = {ref: "module--" + module["id"] for ref, module in getattr(self, "module_by_ref", {}).items() if ref}
+
+        def target(match):
+            reference, kind, name = match.group(1).upper(), match.group(2).lower(), unquote(match.group(3))
+            found = None
+            if kind in ("pages", "wiki_pages") or reference == "WIKI_REFERENCE":
+                found = pages.get(name.lower()) or self.resource_to_item.get(name)
+            elif kind == "modules":
+                found = modules.get(name)
+            elif kind == "assignments" and name == "syllabus":
+                found = "syllabus"
+            elif kind in ("assignments", "quizzes", "discussion_topics"):
+                found = self.resource_to_item.get(name)
+            return ITEM_PREFIX + found if found else match.group(0)
+
+        pattern = re.compile(r"(?:\$|%24)(WIKI_REFERENCE|CANVAS_OBJECT_REFERENCE|CANVAS_COURSE_REFERENCE)(?:\$|%24)"
+                             r"/([a-z_]+)/([^\"'?#\s<>]+)", re.IGNORECASE)
+        for item in self.model["items"]:
+            if "REFERENCE" in item["html"].upper():
+                item["html"] = pattern.sub(target, item["html"])
+        course = self.model["course"]
+        if "REFERENCE" in (course.get("syllabus_html") or "").upper():
+            course["syllabus_html"] = pattern.sub(target, course["syllabus_html"])
+
     def _modules(self):
         model = self.model
         items_by_id = {i["id"]: i for i in model["items"]}
         rows = sorted(self._load("modules"), key=lambda r: _float(r.get("position")) or 0)
         meta = self._xml("course_settings/module_meta.xml")
         meta_by_ref = {n.get("identifier"): n for n in _nodes(meta, "module")} if meta is not None else {}
-        module_by_ref = {}
+        module_by_ref = self.module_by_ref = {}
         for row in rows[:cm.MAX_MODULES]:
             module = {"id": row["id"], "title": _clip(str(row.get("name") or ""), cm.MAX_TITLE),
                       "position": _float(row.get("position")), "items": [],
