@@ -108,8 +108,10 @@ from model_capabilities import resolve_capabilities
 import httpx
 web.app.config.update(HAX_LITE_TRANSPORT=httpx.MockTransport(lambda request: httpx.Response(404, json={"error": "Not found"})))
 web.app.config.update(MENTOR_DATA_ROOT=sys.argv[1], MODEL_DISCOVERY=lambda provider, saved: {
-    "models": [{"id": "gpt-4o", "name": "GPT-4o", "compatibility": "text",
-                "capabilities": resolve_capabilities("openai", "gpt-4o")}], "manual_allowed": False})
+    # Deliberately out of order, as a provider sends them (newest first, not alphabetical).
+    "models": [{"id": i, "name": n, "compatibility": "text", "capabilities": resolve_capabilities("openai", i)}
+               for i, n in (("zeta-large", "Zeta Large"), ("gpt-4o", "GPT-4o"), ("beta-10", "beta 10"),
+                            ("alpha-text", "Alpha Text"), ("beta-2", "Beta 2"))], "manual_allowed": False})
 from werkzeug.serving import make_server
 server = make_server("127.0.0.1", int(sys.argv[2]), web.app, threaded=True)
 print("ready", flush=True)
@@ -376,6 +378,11 @@ test('quick AI version, site preview and asking for changes', { skip: !playwrigh
     assert.equal(await page.locator('#cc-ai-connect').isHidden(), true, 'connected: the connect options are put away');
     assert.equal(await page.inputValue('#cc-key'), '', 'the key is not left in the box');
     assert.match(await page.textContent('#cc-model'), /GPT-4o/, 'the model list loads for a pasted key');
+    // The recommended model comes first; then every model from A to Z, with 2 before 10.
+    const groups = await page.$$eval('#cc-model optgroup', nodes => nodes.map(group =>
+      [group.label, [...group.querySelectorAll('option')].map(option => option.textContent.split(' ·')[0].replace(/ \(.*\)$/, ''))]));
+    assert.deepEqual(groups, [['Recommended for Course Consultant', ['GPT-4o']],
+      ['All models (A to Z)', ['Alpha Text', 'Beta 2', 'beta 10', 'GPT-4o', 'Zeta Large']]]);
     await page.click('#cc-forget');
     await page.locator('#cc-openrouter').waitFor({ state: 'visible' });
     // The other providers still show only the key box.

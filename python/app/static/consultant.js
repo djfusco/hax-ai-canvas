@@ -180,11 +180,16 @@
         return el('option', { value: model.id, text: (model.name || model.id) + tag + price, selected: model.id === state.models.selected });
       };
       const suggested = (state.models.suggested || []).map(id => state.models.models.find(m => m.id === id)).filter(Boolean);
+      // Alphabetical by the name shown, so a model can be found in a long list (OpenRouter has
+      // hundreds). Numbers sort as numbers: "GPT-4.1" before "GPT-10". Providers send their lists
+      // newest first, which the server still uses to pick the recommended models.
+      const sorted = [...state.models.models].sort((a, b) =>
+        (a.name || a.id).localeCompare(b.name || b.id, undefined, { numeric: true, sensitivity: 'base' }));
       if (suggested.length) {
         select.append(el('optgroup', { label: 'Recommended for Course Consultant' }, ...suggested.map(option)),
-          el('optgroup', { label: 'All models' }, ...state.models.models.map(option)));
+          el('optgroup', { label: 'All models (A to Z)' }, ...sorted.map(option)));
       } else {
-        select.append(...state.models.models.map(option));
+        select.append(...sorted.map(option));
       }
       renderModelNote();
     }
