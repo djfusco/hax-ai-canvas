@@ -13,8 +13,9 @@ Design: [`docs/superpowers/specs/2026-11-09-course-consultant.md`](docs/superpow
 
 ## What an instructor does
 1. **Choose an AI model.** Course Consultant uses the instructor's own AI
-   account: connect OpenRouter in one click, or enter an OpenAI, Anthropic or
-   Gemini key. The service never pays for or resells AI.
+   account: connect OpenRouter in one click or paste an OpenRouter key (for
+   someone who was given one and has no OpenRouter account), or enter an
+   OpenAI, Anthropic or Gemini key. The service never pays for or resells AI.
 2. **Bring in the course**, one of four ways:
    - **Upload a Canvas export.** The browser reads only the export's text and
      structure. Videos and other media never leave the instructor's computer,

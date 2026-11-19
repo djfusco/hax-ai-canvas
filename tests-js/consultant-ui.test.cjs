@@ -365,7 +365,23 @@ test('quick AI version, site preview and asking for changes', { skip: !playwrigh
     await page.goto(`${ORIGIN}/mentor`);
     await page.locator('#cc-intake').waitFor({ state: 'visible' });
     await page.click('#cc-ai-toggle');
+    // OpenRouter offers both ways in: one-click connect, or a pasted key for someone given one.
+    await page.click('.cc-provider[data-provider="openrouter"]');
+    assert.equal(await page.locator('#cc-openrouter').isVisible(), true, 'one-click connect is still offered');
+    assert.equal(await page.locator('#cc-key-form').isVisible(), true, 'and a key can be pasted');
+    assert.equal(await page.textContent('#cc-key-label'), 'OpenRouter API key');
+    await page.fill('#cc-key', 'sk-or-test-only-fixture-key');
+    await page.click('#cc-key-form button[type=submit]');
+    await page.locator('#cc-models').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#cc-ai-connect').isHidden(), true, 'connected: the connect options are put away');
+    assert.equal(await page.inputValue('#cc-key'), '', 'the key is not left in the box');
+    assert.match(await page.textContent('#cc-model'), /GPT-4o/, 'the model list loads for a pasted key');
+    await page.click('#cc-forget');
+    await page.locator('#cc-openrouter').waitFor({ state: 'visible' });
+    // The other providers still show only the key box.
     await page.click('.cc-provider[data-provider="openai"]');
+    assert.equal(await page.locator('#cc-openrouter').isHidden(), true);
+    assert.equal(await page.textContent('#cc-key-label'), 'API key');
     await page.fill('#cc-key', 'sk-test-only-fixture-key');
     await page.click('#cc-key-form button[type=submit]');
     await page.locator('#cc-models').waitFor({ state: 'visible' });

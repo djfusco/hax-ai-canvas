@@ -166,7 +166,9 @@
     $('cc-ai-label').textContent = ready ? `${PROVIDER_NAMES[provider]} · ${state.models.selected}` : 'Choose an AI model';
     $('cc-ai-connect').hidden = !provider || configured(provider);
     $('cc-openrouter-connect').hidden = provider !== 'openrouter';
-    $('cc-key-form').hidden = !provider || provider === 'openrouter';
+    // Every provider takes a pasted key; OpenRouter also offers one-click connect above the box.
+    $('cc-key-form').hidden = !provider;
+    $('cc-key-label').textContent = provider === 'openrouter' ? 'OpenRouter API key' : 'API key';
     $('cc-models').hidden = !provider || !configured(provider);
     if (provider && configured(provider) && state.models) {
       const select = $('cc-model');

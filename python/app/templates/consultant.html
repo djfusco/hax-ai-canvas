@@ -64,9 +64,12 @@
         <div id="cc-openrouter-connect" hidden>
           <button id="cc-openrouter" type="button" class="cc-btn">Connect with OpenRouter</button>
           <p class="cc-muted">You'll approve access on openrouter.ai and come straight back. You can set a spending limit there.</p>
+          <p class="cc-muted"><strong>Or paste a key.</strong> If someone gave you an OpenRouter API key, you do not need
+            your own OpenRouter account: paste it below. A shared key spends from its owner's balance, so its owner
+            should set a spending limit on it in OpenRouter.</p>
         </div>
         <form id="cc-key-form" hidden>
-          <label for="cc-key">API key</label>
+          <label for="cc-key" id="cc-key-label">API key</label>
           <input id="cc-key" type="password" autocomplete="off" required>
           <label class="cc-check"><input id="cc-remember" type="checkbox"> Remember on this browser for 30 days</label>
           <button type="submit" class="cc-btn">Save key</button>

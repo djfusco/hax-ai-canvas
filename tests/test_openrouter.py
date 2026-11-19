@@ -221,6 +221,24 @@ class ConnectFlowTests(unittest.TestCase):
         self.exchange(expected=400, issued={"error": "invalid"}, status=403)
         self.assertEqual(self.client.get("/mentor/api/session").json["credentials"], [])
 
+    def test_a_pasted_key_works_without_the_connect_flow(self):
+        """Someone given an OpenRouter key can paste it; no OpenRouter account or approval tab needed."""
+        import time
+        save = lambda body: self.client.post("/mentor/api/credentials", json=body, headers={"X-Mentor-CSRF": self.csrf})
+        response = save({"provider": "openrouter", "api_key": "sk-or-pasted-fixture-key"})
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        self.assertNotIn("sk-or-pasted-fixture-key", response.get_data(as_text=True), "the key is never sent back")
+        saved = self.client.get("/mentor/api/session").json["credentials"]
+        self.assertEqual([c["provider"] for c in saved], ["openrouter"])
+        short = saved[0]["expires_at"] - time.time()
+        self.assertTrue(11 * 3600 < short <= 12 * 3600, "kept for 12 hours unless remembered")
+        self.assertEqual(save({"provider": "openrouter", "api_key": "sk-or-pasted-fixture-key", "remember": True}).status_code, 200)
+        remembered = self.client.get("/mentor/api/session").json["credentials"][0]["expires_at"] - time.time()
+        self.assertTrue(29 * 86400 < remembered <= 30 * 86400, "or for 30 days when remembered")
+        # Disconnecting removes it, however it was added.
+        self.client.delete("/mentor/api/credentials/openrouter", headers={"X-Mentor-CSRF": self.csrf})
+        self.assertEqual(self.client.get("/mentor/api/session").json["credentials"], [])
+
     def test_callback_does_not_touch_the_identity_cookie(self):
         fresh = self.web.app.test_client()
         response = fresh.get("/mentor/openrouter/callback?code=abc12345")
